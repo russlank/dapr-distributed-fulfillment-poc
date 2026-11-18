@@ -39,17 +39,25 @@ else
   check OBS-1 FAIL "every Dapr role in Jaeger; a crossing trace" "missing: ${missing:-none}; traces: ${count:-0}, crossing: ${crossing:-0}"
 fi
 
-targets="$(curl -s http://127.0.0.1:9095/api/v1/targets)"
-health="$(python - "$targets" <<'PY'
+# A target restarted moments ago stays "down" until its next scrape (every 15 s), so the check
+# allows three scrape intervals before judging (observed right after S00's cold restarts).
+waited=0
+while :; do
+  targets="$(curl -s http://127.0.0.1:9095/api/v1/targets)"
+  health="$(python - "$targets" <<'PY'
 import json, sys
 active = json.loads(sys.argv[1])["data"]["activeTargets"]
 down = [t["labels"]["instance"] for t in active if t["health"] != "up"]
 print(f"{len(active)}|{len(down)}|{','.join(down)}")
 PY
 )"
-IFS='|' read -r total down which <<< "$health"
+  IFS='|' read -r total down which <<< "$health"
+  [[ "${total:-0}" -ge 7 && "$down" == 0 ]] && break
+  (( waited >= 45 )) && break
+  sleep 5; waited=$((waited + 5))
+done
 if [[ "${total:-0}" -ge 7 && "$down" == 0 ]]; then
-  check OBS-2 PASS "Prometheus scrapes the Collector and all core sidecars" "$total targets up"
+  check OBS-2 PASS "Prometheus scrapes the Collector and all core sidecars" "$total targets up (after ${waited}s)"
 else
   check OBS-2 FAIL "all targets up" "$total targets, $down down: $which"
 fi

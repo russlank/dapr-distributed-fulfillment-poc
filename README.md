@@ -37,6 +37,22 @@ Details: [docs/getting-started.md](docs/getting-started.md).
 | [docs/journal.md](docs/journal.md) | what broke and what changed because of it |
 | [spikes/dapr-compat/README.md](spikes/dapr-compat/README.md) | the Dapr compatibility spike |
 
+## Versions
+
+Pinned 2026-11-18 (each release at least two weeks old); all pins, dates, and
+observed runtime behavior: [docs/versions.md](docs/versions.md).
+
+| Component | Version |
+|---|---|
+| .NET SDK / runtime | 10.0.403 / 10.0.14 |
+| Dapr runtime (daprd, Placement, Scheduler) | 1.19.1 |
+| Dapr .NET SDK | 1.19.0 |
+| SQL Server | 2022 CU27 |
+| RabbitMQ | 4.3.6 |
+| OpenTelemetry .NET / Collector | 1.20.1 / 0.163.2 |
+| Jaeger / Prometheus / Grafana | 2.22.0 / 3.15.1 / 13.3.0 |
+| Toxiproxy | 2.13.0 |
+
 ## Layout
 
 ```text
