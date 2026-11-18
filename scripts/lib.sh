@@ -125,3 +125,26 @@ print(json.dumps({'check': sys.argv[1], 'result': sys.argv[2], 'expected': sys.a
 " "$1" "$2" "$3" "$4" >> "$RESULTS_FILE"
   fi
 }
+
+# review_sku: a SKU whose stub unit price makes 100 units reach the review threshold (1,000.00):
+# the same FNV-1a stub price list as the compute worker (100 + hash % 9900 minor units).
+review_sku() {
+  python -c "
+def price(s):
+    h = 2166136261
+    for c in s:
+        h = ((h ^ ord(c)) * 16777619) & 0xFFFFFFFF
+    return 100 + h % 9900
+print(next(f'SKU-R{i}' for i in range(1, 1000) if price(f'SKU-R{i}') * 100 >= 100000))"
+}
+
+# review_order_body <customer id>: an order that requires a review (one line of 100 units of review_sku).
+review_order_body() { printf '{"customerId":"%s","lines":[{"sku":"%s","quantity":100}]}' "$1" "${REVIEW_SKU:=$(review_sku)}"; }
+
+# decide <base url> <review id> <approve|reject> [decision id] [operator] -> "<status> <body>"
+decide() {
+  local id=${4:-$(python -c 'import uuid; print(uuid.uuid4())')} op=${5:-operator-1} out
+  out="$(curl -s -w '\n%{http_code}' -X POST "$1/reviews/$2/decision" -H "X-Api-Key: $OPERATOR_API_KEY" -H 'content-type: application/json' \
+    -d '{"decisionId":"'"$id"'","operatorId":"'"$op"'","outcome":"'"$3"'"}')"
+  printf '%s %s\n' "${out##*$'\n'}" "$(printf '%s' "${out%$'\n'*}" | tr -d '\r\n')"
+}

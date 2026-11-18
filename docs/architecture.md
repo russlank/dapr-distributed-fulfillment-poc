@@ -173,10 +173,11 @@ shipment do not exist yet, and nothing outside `OrderDb` is changed.
 | Step | Where | Does |
 |---|---|---|
 | `ClaimFulfillmentExecution` | order API | the execution claim (above); a terminal order ends the run |
-| `ValidateFulfillmentOrder` | order API | `Submitted` → `Validating`, reads the lines, applies the business rules (today: one line per SKU); an order that breaks one is `Rejected` |
-| `PriceOrder`, `AssessOrderRisk` | compute worker | independent checks, scheduled together and awaited together, so they run at the same time (on one or two compute replicas). Pricing uses a fixed stub price list (`stub-v1`); the risk rule scores the order's size |
-| `RecordFulfillmentChecks` | order API | stores both results once (`OrderCheck`) |
-| review gate | workflow | only the path without review exists: a required review needs a durable wait for a recorded human decision, which is not available yet. The review threshold is unset, so no order requires one; if it were set and reached, the run fails visibly instead of continuing as if approved |
+| `ValidateFulfillmentOrder` | order API | `Submitted` → `Validating`, reads the lines, applies the business rules (today: one line per SKU, a deliberate limitation of this PoC's order model, not a requirement of Dapr or the inventory design); an order that breaks one is `Rejected` |
+| `PriceOrder`, `AssessOrderRisk` | compute worker | independent checks, scheduled together and awaited together, so they run at the same time (on one or two compute replicas). Pricing uses a fixed stub price list (`stub-v1`); the risk rule (`stub-v2`) scores the order's size and requires a review from an order value of 1,000.00 |
+| `RecordFulfillmentChecks` | order API | stores both results once (`OrderCheck`) and returns the **stored** risk result: the first committed result decides whether a review is required, whatever a repeated computation returned |
+| review (if required) | order API, workflow | `CreateReviewTask`, `ResolveReview`, `ExpireOrEscalateReview` and the durable wait (see [Reviews and Signals](#reviews-and-signals)) |
+| `BeginStubFulfillment` | order API | → `Reserving`: from `Validating` only if the stored result requires no review, from `AwaitingApproval` only if the review is `Approved`; no path skips a required review |
 | `ApplyStubFulfillmentStep` | order API | one simulated step per line, in line order (`stub-fulfil`, qualifier `line-N`) |
 | `CompleteStubFulfillment` | order API | the terminal transaction (below) |
 
@@ -202,7 +203,7 @@ serialized. Each step is safe to repeat:
   ends without further steps.
 
 The **terminal transaction** inserts the completion effect
-(`…:stub-complete:1`), moves the order `Validating` → `Completed` with its
+(`…:stub-complete:1`), moves the order `Reserving` → `Completed` with its
 history row (`StubFulfillmentCompleted`), and closes the start request
 (`Closed`, lease cleared), all or nothing. A rejection by validation closes
 the request the same way. The workflow is deterministic: no clock, random
@@ -214,9 +215,72 @@ backoff); every step tolerates it.
 | Status | Set by |
 |---|---|
 | `Submitted` | acceptance |
-| `Validating` | validation (the order stays `Validating` during the simulated steps: the in-between statuses belong to the real steps) |
+| `Validating` | validation |
+| `AwaitingApproval` | round 1 of a required review |
+| `Reserving` | `BeginStubFulfillment` (no review required, or review approved); the simulated steps run here. The statuses between `Reserving` and `Completed` belong to the real steps and are not used yet |
 | `Completed` | the terminal transaction |
-| `Rejected` | validation |
+| `Rejected` | validation, a rejected review, or the final expiry of a review |
+
+## Reviews and Signals
+
+SQL decides; workflows wait. A review round is a `ReviewTask` row, unique per
+order, purpose, and round, with a deadline in SQL time (time profile: 10
+minutes and 2 rounds by default, 20 seconds in the drill environment; timer
+grace 5 s or 2 s).
+
+**Decisions** (`POST /reviews/{reviewId}/decision`, operator role key
+`OPERATOR_API_KEY`, configured simulated operator ids) are one transaction:
+lock the review; a known decision id is a retry (same payload hash: `200`
+with `replayed: true`; anything else: `422 decision-id-reused`); otherwise
+the review must be `Pending`, and the conditional update
+`Pending → Approved|Rejected` also requires `SYSUTCDATETIME() < DeadlineAt`,
+so a deadline has exactly one answer, the database clock's. The same
+transaction writes the immutable `ReviewDecision` (operator, payload hash;
+the database refuses updates; at most one per review) and a `PendingSignal`.
+Concurrent operators serialize on the review row: one commits, the rest get
+`409 review-already-decided`. Late decisions get `409 review-expired`, decisions
+for a round that a newer round replaced `409 review-superseded`. The order's
+status is not changed by the decision.
+
+**Waiting.** The workflow reads the review (`ResolveReview`, which records
+each wake-up and its reason in `ReviewWake`) before its first wait and after
+every wake-up, and waits on `WhenAny(review signal, timer at deadline +
+grace)`. Whatever Dapr delivers first, SQL decides:
+
+| SQL says | The workflow |
+|---|---|
+| `Approved` | `BeginStubFulfillment` (`AwaitingApproval` → `Reserving`) and the simulated steps |
+| `Rejected` | `ResolveReview` already moved the order to `Rejected` (`ReviewRejected`) and closed the start request; the run ends |
+| `Pending`, SQL time before the deadline | waits again (an early timer or a stray signal changes nothing); the next timer is never in the past |
+| `Pending`, deadline reached | `ExpireOrEscalateReview`: the only step that takes a review out of `Pending` by time (`Expired`, conditional on SQL time). It opens the next round (fresh deadline) or, after the last round, rejects the order (`ReviewExpired`) and closes the start request. An approval committed before the deadline is never expired |
+
+Manual escalation, cancellation, and operational intervention cases are not
+built yet; the review wait never assumes an approval and never abandons a
+review without the expiry protocol.
+
+**Signals** are wake-up hints only; the fact is in SQL before the signal row
+exists. A signal dispatcher in every order API replica claims due signals
+with a lease and token (like the start dispatcher), records each attempt
+(with the invocation's HTTP status, retries, and error), and raises the event
+through the workflow host's management API:
+
+| Situation | Signal |
+|---|---|
+| the workflow was not started yet | stays `Pending`, retried later |
+| instance running: raised | `Forwarded` (only now; an attempt alone never marks it delivered) |
+| instance terminal | `Discarded` (`WorkflowTerminal`); the decision stays in SQL and was applied by the workflow's own read, or the order is terminal for another reason |
+| instance missing although started | `Stuck` (`WorkflowMissing`), for the reconciler |
+| no usable answer, not running | retried with exponential backoff (1 s to 30 s) |
+
+A crash after the raise and before the mark leaves the lease to expire; the
+signal is raised again, which is harmless (a duplicate wake-up reads SQL
+again; raising to a completed instance changes nothing). Events raised
+before the workflow waits are buffered by the runtime.
+
+Workflow code awaits only workflow tasks. In particular, the wait cancels
+its losing branch with the synchronous `Cancel()`: `CancelAsync` resumes the
+code off the orchestration thread and broke the run (see
+[journal.md](journal.md)).
 
 ## Workflow Management Lives With the Workflow Host
 

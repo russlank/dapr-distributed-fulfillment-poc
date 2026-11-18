@@ -18,7 +18,7 @@
 #                  counted and audited (claim rows = claims + fence rejections, claims >= 1; more
 #                  than one claim is allowed), no workflow state under order-api's own sidecar
 #   S51-effects    every order Completed with one history row per status (Submitted, Validating,
-#                  Completed) and exactly one committed effect per operation key (stub-fulfil:line-1,
+#                  Reserving, Completed) and exactly one committed effect per operation key (stub-fulfil:line-1,
 #                  stub-complete:1) and per check; repeated executions show only as replay counts
 #   S51-accept     concurrent identical submissions over both replicas: one order per key
 DRILL_ID=S51
@@ -135,7 +135,7 @@ fi
 effects="$(sql OrderDb "SELECT CONCAT(
   (SELECT COUNT(*) FROM orders.[Order] WHERE OrderId IN ($run_orders) AND Status = 'Completed'), '|',
   (SELECT COUNT(*) FROM (SELECT h.OrderId FROM orders.OrderStatusHistory h WHERE h.OrderId IN ($run_orders) GROUP BY h.OrderId
-     HAVING STRING_AGG(CONCAT(h.Sequence, ':', h.ToStatus), ',') WITHIN GROUP (ORDER BY h.Sequence) = '1:Submitted,2:Validating,3:Completed') x), '|',
+     HAVING STRING_AGG(CONCAT(h.Sequence, ':', h.ToStatus), ',') WITHIN GROUP (ORDER BY h.Sequence) = '1:Submitted,2:Validating,3:Reserving,4:Completed') x), '|',
   (SELECT COUNT(*) FROM (SELECT e.OrderId FROM orders.StubEffect e WHERE e.OrderId IN ($run_orders) GROUP BY e.OrderId
      HAVING STRING_AGG(SUBSTRING(e.OperationKey, 34, 100), ',') WITHIN GROUP (ORDER BY e.OperationKey) = 'stub-complete:1,stub-fulfil:line-1') x), '|',
   (SELECT COUNT(*) FROM (SELECT c.OrderId FROM orders.OrderCheck c WHERE c.OrderId IN ($run_orders) GROUP BY c.OrderId HAVING COUNT(*) = 2) x), '|',

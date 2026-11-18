@@ -7,7 +7,7 @@ boundaries explicit; they are not production hardening.
 
 | Boundary | Protection |
 |---|---|
-| host → public endpoints | ports bound to `127.0.0.1` only; admin endpoints require `X-Api-Key` (`ADMIN_API_KEY`), customer endpoints (`/orders`) `X-Api-Key` (`CUSTOMER_API_KEY`); operator and carrier credentials arrive with their endpoints |
+| host → public endpoints | ports bound to `127.0.0.1` only; admin endpoints require `X-Api-Key` (`ADMIN_API_KEY`), customer endpoints (`/orders`) `X-Api-Key` (`CUSTOMER_API_KEY`); operator endpoints (`/reviews`) `X-Api-Key` (`OPERATOR_API_KEY`) and a configured simulated operator id; carrier credentials arrive with their endpoints |
 | app → own sidecar | the sidecar requires `DAPR_API_TOKEN` on its API |
 | sidecar → app | the sidecar sends `APP_API_TOKEN`; the app rejects requests to sidecar-only routes (`/internal`, `/actors`, `/dapr`, `/events`) without it |
 | app → database | one SQL login per owning service, `db_owner` on its own database only; the state store has its own login limited to `DaprStateDb` |

@@ -7,12 +7,13 @@ and scripted failure drills. Synthetic data only; not production software.
 
 **Status:** durable orders with a simulated fulfillment. Orders are accepted
 idempotently, started once in effect from any order API replica, validated,
-checked in parallel on the compute workers, and completed by simulated
-fulfillment steps, with every business effect keyed and stored once.
-Reservation, payment, shipping, human review, and event distribution are not
-built yet. Every role runs with its own Dapr sidecar, reports its identity
-and health, and exports telemetry; scenario and drill scripts prove the
-behavior from the databases.
+checked in parallel on the compute workers, held for an operator's approval
+from 1,000.00 (decided in SQL, signaled to the waiting workflow), and
+completed by simulated fulfillment steps, with every business effect keyed
+and stored once. Reservation, payment, shipping, escalation and
+cancellation, and event distribution are not built yet. Every role runs with
+its own Dapr sidecar, reports its identity and health, and exports
+telemetry; scenario and drill scripts prove the behavior from the databases.
 
 ## Quick Start
 

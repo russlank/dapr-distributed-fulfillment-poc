@@ -12,7 +12,7 @@
 #   ACC-5 restart     after a cold restart of the order API the retry returns the same order
 #   ACC-6 completed   the start dispatcher started the workflow through the workflow host and the run
 #                     completed the order: order Completed with contiguous history (Submitted,
-#                     Validating, Completed), start request Closed, one simulated effect per operation
+#                     Validating, Reserving, Completed), start request Closed, one simulated effect per operation
 #                     key, workflow Completed, its state under workflow-host only, never under
 #                     order-api's own sidecar. Started is not required to be observed (a fast run
 #                     closes the request before a poll could see it).
@@ -139,12 +139,12 @@ claims="$(json_get "$execution" startRequest.executionClaims)"
 results="$(sql OrderDb "SELECT STRING_AGG(Result, ',') WITHIN GROUP (ORDER BY Id) FROM orders.WorkflowStartAttempt WHERE OrderId = '$ORDER_ID'")"
 expected_effects="stub-complete:1,stub-fulfil:line-1,stub-fulfil:line-2"
 if [[ "$start_state" == Closed && -z "$start_error" && "$wf_status" == Completed && "$wf_outcome" == Completed && "${claims:-0}" -ge 1 \
-      && "$history" == "1:Submitted,2:Validating,3:Completed" && "$effects" == "$expected_effects" \
+      && "$history" == "1:Submitted,2:Validating,3:Reserving,4:Completed" && "$effects" == "$expected_effects" \
       && "${workflow_host_rows:-0}" -gt 0 && "$order_api_rows" == 0 ]]; then
   check ACC-6 PASS "started by the dispatcher; order Completed, request Closed, one effect per key; instance on workflow-host only" \
     "start attempts $results; request $start_state; workflow $wf_status/$wf_outcome; claims=$claims; history $history; effects $effects; state rows workflow-host=$workflow_host_rows order-api=$order_api_rows"
 else
-  check ACC-6 FAIL "Closed, workflow Completed/Completed, history 1:Submitted,2:Validating,3:Completed, effects $expected_effects, state only under workflow-host" \
+  check ACC-6 FAIL "Closed, workflow Completed/Completed, history 1:Submitted,2:Validating,3:Reserving,4:Completed, effects $expected_effects, state only under workflow-host" \
     "start=$start_state/$start_error attempts=$results workflow=$wf_status/$wf_outcome claims=$claims history=$history effects=$effects rows workflow-host=$workflow_host_rows order-api=$order_api_rows"
 fi
 

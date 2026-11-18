@@ -3,6 +3,73 @@
 What broke, what surprised us, and what we changed. Newest first. Each entry
 keeps the expectation that turned out wrong.
 
+## 2026-11-19: Reviews, decisions, signals, and the review wait
+
+### Awaiting CancelAsync in workflow code broke the review wait
+
+- **Expected:** a review signal raised to a waiting run wakes it; otherwise
+  its timer does. (Unit tests on a fake context passed.)
+- **Observed (first live S09):** the signals were raised and accepted by the
+  workflow host (`Forwarded`), but no run woke. Raising the event again (in
+  lower and mixed case) changed nothing. At the deadline the runs failed with
+  `InvalidOperationException: An attempt was made to transition a task to a
+  final state when it had already completed`. The decoded history showed
+  `TimerCreated`, two `EventRaised`, `TimerFired`, and the failure, with no
+  activity scheduled after either event.
+- **Cause:** after `Task.WhenAny(timer, signal)` the code awaited
+  `CancellationTokenSource.CancelAsync()`. `CancelAsync` runs the
+  cancellation callbacks on the thread pool, and awaiting it resumes the
+  workflow code off the orchestration thread, after the runtime already
+  collected the episode's actions: the next activity was never scheduled. On
+  the next episode the asynchronous cancellation had already marked the
+  timer's task cancelled while it stayed registered, and `TimerFired`
+  completed it a second time. (The SDK source confirmed that event names
+  match case-insensitively, events are buffered, and its own cancellation
+  callbacks use `TrySetCanceled`; the M0 spike used the synchronous
+  `Cancel()` and passed.)
+- **Fix:** synchronous `Cancel()`, with the rule that workflow code awaits
+  only workflow tasks. The next S09 run: `PASS` (woken by the signal 0.1 to
+  0.9 s after the decision).
+
+### A decision without a comment was refused
+
+- **Expected:** `{"decisionId", "operatorId", "outcome"}` is a valid decision;
+  the comment is optional.
+- **Observed (live S09):** `400 invalid-decision` ("decisionId: a non-empty
+  GUID is required") for every decision. The integration tests passed because
+  they always sent `"comment": null`.
+- **Cause:** strict JSON reading treats every constructor parameter without a
+  default as required; the comment had no default, the deserializer threw, and
+  the error was reported as a missing decision id.
+- **Fix:** the comment has a default; malformed bodies get their own message;
+  an integration test posts a body without a comment.
+
+### Prometheus queries hung during S49
+
+- **Observed:** S49's wait of 150 s for `fence_rejections_total` took 10
+  minutes and failed; right afterwards the metric was present (value 1) and
+  the query answered in 60 ms. The rerun passed (22 s).
+- **Cause:** not determined; the queries had no timeout, so a hung connection
+  to the published Prometheus port stalled each poll.
+- **Fix:** each query is bounded to 10 s.
+
+### Workflow-host recovery and signal delivery (follow-up of the earlier view delay)
+
+- **Measured:** after every workflow-host replica was killed and started
+  again, invocation through the order API sidecars answered `500
+  ERR_DIRECT_INVOKE` until shortly after the hosts reported ready: a signal
+  attempt that started 2.2 s after readiness still failed (its four invoker
+  calls spanned about 1.5 s), while direct probes 1 to 3 s after readiness
+  succeeded. Delivery came 12.6 to 15.7 s after readiness, because the
+  dispatcher's exponential backoff had grown during the outage (4 failed
+  attempts, then 8 to 11 s until the next one). The earlier 15 s gap of the
+  execution view was not reproduced.
+- **Consequence:** correctness does not depend on it (the decision is in
+  SQL; in these runs the workflow's own timer applied the approval first and
+  the signal ended `Discarded`). Expectation recorded: delivery within 60 s of
+  readiness; the root cause of the short post-readiness window is not
+  established.
+
 ## 2026-11-18: Fulfillment steps, terminal transaction, execution fence on completed orders
 
 ### A start acknowledged after the order completed looked like a lost lease

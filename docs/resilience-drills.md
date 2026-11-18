@@ -42,6 +42,10 @@ scoped to one drill run; unfired rows are removed by the drill's cleanup.
 | `AfterStubEffectCommitBeforeActivityCompletion` | order API, after a simulated step committed, before the activity returns |
 | `AfterOrderStatusUpdate`, `AfterOrderStatusHistoryInsert`, `AfterStubEffectInsert`, `AfterStartRequestClose` | order API, between the statements of a fulfillment transaction (before its commit) |
 | `AfterTerminalCommitBeforeActivityCompletion` | order API, after the terminal transaction committed, before the activity returns |
+| `AfterReviewTaskCreateCommit` | order API, after a review round committed, before the activity returns (holds the run before its first wait) |
+| `AfterReviewDecisionUpdate`, `AfterReviewDecisionInsert`, `AfterPendingSignalInsert` | order API, between the statements of the decision transaction |
+| `AfterReviewDecisionCommitBeforeSignalDispatch` | order API, after a decision committed, before the response |
+| `BeforeSignalRaise`, `AfterSignalRaiseBeforeMarkForwarded` | order API signal dispatcher, around the raise (key: signal id, `N` format) |
 
 Further boundaries arrive with the functionality they test.
 
@@ -51,6 +55,7 @@ Further boundaries arrive with the functionality they test.
 |---|---|
 | `scripts/drills/sql/reset-start-request.sql` (`drill_reset_start_request` in `scripts/drills/lib.sh`) | puts the start request of **one terminal order** back to `Pending` (an operator error or a bug), due after a given delay so the drill can observe it first; refuses unless the database has the drill schema, the order is terminal, and the request is `Closed`; keeps the original row in `drill.StartRequestBackup` |
 | `scripts/drills/sql/restore-start-request.sql` (`drill_restore_start_request`) | puts the saved row back |
+| `raise_via_sidecar <order-api replica> <instance> <event>` | raises a workflow event through that replica's sidecar and the management API, as the signal dispatcher does (duplicate and early wake-ups) |
 | `POST /internal/drill/fulfillment/{orderId}/schedule` on the workflow host (`drill_schedule_fulfillment`) | schedules `fulfill-{orderId:N}` directly through the Dapr workflow API, without the management API's existence check; returns Dapr's answer. Compiled only into drill builds, mapped only in the drill environment, app token required |
 
 ## Lifecycle of a Drill Script
@@ -73,4 +78,5 @@ bash scripts/drills/R00-failpoint-selftest.sh      # core profile only (one inve
 bash scripts/scenarios/S49-execution-fence.sh
 bash scripts/stack-up.sh --drill --replicas
 bash scripts/checks/fulfillment-recovery-check.sh   # replicas profile
+bash scripts/scenarios/S52-signaling.sh             # replicas profile
 ```

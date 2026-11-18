@@ -31,6 +31,8 @@ name. Health endpoints are excluded from tracing.
 | `workflow_start_attempts_total{result}` | start attempts by result: `Started`, `AlreadyExists`, `Ambiguous`, `Rejected`, `LeaseLost`, `AlreadyClosed` (the order completed before the start was acknowledged), `Unexpected` |
 | `workflow_start_requests_closed_terminal_total` | start requests closed because the order was already terminal |
 | `fence_rejections_total` | execution claims rejected because the order was already terminal |
+| `workflow_signal_attempts_total{result}` | signal delivery attempts by result: `Forwarded`, `Discarded`, `Stuck`, `NotStarted`, `NotRunning`, `Ambiguous`, `Rejected`, `LeaseLost`, `Unexpected` |
+| `pending_signals_oldest_age_seconds` | age of the oldest pending signal (each dispatcher poll) |
 
 ## Rules
 

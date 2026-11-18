@@ -52,9 +52,26 @@ fast order (the attempt then ends `AlreadyClosed`). `OrderTerminal` on a
 closed request means the dispatcher found a pending request of an order that
 was already terminal and closed it without starting anything.
 
-An order that stays `Validating` with a `Failed` workflow whose failure says
-a review is required means `ComputeChecks__ReviewScoreThreshold` is set; the
-review path does not exist yet.
+## Reviews
+
+Orders from 1,000.00 wait in `AwaitingApproval` for an operator decision:
+
+```bash
+. ./.env
+curl -s "http://127.0.0.1:8080/reviews?status=Pending" -H "X-Api-Key: $OPERATOR_API_KEY"
+curl -s -X POST http://127.0.0.1:8080/reviews/<reviewId>/decision -H "X-Api-Key: $OPERATOR_API_KEY" \
+  -H 'content-type: application/json' -d '{"decisionId":"<new GUID>","operatorId":"operator-1","outcome":"approve"}'
+```
+
+Retry a decision with the same `decisionId` and payload; a new `decisionId`
+for a decided review gets `409`. The execution view shows the review rounds,
+the decision, the workflow's wake-ups, and the signal with every delivery
+attempt (HTTP status, invoker calls, error). A signal stays `Pending` while
+the workflow host cannot be reached and is retried with backoff (up to 30 s
+between attempts); the decision itself is already effective, and the
+workflow also reads it when its timer fires. After every workflow-host
+replica restarted, service invocation failed for a few seconds after
+readiness (measured: up to about 4 s); delivery then waits for the next retry.
 
 ## Restarting a Replica
 

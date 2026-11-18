@@ -101,8 +101,24 @@ drill_schedule_fulfillment() {
     "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'POST /internal/drill/fulfillment/$1/schedule HTTP/1.0\r\nHost: localhost\r\ndapr-api-token: %s\r\nContent-Length: 0\r\n\r\n' \"\$APP_API_TOKEN\" >&3 && sed '1,/^\r\$/d' <&3" 2>/dev/null
 }
 
-# prometheus_sum <metric>: current sum over all series (empty when absent).
+# prometheus_sum <metric>: current sum over all series (empty when absent). Each query is bounded
+# (observed: unbounded queries hung, so a 150 s wait took 10 minutes).
 prometheus_sum() {
-  curl -s "http://127.0.0.1:9095/api/v1/query" --data-urlencode "query=sum($1)" \
+  curl -s -m 10 "http://127.0.0.1:9095/api/v1/query" --data-urlencode "query=sum($1)" \
     | python -c "import json,sys; r=json.load(sys.stdin)['data']['result']; print(r[0]['value'][1] if r else '')" 2>/dev/null
+}
+
+# raise_via_sidecar <order-api service> <instance id> <event name>: raises a workflow event the way
+# the signal dispatcher does (that replica's sidecar → service invocation → the workflow host's
+# management API), with a payload that names no signal. Prints the management API's answer.
+raise_via_sidecar() {
+  docker compose --profile replicas exec -T "$1" bash -c \
+    "exec 3<>/dev/tcp/127.0.0.1/3500 && body='{\"signalId\":\"00000000-0000-0000-0000-000000000000\"}' && printf 'POST /v1.0/invoke/workflow-host/method/internal/workflows/$2/events/$3 HTTP/1.0\r\nHost: localhost\r\ndapr-api-token: %s\r\nContent-Type: application/json\r\nContent-Length: %s\r\n\r\n%s' \"\$DAPR_API_TOKEN\" \${#body} \"\$body\" >&3 && sed '1,/^\r\$/d' <&3" 2>/dev/null
+}
+
+# invoke_probe <order-api service>: one GET through that replica's sidecar to the workflow host's
+# management API (a state query for a nonexistent instance). Prints "<HTTP status> <first 160 chars of body>".
+invoke_probe() {
+  docker compose --profile replicas exec -T "$1" bash -c \
+    "exec 3<>/dev/tcp/127.0.0.1/3500 && printf 'GET /v1.0/invoke/workflow-host/method/internal/workflows/probe-none HTTP/1.0\r\nHost: localhost\r\ndapr-api-token: %s\r\n\r\n' \"\$DAPR_API_TOKEN\" >&3 && r=\$(cat <&3) && printf '%s %s' \"\$(printf '%s' \"\$r\" | head -1 | awk '{print \$2}')\" \"\$(printf '%s' \"\$r\" | sed '1,/^\r\$/d' | tr -d '\r\n' | cut -c1-160)\"" 2>/dev/null
 }

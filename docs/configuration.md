@@ -63,7 +63,17 @@ Generated migration files are excluded from analyzers (`src/.editorconfig`).
 | Setting | Default | Meaning |
 |---|---|---|
 | `ComputeChecks__SimulatedWorkMilliseconds` | `300` | simulated computation time of each check (the checks run concurrently; S02 measures it) |
-| `ComputeChecks__ReviewScoreThreshold` | unset | risk score from which a review is required. Leave unset: the review wait is not available yet, so a required review fails the run |
+| `ComputeChecks__ReviewAmountThresholdMinor` | `100000` | order value (minor units, stub price list) from which a review is required: 1,000.00. Empty means no review is ever required |
+
+## Reviews and Signals (order API)
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `OPERATOR_API_KEY` | (`.env`) | operator role key for `/reviews` (distinct from `CUSTOMER_API_KEY`) |
+| `Review__Deadline`, `Review__TimerGrace` | 10 min, 5 s (`DAPR_POC_ENV=drill`: 20 s, 2 s) | time a round stays open (SQL time); the workflow's timer fires this much later |
+| `Review__Rounds` | `2` | rounds including the first; after the last one expires the order is `Rejected` |
+| `Review__Operators` | `operator-1,operator-2` | simulated operator ids allowed to decide |
+| `SignalDispatcher__Lease`, `__BaseBackoff`, `__MaxBackoff` | 30 s, 1 s, 30 s | signal claim lease and retry backoff |
 
 ## Dapr
 

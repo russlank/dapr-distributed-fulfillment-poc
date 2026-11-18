@@ -25,8 +25,7 @@ sensitive to every field and to line order), messages that never quote
 values, the order model and instance-id rule, the fulfillment workflow on a
 fake context (every step on its owning app in order; both checks scheduled
 before either completes; a terminal order found at any step ends the run;
-rejection ends it before the checks; a required review fails it before any
-simulated step; the same input twice gives the same calls and inputs), the
+rejection ends it before the checks; the stored risk result, not the recomputed one, decides about the review in both directions; the review loop: approval by signal after a Pending read, a decision before the wait, a timer before the SQL deadline (waits again, never in the past), an approval seen after the deadline, expiry into round 2, final expiry, an expiry that finds the review decided, a rejection; the same input twice gives the same calls, inputs, and timers), the signal dispatcher's decision table, the decision hash and contract, the review time profiles, the
 key scheme and the stub price list and risk rule, the validation rules, the
 classification of a fenced dispatcher update (`LeaseLost`, `AlreadyClosed`,
 `Unexpected`), the classification of workflow-host answers (always the
@@ -66,8 +65,10 @@ persisted rows with plain SQL, independent of the model under test.
 | dispatcher | real dispatchers (separate identities, like replicas) on one database against a fake workflow host: start and mark `Started`; existing instance; lost answer after the instance was created (`Pending` with backoff, then found on the next attempt, one instance); refusal (long backoff); terminal guard (closed, no call); a held lease is not claimed; crash after starting (lease expiry, recovery by another dispatcher, the old token changes nothing); a slow start outliving its lease (overlapping attempts, the stale one `LeaseLost`); three concurrent dispatchers start 30 orders exactly once; the hosted dispatcher starts accepted orders and is not blocked by a slow start |
 | start acknowledgement | forced order of events, no timing: the instance is created, the workflow's real steps complete the order (the request is closed), and only then does the start answer reach the dispatcher: the attempt ends `AlreadyClosed`, the request stays `Closed` (never `Started`), nothing is started again; the same with a lost answer (not reopened with backoff); a stale dispatcher overtaken by a later claim is still `LeaseLost` after the completion; an unknown writer's change is `Unexpected` (logged as an error) and left alone |
 | fulfillment steps | all steps: `Completed`, history `Submitted`/`Validating`/`Completed`, one effect per key, request `Closed`; repeated and 20 concurrent validations transition once; a duplicate SKU is `Rejected` with the request closed in the same transaction; a repeated simulated step is applied once and counted as a replay; a crash after its commit (before the result is returned) is retried on another replica and finds the effect; a fault after each statement of the terminal transaction (status, history, effect, request close) rolls all of them back and the retry completes; a crash after the terminal commit changes nothing on retry; 20 concurrent completions make one transition; simulated steps racing the completion never add an effect after it; steps on a terminal order change nothing; completion of an order that is not `Validating` fails without change; repeated check results keep the first |
+| reviews | no-review orders create no review; the stored risk result governs although a replay disagrees (both directions; a required review cannot be skipped); round 1 created once under 10 concurrent creations with one transition; the decision endpoint's contract (`200`, replay, `422` reuse, `409` already decided, `404`, `403` operator, `401` customer key, `400`); 20 concurrent conflicting decisions: one commits, one decision, one signal; a decision at the SQL deadline is refused without writing, one just before is accepted and cannot be expired afterwards; a fault after each statement of the decision transaction rolls back review, decision, and signal; a crash after the commit keeps the decision and its pending signal; decisions are immutable (update refused); approval → resolve → Reserving → Completed with history `Submitted, Validating, AwaitingApproval, Reserving, Completed`; rejection rejects the order and closes its start request; expiry only by SQL time, then round 2 (`409 review-superseded` for round 1), then final rejection (`409 review-expired`) |
+| signals | running instance: raised once, `Forwarded`; workflow not started: kept `Pending` without a raise, delivered after the start; terminal instance: `Discarded`, decision kept; missing instance: `Stuck`; an ambiguous or not-running answer: backoff, then `Forwarded`; a crash after the raise: raised again after the lease, the stale owner `LeaseLost`; three concurrent dispatchers raise each of 12 signals once |
 | fence | the claim counts every claim of a non-terminal order and audits it; terminal orders (all four statuses) are rejected, counted, and audited; 20 concurrent claims all count; an unknown order fails without writing |
-| schema | migrations apply twice without change; the API refuses to start on an unmigrated database; the database rejects a second start request, a second order per key, duplicate instance ids or history sequences, out-of-range lines, unknown statuses, inconsistent start-request lifecycle or lease values, a second effect per operation key, a simulated step not named `stub-…`, a second result per check, and unknown attempt results |
+| schema | migrations apply twice without change; the API refuses to start on an unmigrated database; the database rejects a second start request, a second order per key, duplicate instance ids or history sequences, out-of-range lines, unknown statuses, inconsistent start-request lifecycle or lease values, a second effect per operation key, a simulated step not named `stub-…`, a second result per check, unknown attempt results, a second review round with one number, an inconsistent review lifecycle, an unknown review purpose, a decision without review, and an unknown signal state |
 
 ## Scenarios
 
@@ -96,7 +97,7 @@ with `--replicas` for ACC-4). Evidence: `artifacts/checks/ACC-<time>/`.
 | ACC-3 conflict | same key, other payload: `422 idempotency-key-reused`, row counts unchanged |
 | ACC-4 replicas | 20 concurrent submissions with one key, alternating `order-api` and `order-api-2`: one `201`, nineteen `200`, one order (`UNVERIFIED` without the second replica) |
 | ACC-5 restart | after a cold restart of the order API the retry returns the same order |
-| ACC-6 completed | started by the dispatcher; the order is `Completed` with history `Submitted`, `Validating`, `Completed`; the start request `Closed` without error code (`Started` need not be observed); one simulated effect per key (two lines, completion); workflow `Completed` with outcome `Completed`; its state in `DaprStateDb` belongs to `workflow-host` only, none to `order-api`'s own sidecar |
+| ACC-6 completed | started by the dispatcher; the order is `Completed` with history `Submitted`, `Validating`, `Reserving`, `Completed`; the start request `Closed` without error code (`Started` need not be observed); one simulated effect per key (two lines, completion); workflow `Completed` with outcome `Completed`; its state in `DaprStateDb` belongs to `workflow-host` only, none to `order-api`'s own sidecar |
 
 ### S51 Concurrent Workflow Start
 
@@ -117,8 +118,36 @@ while the first attempt is still in flight. Evidence:
 | S51-race | at least one order has overlapping attempts from both replicas, and the earlier ended `LeaseLost` (otherwise `UNVERIFIED`, which fails the run) |
 | S51-start | 20 orders, 20 start requests, all `Closed` by the completion without error code or lease; every `LeaseLost` attempt has another attempt that recorded the start or found the request closed |
 | S51-instance | every instance `Completed` on `workflow-host` (outcome `Completed`, or `AlreadyTerminal` if a second schedule replaced the finished instance); claim rows equal claims plus fence rejections, at least one claim (more are allowed); no workflow state under `order-api` |
-| S51-effects | every order `Completed` with one history row per status and exactly one effect per operation key and one result per check |
+| S51-effects | every order `Completed` with one history row per status (`Submitted`, `Validating`, `Reserving`, `Completed`) and exactly one effect per operation key and one result per check |
 | S51-accept | 5 keys × 4 concurrent identical submissions over both replicas: one order per key (5 × `201`, 15 × `200`) |
+
+### S09 Cross-Replica Approval
+
+`bash scripts/scenarios/S09-cross-replica-approval.sh` on a stack with
+`--replicas`. Three orders that require a review are accepted, each on one
+order API replica, and approved through the other. Evidence:
+`artifacts/scenarios/S09-<time>/` (execution views, timings).
+
+| Check | PASS when |
+|---|---|
+| S09-waiting | every order `AwaitingApproval`, one `Pending` round, workflow `Running`, resolved once (`Initial:Pending`) and not again: it waits |
+| S09-decision | the approval through the other replica: `200`; review `Approved`, one decision with the operator, one pending signal |
+| S09-resumed | the workflow woke by the signal and read SQL again (`Initial:Pending`, `Signal:Approved`); the signal `Forwarded` after a raise |
+| S09-completed | history `Submitted, Validating, AwaitingApproval, Reserving, Completed`; one effect per key; request `Closed`; workflow `Completed` on `workflow-host` only |
+
+### S52 Signaling Through the Management API
+
+`bash scripts/scenarios/S52-signaling.sh` on a drill stack with `--replicas`
+(review deadline 20 s). Evidence: `artifacts/drills/S52-<run>/`.
+
+| Check | Condition | PASS when |
+|---|---|---|
+| S52-A | the run is held right after its review round committed; the approval is committed and delivered meanwhile | no wake row before release; the first resolution reads `Approved`; completed once without waiting |
+| S52-B | the replica that raised the signal ends before marking it (`FailFast`) | a second attempt by another replica after the lease (two raise calls received by the workflow host); one `Signal:Approved` wake; completed once |
+| S52-B2 | the review event is raised directly from both order API replicas before any decision | two wake-ups read `Pending` and change nothing; the approval afterwards completes the order once |
+| S52-C | the approval is committed shortly before the deadline and its delivery held past it | the timer path reads `Approved` (decided in time) and completes; the late raise finds the instance terminal: `Discarded` (`WorkflowTerminal`) |
+| S52-C2 | a decision exactly at the last round's deadline | either committed and the order completes, or `409 review-expired` and the order is `Rejected` (`ReviewExpired`); never both; no signal without a decision |
+| S52-signals | | no signal of the run left `Pending` |
 
 ### S02 Parallel Independent Checks
 
@@ -163,6 +192,8 @@ the order must end `Completed` once, with one effect per key. Evidence:
 | REC-1 crash after commit | the order API replica running the first simulated step ends right after the step committed (`FailFast`) | the step ran again, found its effect (replay counted, committed by the crashed replica), the order completed once |
 | REC-2 workflow host down | every workflow-host replica is `SIGKILL`ed while a step is held (10 s), restarted after 5 s | the run resumed from its history and completed once |
 | REC-3 order API replica | the replica holding a step (before its transaction) is `SIGKILL`ed | the step ran on the other replica; completed once |
+| REC-4 hosts down in review | every workflow-host replica is `SIGKILL`ed while an order awaits approval; the approval is decided during the outage | after the restart the run reads the approval and completes once; the signal is delivered (or made moot by the timer) within 60 s of readiness; attempt log, sidecar errors, and timing recorded |
+| REC-5 invocation after restart (diagnostic) | every workflow-host replica restarts | invocation from both order API sidecars works again within 60 s of readiness; time to the first success and the failure answers recorded |
 
 ## Drills
 
