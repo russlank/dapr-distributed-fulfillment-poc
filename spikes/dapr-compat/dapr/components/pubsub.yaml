@@ -1,0 +1,19 @@
+# A10: RabbitMQ pub/sub.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: pubsub
+spec:
+  type: pubsub.rabbitmq
+  version: v1
+  metadata:
+    - name: connectionString
+      secretKeyRef:
+        name: SPIKE_AMQP
+        key: SPIKE_AMQP
+    - name: durable
+      value: "true"
+    - name: deletedWhenUnused
+      value: "false"
+auth:
+  secretStore: envsecrets

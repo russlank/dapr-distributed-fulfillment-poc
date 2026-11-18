@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="DaprCompat.App/DaprCompat.App.csproj" />
+  <Project Path="DaprCompat.Tests/DaprCompat.Tests.csproj" />
+</Solution>

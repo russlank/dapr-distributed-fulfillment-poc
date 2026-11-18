@@ -1,0 +1,24 @@
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: spike-topic
+spec:
+  pubsubname: pubsub
+  topic: spike
+  routes:
+    default: /pubsub/spike
+  deadLetterTopic: spike-dlq
+scopes:
+  - spike-worker
+---
+apiVersion: dapr.io/v2alpha1
+kind: Subscription
+metadata:
+  name: spike-dlq
+spec:
+  pubsubname: pubsub
+  topic: spike-dlq
+  routes:
+    default: /pubsub/dlq
+scopes:
+  - spike-worker

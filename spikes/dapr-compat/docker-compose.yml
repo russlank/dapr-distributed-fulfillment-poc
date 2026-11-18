@@ -1,0 +1,178 @@
+# Dapr 1.19 compatibility spike: two orchestrator and two worker replicas, each with its own
+# sidecar (network_mode: service:<app>), SQL Server, RabbitMQ, Placement, Scheduler.
+# Local experiments only: ports bind to 127.0.0.1; secrets come from .env.
+name: dapr-compat
+
+x-app: &app
+  build:
+    context: ./src
+  image: dapr-compat-app:local
+  mem_limit: 256m
+  restart: "no"
+  depends_on:
+    sql-init:
+      condition: service_completed_successfully
+
+x-app-env: &app-env
+  SPIKE_SQL: "Server=sqlserver;Database=SpikeDb;User Id=sa;Password=${SA_PASSWORD:?set SA_PASSWORD in .env};TrustServerCertificate=true"
+  DAPR_API_TOKEN: ${DAPR_API_TOKEN:?set DAPR_API_TOKEN in .env}
+  APP_API_TOKEN: ${APP_API_TOKEN:?set APP_API_TOKEN in .env}
+
+x-daprd: &daprd
+  image: daprio/daprd:1.19.1
+  mem_limit: 256m
+  restart: "no"
+  volumes:
+    - ./dapr:/dapr:ro
+  environment: &daprd-env
+    DAPR_API_TOKEN: ${DAPR_API_TOKEN}
+    APP_API_TOKEN: ${APP_API_TOKEN}
+    SPIKE_STATE_CONN: "Server=sqlserver;Database=DaprStateDb;User Id=sa;Password=${SA_PASSWORD};TrustServerCertificate=true"
+    SPIKE_AMQP: "amqp://spike:${RABBIT_PASSWORD:?set RABBIT_PASSWORD in .env}@rabbitmq:5672"
+
+x-orch-cmd: &orch-cmd
+  ["./daprd", "--app-id", "spike-orch", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001",
+   "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+   "--resources-path", "/dapr/components", "--config", "/dapr/config/orchestrator.yaml", "--log-level", "info"]
+
+x-worker-cmd: &worker-cmd
+  ["./daprd", "--app-id", "spike-worker", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001",
+   "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+   "--resources-path", "/dapr/components", "--config", "/dapr/config/worker.yaml", "--log-level", "info"]
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${SA_PASSWORD}
+      TZ: Etc/UTC
+    ports:
+      - "127.0.0.1:14333:1433"
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  sql-init:
+    image: mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      SA_PASSWORD: ${SA_PASSWORD}
+    volumes:
+      - ./db:/init:ro
+    entrypoint: ["/bin/bash", "-c", "/opt/mssql-tools18/bin/sqlcmd -C -S sqlserver -U sa -P \"$$SA_PASSWORD\" -b -i /init/init.sql"]
+    restart: "no"
+    mem_limit: 256m
+
+  rabbitmq:
+    image: rabbitmq:4.3.6-management
+    environment:
+      RABBITMQ_DEFAULT_USER: spike
+      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASSWORD}
+    ports:
+      - "127.0.0.1:15673:15672"
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  placement:
+    image: daprio/placement:1.19.1
+    command: ["./placement", "--port", "50005", "--healthz-port", "8080"]
+    ports:
+      - "127.0.0.1:8085:8080"
+    mem_limit: 128m
+
+  scheduler:
+    image: daprio/scheduler:1.19.1
+    # Distroless image; a fresh named volume is root-owned, so the spike runs it as root.
+    user: "0:0"
+    command: ["./scheduler", "--port", "50006", "--healthz-port", "8080", "--etcd-data-dir", "/data/scheduler"]
+    volumes:
+      - scheduler-data:/data
+    mem_limit: 256m
+
+  orch-1:
+    <<: *app
+    environment:
+      <<: *app-env
+      ROLE: orchestrator
+      REPLICA_NAME: orch-1
+    ports:
+      - "127.0.0.1:5101:8080"
+      - "127.0.0.1:3601:3500"
+  orch-1-dapr:
+    <<: *daprd
+    network_mode: "service:orch-1"
+    command: *orch-cmd
+    depends_on: [orch-1, placement, scheduler]
+
+  orch-2:
+    <<: *app
+    environment:
+      <<: *app-env
+      ROLE: orchestrator
+      REPLICA_NAME: orch-2
+    ports:
+      - "127.0.0.1:5102:8080"
+  orch-2-dapr:
+    <<: *daprd
+    network_mode: "service:orch-2"
+    command: *orch-cmd
+    depends_on: [orch-2, placement, scheduler]
+
+  worker-1:
+    <<: *app
+    environment:
+      <<: *app-env
+      ROLE: worker
+      REPLICA_NAME: worker-1
+    ports:
+      - "127.0.0.1:5201:8080"
+      - "127.0.0.1:3701:3500"
+  worker-1-dapr:
+    <<: *daprd
+    network_mode: "service:worker-1"
+    command: *worker-cmd
+    depends_on:
+      worker-1:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+
+  worker-2:
+    <<: *app
+    environment:
+      <<: *app-env
+      ROLE: worker
+      REPLICA_NAME: worker-2
+    ports:
+      - "127.0.0.1:5202:8080"
+      - "127.0.0.1:3702:3500"
+  worker-2-dapr:
+    <<: *daprd
+    network_mode: "service:worker-2"
+    command: *worker-cmd
+    depends_on:
+      worker-2:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+
+volumes:
+  scheduler-data:

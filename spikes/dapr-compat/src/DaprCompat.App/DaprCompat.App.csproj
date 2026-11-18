@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <ItemGroup>
+    <PackageReference Include="Dapr.Workflow" />
+    <PackageReference Include="Dapr.Actors.AspNetCore" />
+    <PackageReference Include="Dapr.AspNetCore" />
+    <PackageReference Include="Microsoft.Data.SqlClient" />
+    <!-- Overrides a vulnerable transitive version pulled in by SqlClient. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" />
+  </ItemGroup>
+</Project>

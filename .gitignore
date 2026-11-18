@@ -1,0 +1,36 @@
+# Secrets and local environment
+.env
+*.env.local
+secrets/
+!secrets/README.md
+
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+TestResults/
+*.trx
+coverage*.xml
+artifacts/
+
+# Experiment and drill run output (raw evidence; summaries are committed under docs/)
+results/
+!**/results/README.md
+
+# Python helpers
+.venv/
+__pycache__/
+*.pyc
+
+# Editors and OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+Thumbs.db
+.DS_Store
+
+# Local runtime data
+data/
+*.log

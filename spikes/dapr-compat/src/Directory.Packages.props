@@ -1,0 +1,11 @@
+<Project>
+  <!-- Pinned 2026-11-18; each version published at least two weeks earlier. -->
+  <ItemGroup>
+    <PackageVersion Include="Dapr.Workflow" Version="1.19.0" />
+    <PackageVersion Include="Dapr.Actors.AspNetCore" Version="1.19.0" />
+    <PackageVersion Include="Dapr.AspNetCore" Version="1.19.0" />
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.1.1" />
+    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.14" />
+    <PackageVersion Include="xunit.v3" Version="4.0.2" />
+  </ItemGroup>
+</Project>

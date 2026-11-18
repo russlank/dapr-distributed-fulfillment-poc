@@ -1,0 +1,10 @@
+# A8: activity concurrency is a sidecar setting (the SDK option is obsolete in 1.19).
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: worker
+spec:
+  metric:
+    enabled: true
+  workflow:
+    maxConcurrentActivityInvocations: 2

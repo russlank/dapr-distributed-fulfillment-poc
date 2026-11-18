@@ -1,0 +1,22 @@
+# A1: SQL Server as the workflow and actor state store.
+# Component version v2: v1 stores values as NVARCHAR text and corrupts binary workflow history.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+spec:
+  type: state.sqlserver
+  version: v2
+  metadata:
+    - name: connectionString
+      secretKeyRef:
+        name: SPIKE_STATE_CONN
+        key: SPIKE_STATE_CONN
+    - name: databaseName
+      value: DaprStateDb
+    - name: tableName
+      value: state_v2
+    - name: actorStateStore
+      value: "true"
+auth:
+  secretStore: envsecrets
