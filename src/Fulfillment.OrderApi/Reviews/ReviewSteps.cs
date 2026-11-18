@@ -37,6 +37,13 @@ public sealed class ReviewOptions
     }
 }
 
+/// <summary>Checkpoint names of the review steps (also drill failpoint names).</summary>
+public static class ReviewCheckpoints
+{
+    /// <summary>After round 1 committed, before the activity returns: drills hold the run here, before its first wait (key: {orderId:N}:review:1).</summary>
+    public const string AfterReviewTaskCreateCommit = "AfterReviewTaskCreateCommit";
+}
+
 /// <summary>
 /// The review steps of a fulfillment run (activities on order-api). Each locks the order row first,
 /// like every fulfillment step, and is safe to repeat. A review's decision comes only from the
@@ -78,6 +85,7 @@ public sealed class ReviewSteps(string connectionString, ReviewOptions options, 
             OrderReasonCodes.ReviewRequired, checkpoint, key, ct);
         var created = await InsertRoundAsync(connection, tx, request.OrderId, 1, ct);
         await tx.CommitAsync(ct);
+        await checkpoint(ReviewCheckpoints.AfterReviewTaskCreateCommit, key, ct);
         return Round(StepOutcomes.Applied, created, OrderStatus.AwaitingApproval);
     }
 

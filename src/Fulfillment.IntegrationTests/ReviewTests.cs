@@ -122,6 +122,18 @@ public sealed class ReviewTests(SqlServerFixture sql) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Decision_MinimalBodyWithoutComment_IsAccepted()
+    {
+        var (_, review) = await ReviewOrderAsync();
+
+        using var response = await Reviewing.DecideRawAsync(operators, review.ReviewId,
+            "{\"decisionId\":\"" + Guid.NewGuid() + "\",\"operatorId\":\"operator-1\",\"outcome\":\"approve\"}", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Null(await Db.ScalarAsync<object?>(db, "SELECT Comment FROM orders.ReviewDecision WHERE ReviewId = @r", ("@r", review.ReviewId)) as string);
+    }
+
+    [Fact]
     public async Task Decision_ContractResponses()
     {
         var (orderId, review) = await ReviewOrderAsync();

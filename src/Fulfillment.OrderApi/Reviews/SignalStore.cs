@@ -84,7 +84,9 @@ public sealed class WorkflowHostSignaler(SidecarInvoker invoker) : IWorkflowSign
     {
         var result = await invoker.PostAsync(AppIds.WorkflowHost, WorkflowManagementRoutes.Event(instanceId, eventName), payload, $"signal:{signalId:N}", ct);
         var http = result.Status is { } s ? (int)s : (int?)null;
-        var error = result.TransportError is { Length: > 200 } e ? e[..200] : result.TransportError;
+        // Diagnostics: the transport error, or for an error response the start of its body (the sidecar's error code and message).
+        var detail = result.TransportError ?? (result.IsSuccess ? null : result.Body);
+        var error = detail is { Length: > 200 } e ? e[..200] : detail;
         if (result.IsSuccess)
         {
             var answer = JsonSerializer.Deserialize<WorkflowEventResult>(result.Body, Json);

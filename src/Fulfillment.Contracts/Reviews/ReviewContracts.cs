@@ -31,7 +31,8 @@ public static class ReviewErrorCodes
 /// <param name="DecisionId">Caller-chosen id; a retry sends the same id and payload.</param>
 /// <param name="OperatorId">Simulated operator identity (must be a configured operator).</param>
 /// <param name="Outcome">approve or reject.</param>
-public sealed record SubmitDecisionRequest(Guid DecisionId, string OperatorId, string Outcome, string? Comment);
+/// <param name="Comment">Optional; may be omitted.</param>
+public sealed record SubmitDecisionRequest(Guid DecisionId, string OperatorId, string Outcome, string? Comment = null);
 
 /// <param name="Replayed">True when this decision id and payload were accepted before.</param>
 public sealed record DecisionAccepted(Guid ReviewId, Guid DecisionId, string Outcome, bool Replayed);

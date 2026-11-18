@@ -33,6 +33,19 @@ public static class OrderExecutionDiagnostics
             var checks = await db.OrderChecks.AsNoTracking().Where(c => c.OrderId == orderId).OrderBy(c => c.CheckName)
                 .Select(c => new { c.CheckName, c.OperationKey, c.Replica, c.StartedAt, c.CompletedAt, c.TotalMinor, c.Currency, c.RiskScore, c.ReviewRequired, c.RuleVersion, c.Replays })
                 .ToListAsync(ct);
+            var reviews = await db.ReviewTasks.AsNoTracking().Where(r => r.OrderId == orderId).OrderBy(r => r.Round)
+                .Select(r => new { r.ReviewId, r.Round, r.Status, r.CreatedAt, r.DeadlineAt, r.DecidedAt, r.DecisionId, r.ExpiredAt }).ToListAsync(ct);
+            var reviewIds = reviews.Select(r => r.ReviewId).ToList();
+            var decisions = await db.ReviewDecisions.AsNoTracking().Where(d => d.OrderId == orderId)
+                .Select(d => new { d.DecisionId, d.ReviewId, d.Outcome, d.OperatorId, d.DecidedAt }).ToListAsync(ct);
+            var wakes = await db.ReviewWakes.AsNoTracking().Where(w => reviewIds.Contains(w.ReviewId)).OrderBy(w => w.Id)
+                .Select(w => new { w.ReviewId, w.Wake, w.SeenStatus, w.DeadlinePassed, w.At }).ToListAsync(ct);
+            var signals = await db.PendingSignals.AsNoTracking().Where(s => s.OrderId == orderId).OrderBy(s => s.CreatedAt)
+                .Select(s => new { s.SignalId, s.EventName, s.State, s.Attempts, s.LastErrorCode, s.CreatedAt, s.ForwardedAt, s.ClosedAt }).ToListAsync(ct);
+            var signalIds = signals.Select(s => s.SignalId).ToList();
+            var signalAttempts = await db.SignalAttempts.AsNoTracking().Where(a => signalIds.Contains(a.SignalId)).OrderBy(a => a.Id)
+                .Select(a => new { a.SignalId, a.Attempt, a.DispatcherId, a.CalledAt, a.CompletedAt, a.Result, a.ReportedStatus, a.InvocationAttempts, a.HttpStatus, a.TransportError })
+                .ToListAsync(ct);
 
             object? workflow;
             try
@@ -49,6 +62,11 @@ public static class OrderExecutionDiagnostics
                 order = new { Status = status.ToString(), History = history.Select(h => new { h.Sequence, FromStatus = h.FromStatus?.ToString(), ToStatus = h.ToStatus.ToString(), h.ReasonCode, h.OccurredAt }) },
                 stubEffects = effects,
                 checks,
+                reviews,
+                decisions,
+                reviewWakes = wakes,
+                signals,
+                signalAttempts,
                 startRequest = new
                 {
                     request.InstanceId,

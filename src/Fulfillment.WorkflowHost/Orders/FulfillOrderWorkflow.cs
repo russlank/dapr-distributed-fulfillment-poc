@@ -180,11 +180,19 @@ public sealed partial class FulfillOrderWorkflow : Workflow<FulfillmentInput, Fu
             var fireAt = round.DeadlineAtUtc + round.TimerGrace;
             var earliest = context.CurrentUtcDateTime + round.TimerGrace;
             using var cancel = new CancellationTokenSource();
-            var timer = context.CreateTimer(fireAt > earliest ? fireAt : earliest, cancel.Token);
             var signal = context.WaitForExternalEventAsync<ReviewSignal>(ReviewSignals.EventName(round.ReviewId), cancel.Token);
-            var first = await Task.WhenAny(timer, signal);
+            var timer = context.CreateTimer(fireAt > earliest ? fireAt : earliest, cancel.Token);
+            var first = await Task.WhenAny(signal, timer);
             wake = first == signal ? ReviewWakes.Signal : ReviewWakes.Timer;
-            await cancel.CancelAsync();
+
+            // Synchronous on purpose: CancelAsync runs the callbacks on the thread pool, and awaiting it
+            // resumes this code off the orchestration thread, after the episode already ended
+            // (observed: the next activity was never scheduled; on the following episode the timer's
+            // completion hit an already-cancelled task and the run failed). Workflow code awaits only
+            // workflow tasks.
+#pragma warning disable CA1849 // the synchronous Cancel is required in workflow code
+            cancel.Cancel();
+#pragma warning restore CA1849
         }
     }
 

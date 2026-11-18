@@ -145,7 +145,7 @@ public sealed class SignalAttempt
     /// <summary>Runtime status the workflow host reported, if any.</summary>
     public string? ReportedStatus { get; private set; }
 
-    /// <summary>Calls the invoker made (its bounded retries), the last HTTP status, and the last transport error.</summary>
+    /// <summary>Calls the invoker made (its bounded retries), the last HTTP status, and the last transport error or the start of the error response body.</summary>
     public int? InvocationAttempts { get; private set; }
 
     public int? HttpStatus { get; private set; }

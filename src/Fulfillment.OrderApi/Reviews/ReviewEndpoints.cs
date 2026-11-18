@@ -64,9 +64,9 @@ public static partial class ReviewEndpoints
         {
             request = await JsonSerializer.DeserializeAsync<SubmitDecisionRequest>(http.Body, Strict, ct);
         }
-        catch (JsonException)
+        catch (JsonException e)
         {
-            request = null;
+            return Problem(400, ReviewErrorCodes.InvalidDecision, $"the body is not a valid decision document (at {e.Path ?? "$"})");
         }
 
         var invalid = Invalid(request);

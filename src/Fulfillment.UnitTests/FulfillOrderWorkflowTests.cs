@@ -393,6 +393,14 @@ public class FulfillmentKeyTests
     }
 
     [Fact]
+    public void StubPriceList_MatchesTheScriptsCopy()
+    {
+        // scripts/lib.sh (review_sku) computes the same prices to build orders that need a review.
+        Assert.Equal((6784, 4172), (StubPriceList.UnitPriceMinor("SKU-R1"), StubPriceList.UnitPriceMinor("SKU-1")));
+        Assert.True(StubPriceList.UnitPriceMinor("SKU-R1") * 100 >= 100_000);
+    }
+
+    [Fact]
     public void ComputeCheckOptions_DefaultThresholdIsTheOwnerDecision()
     {
         Assert.Equal(100_000, new ComputeCheckOptions().ReviewAmountThresholdMinor);
