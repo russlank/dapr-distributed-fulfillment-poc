@@ -3,8 +3,12 @@ when:
 services:
   # Ephemeral SQL Server for the integration tests (no Docker inside the build step). The password
   # exists only for this throwaway CI container; nothing else uses it.
+  # At the end of the workflow Woodpecker stops services with SIGTERM, then SIGKILL; SQL Server does
+  # not exit within that window and reports 137, which failed otherwise green runs. Its exit status is
+  # ignored; an unusable server still fails the integration-tests step (connection timeout).
   - name: sqlserver
     image: mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04
+    failure: ignore
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "Ci-only-throwaway-1"

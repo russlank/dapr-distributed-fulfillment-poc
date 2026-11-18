@@ -5,6 +5,22 @@ keeps the expectation that turned out wrong.
 
 ## 2026-11-18: Durable order acceptance
 
+### Woodpecker failed a green run because of the SQL Server service's exit
+
+- **Expected:** a service's exit at the end of the workflow does not affect
+  the result.
+- **Observed:** on the first push with integration tests, every step passed
+  (unit gates; integration tests 46/46), yet the Woodpecker run was red: the
+  `sqlserver` service showed exit code 137. Its log ended mid-run without a
+  shutdown message, after the last test database, with no errors and ample
+  free memory. GitHub Actions was green.
+- **Cause:** Woodpecker stops services with SIGTERM and then SIGKILL; SQL
+  Server did not exit in that window, and the killed service counted as a
+  failure.
+- **Fix:** `failure: ignore` on the service (Woodpecker's documented option for
+  services that do not shut down cleanly). A server that does not work still
+  fails the integration-tests step.
+
 ### Container builds did not see the analyzer exclusion for migrations
 
 - **Expected:** marking `Persistence/Migrations` as generated code in the
