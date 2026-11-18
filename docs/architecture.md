@@ -73,8 +73,17 @@ reached by Dapr service invocation and protected by the app token:
 | `GET /internal/workflows/{instanceId}` | state, output, failure details |
 | `POST /internal/workflows/{instanceId}/events/{event}` | raises only to a running instance; otherwise returns the state (a completed instance silently ignores events, a missing one returns an error) |
 
+Access is limited to the calling apps and workflow types the workflow host
+lists explicitly (today `order-api` and the runtime probe workflow). The
+caller is the app id Dapr attaches to the invocation (`dapr-caller-app-id`);
+other callers get `403`, unknown workflow types `400`. Replacing an existing
+instance is allowed only for probe instances of the probe workflow.
+
 The workflow host keeps no business logic and no database. Callers commit
-their SQL record first and call this API with bounded retries.
+their SQL record first and call this API with bounded retries. The
+state-first check of a start is not atomic: two concurrent starts of the same
+id can both see "no instance". Correctness therefore never rests on this API
+but on the SQL start record, the execution claim, and keyed effects.
 
 ## Service Invocation
 

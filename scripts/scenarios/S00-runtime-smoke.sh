@@ -8,6 +8,8 @@
 #                       stored binary (state.sqlserver v2), with no corrupted rows
 #   S00-4 fence         deliberately rescheduling the completed probe's instance id (which Dapr replaces)
 #                       adds no effect: the execution claim rejects it
+#   S00-5 access        the workflow host's management API refuses other callers, unsupported workflow
+#                       types, and replacement of non-probe instances (service invocation, real sidecars)
 # Usage: scripts/scenarios/S00-runtime-smoke.sh   (exit 0 only if every check passed)
 . "$(dirname "$0")/../lib.sh"
 
@@ -107,6 +109,26 @@ if [[ "$outcome" == AlreadyTerminal && "$after_effects" == "$before_effects" && 
     "Dapr accepted the reschedule (new run); run ended AlreadyTerminal; effects $before_effects -> $after_effects; fence rejections=$(json_get "$fenced" probe.fenceRejections)"
 else
   check S00-4 FAIL "AlreadyTerminal, effects unchanged" "outcome=$outcome effects $before_effects -> $after_effects response=$resched"
+fi
+
+# S00-5 management access: the workflow host's management API refuses unauthorized callers, unsupported
+# workflow types, and replacement of non-probe instances, through real service invocation ----------
+# invoke_status <from-service> <POST|GET> <path on workflow-host>: HTTP status seen by the caller app.
+invoke_status() {
+  docker compose exec -T "$1" bash -c \
+    "exec 3<>/dev/tcp/127.0.0.1/3500 && printf '$2 /v1.0/invoke/workflow-host/method$3 HTTP/1.0\r\nHost: localhost\r\ndapr-api-token: %s\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}' \"\$DAPR_API_TOKEN\" >&3 && head -1 <&3" 2>/dev/null \
+    | tr -d '\r' | awk '{print $2}'
+}
+foreign_query="$(invoke_status compute-worker GET "/internal/workflows/probe-$PROBE")"
+foreign_start="$(invoke_status compute-worker POST "/internal/workflows/RuntimeProbeWorkflow/probe-$PROBE-x/start")"
+unknown_type="$(invoke_status order-api POST "/internal/workflows/UnknownWorkflow/probe-$PROBE-x/start")"
+replace_other="$(invoke_status order-api POST "/internal/workflows/RuntimeProbeWorkflow/other-$PROBE/start?replaceTerminal=true")"
+own_query="$(invoke_status order-api GET "/internal/workflows/probe-$PROBE")"
+observed="compute-worker query=$foreign_query start=$foreign_start; order-api unknown type=$unknown_type, replace non-probe=$replace_other, own query=$own_query"
+if [[ "$foreign_query $foreign_start $unknown_type $replace_other $own_query" == "403 403 400 403 200" ]]; then
+  check S00-5 PASS "management API admits only order-api, supported types, probe-only replacement" "$observed"
+else
+  check S00-5 FAIL "403 403 400 403 200" "$observed"
 fi
 
 log "S00 finished: $failures failed check(s); results in $RESULTS_FILE"

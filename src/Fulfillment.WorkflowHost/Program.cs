@@ -14,5 +14,5 @@ builder.Services.AddDaprWorkflow(options => options.RegisterWorkflow<RuntimeProb
 
 var app = builder.Build();
 app.MapServiceDefaults();
-app.MapWorkflowManagement();
+app.MapWorkflowManagement(WorkflowManagementPolicy.Default);
 app.Run();

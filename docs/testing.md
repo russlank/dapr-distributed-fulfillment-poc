@@ -42,6 +42,7 @@ opposite result in each.
 | S00-2 recovery | `SIGKILL` of the workflow host (app and sidecar) inside the probe's 45 s durable timer | step 2's effect does not exist yet at kill time (otherwise the check fails as "window missed") | probe `Completed`; 2 effects; 1 committed attempt per step, so the completed step 1 was not executed again |
 | S00-3 persistence | cold restart of the order API and workflow host (new app and sidecar processes, empty caches) | workflow state read back through the state store afterwards | history rows exist, all stored binary, none containing U+FFFD; the state reads `Completed`. A `state.sqlserver` v1 component would fail here |
 | S00-4 fence | the completed probe's instance id is scheduled again on purpose (Dapr replaces the completed instance) | the claim's rejection counter in `OrderDb` | the new run ends `AlreadyTerminal`; the effect count is unchanged |
+| S00-5 access | the workflow host's management API is called through real service invocation by `compute-worker` (query, start), and by `order-api` with an unknown workflow type and with a replacement of a non-probe instance | HTTP status seen by the caller | `403`, `403`, `400`, `403`; the authorized query by `order-api` returns `200` |
 
 ## Drills
 
