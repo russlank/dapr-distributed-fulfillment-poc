@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Integration tests against a real SQL Server: a Testcontainers container locally (Docker
+       required), or the server named by FULFILLMENT_TEST_SQL_SERVER (CI service containers). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Test names follow Unit_Condition_Result (constitution 13.3). -->
+    <NoWarn>$(NoWarn);CA1707</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Testcontainers.MsSql" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Fulfillment.OrderApi\Fulfillment.OrderApi.csproj" />
+  </ItemGroup>
+</Project>

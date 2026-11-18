@@ -47,6 +47,7 @@ observed runtime behavior: [docs/versions.md](docs/versions.md).
 | .NET SDK / runtime | 10.0.403 / 10.0.14 |
 | Dapr runtime (daprd, Placement, Scheduler) | 1.19.1 |
 | Dapr .NET SDK | 1.19.0 |
+| EF Core | 10.0.14 |
 | SQL Server | 2022 CU27 |
 | RabbitMQ | 4.3.6 |
 | OpenTelemetry .NET / Collector | 1.20.1 / 0.163.2 |

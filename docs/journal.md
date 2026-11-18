@@ -3,6 +3,51 @@
 What broke, what surprised us, and what we changed. Newest first. Each entry
 keeps the expectation that turned out wrong.
 
+## 2026-11-18: Durable order acceptance
+
+### Container builds did not see the analyzer exclusion for migrations
+
+- **Expected:** marking `Persistence/Migrations` as generated code in the
+  repository's `.editorconfig` applies to every build.
+- **Observed:** local builds passed; the image build of the order API failed
+  with `CA1861` in the generated migration (warnings are errors).
+- **Cause:** the image build context is `src/`; the root `.editorconfig` is
+  not part of it, so container builds ran the analyzers on generated code.
+- **Fix:** the section lives in `src/.editorconfig`, inside the build context.
+
+### Existing `.env` files lacked the new customer key
+
+- **Expected:** adding a name to `.env.example` is enough.
+- **Observed:** `init-env.sh` never touches an existing `.env`, so Compose
+  would refuse to start (`CUSTOMER_API_KEY` missing) on every machine with an
+  older `.env`.
+- **Fix:** `init-env.sh` appends missing names with new random values and
+  never changes existing ones; `stack-up.sh` runs it every time.
+
+### Concurrent tests alone did not prove the unique-violation path
+
+- **Expected:** 24 concurrent submissions with one key exercise the path
+  where the key's insert fails with a unique violation.
+- **Observed:** the tests pass whether or not that path runs: a request that
+  arrives after the winner's commit takes the lookup path instead. Passing
+  proves the outcome, not the mechanism.
+- **Fix:** an added test holds the key in an uncommitted transaction, proves
+  that the submission is blocked on it (lock wait in
+  `sys.dm_exec_requests`), then commits, so the violation path runs every
+  time (replay and conflict variants).
+
+### Smaller problems
+
+- The first constraint tests failed because their raw inserts omitted the
+  start request's counter columns (`NOT NULL`, no database default): the
+  tests were wrong, not the schema; they now supply the counters.
+- `dotnet ef migrations remove` connects to the database to check whether the
+  migration was applied; with no database, `--force` removes it.
+- With `--namespace`, `dotnet ef migrations add` wrote the model snapshot to a
+  folder derived from the namespace (`Fulfillment/OrderApi/...`) instead of
+  next to the migration; it compiled, so nothing failed. Moved; a unit test now
+  fails whenever the model has changes that no migration covers.
+
 ## 2026-11-18: Foundation (solution skeleton, Compose stack, runtime smoke)
 
 ### A workflow instance belongs to the app that scheduled it

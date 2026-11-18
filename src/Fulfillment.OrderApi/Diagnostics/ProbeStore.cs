@@ -7,8 +7,9 @@ namespace Fulfillment.OrderApi.Diagnostics;
 /// SQL side of the runtime probe in OrderDb (schema diagnostics). One row per probe id is the
 /// unique start record; the claim is the execution fence: a probe that is already Completed
 /// never runs its effects again, whatever Dapr does with the instance id. The same pattern
-/// guards fulfillment orders from M1. Schema is created at startup until EF Core migrations
-/// arrive with the first business tables.
+/// guards fulfillment orders (the start request's execution claim). The diagnostics schema is
+/// owned by the probe and created idempotently at startup; it is deliberately not part of the
+/// business schema, which comes from EF Core migrations.
 /// </summary>
 public sealed class ProbeStore(string connectionString)
 {

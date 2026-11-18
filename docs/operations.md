@@ -22,7 +22,9 @@ Container health checks use the live endpoint; `stack-up.sh` waits for ready.
 ## Startup Order
 
 `sqlserver` (healthy) → `db-init` (databases and logins; must exit 0) and
-`scheduler-volume-init` (volume ownership; must exit 0) → control plane
+`scheduler-volume-init` (volume ownership; must exit 0) → `order-db-migrate`
+(OrderDb migrations; must exit 0; the order API refuses to start while a
+migration is pending) → control plane
 (Placement, Scheduler), RabbitMQ, Toxiproxy, telemetry → apps → their
 sidecars. `docker compose up --wait` cannot be used alone because it fails
 as soon as a one-shot job exits, even with code 0; `stack-up.sh` waits for

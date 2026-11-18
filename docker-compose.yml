@@ -1,4 +1,4 @@
-# Fulfillment PoC local stack. Generated layout, edited by hand only through the generator.
+# Fulfillment PoC local stack.
 # Profiles: (none) = core, one replica per role; "replicas" adds the default replica counts;
 # "scale" adds the maximum counts. Every Dapr-enabled replica is an app container plus its own
 # daprd sidecar sharing the app's network namespace. Ports bind to 127.0.0.1 only.
@@ -165,19 +165,35 @@ services:
       - "127.0.0.1:3000:3000"
     mem_limit: 256m
 
-  order-api:
-    <<: *app
+  # One-shot schema job: applies the OrderDb migrations with the order API image (built here), then
+  # exits. The order API replicas start after it and refuse to start while migrations are pending.
+  order-db-migrate:
     build:
       context: ./src
       args:
         <<: *build-args
         PROJECT: Fulfillment.OrderApi
     image: fulfillment/order-api:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    restart: "no"
+    mem_limit: 256m
+    command: ["migrate"]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      ConnectionStrings__OrderDb: "Server=sqlserver;Database=OrderDb;User Id=order_api;Password=${ORDER_DB_PASSWORD};TrustServerCertificate=true"
+  order-api:
+    <<: *app
+    image: fulfillment/order-api:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    depends_on:
+      order-db-migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app-env
       REPLICA_NAME: order-api
       ConnectionStrings__OrderDb: "Server=sqlserver;Database=OrderDb;User Id=order_api;Password=${ORDER_DB_PASSWORD};TrustServerCertificate=true"
       ADMIN_API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in .env}
+      CUSTOMER_API_KEY: ${CUSTOMER_API_KEY:?set CUSTOMER_API_KEY in .env}
     ports:
       - "127.0.0.1:8080:8080"
   order-api-dapr:
@@ -202,11 +218,15 @@ services:
     <<: *app
     image: fulfillment/order-api:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
     profiles: [replicas]
+    depends_on:
+      order-db-migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app-env
       REPLICA_NAME: order-api-2
       ConnectionStrings__OrderDb: "Server=sqlserver;Database=OrderDb;User Id=order_api;Password=${ORDER_DB_PASSWORD};TrustServerCertificate=true"
       ADMIN_API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in .env}
+      CUSTOMER_API_KEY: ${CUSTOMER_API_KEY:?set CUSTOMER_API_KEY in .env}
     ports:
       - "127.0.0.1:8081:8080"
   order-api-2-dapr:

@@ -3,8 +3,9 @@
 ## Secrets (`.env`)
 
 `.env` is git-ignored. `scripts/init-env.sh` writes it with random values
-from the names in `.env.example`; Compose refuses to start when a required
-value is missing.
+from the names in `.env.example`, and appends names added to `.env.example`
+later to an existing `.env` (existing values never change; `stack-up.sh` runs
+it). Compose refuses to start when a required value is missing.
 
 | Variable | Used by |
 |---|---|
@@ -16,6 +17,7 @@ value is missing.
 | `DAPR_API_TOKEN` | required by every sidecar API; sent by the apps |
 | `APP_API_TOKEN` | sent by every sidecar to its app; required on sidecar-only routes |
 | `ADMIN_API_KEY` | admin endpoints of the order API (`X-Api-Key`) |
+| `CUSTOMER_API_KEY` | customer endpoints of the order API: `/orders` (`X-Api-Key`) |
 | `GRAFANA_ADMIN_PASSWORD` | Grafana `admin` user |
 
 ## Application Settings
@@ -27,6 +29,20 @@ value is missing.
 | `DAPR_POC_ENV` | `local` (default) or `drill`; failpoints act only in `drill` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | when set, logs, traces, and metrics are exported over OTLP |
 | `DAPR_HTTP_PORT` | sidecar HTTP port (default 3500) |
+
+## Database Schema
+
+The order API's tables (`OrderDb`, schema `orders`) come from EF Core
+migrations. `dotnet Fulfillment.OrderApi.dll migrate` applies them and exits;
+in Compose this is the `order-db-migrate` job, which both order API replicas
+wait for. A new migration is created with the pinned tool:
+
+```bash
+cd src && dotnet tool restore
+dotnet ef migrations add <Name> --project Fulfillment.OrderApi --output-dir Persistence/Migrations
+```
+
+Generated migration files are excluded from analyzers (`src/.editorconfig`).
 
 ## Dapr
 

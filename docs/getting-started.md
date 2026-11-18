@@ -45,7 +45,7 @@ All bound to `127.0.0.1`.
 
 | URL | What |
 |---|---|
-| http://127.0.0.1:8080 | order API (`/health/live`, `/health/ready`, `/system/component-identity`, probes) |
+| http://127.0.0.1:8080 | order API (`/orders`, `/health/live`, `/health/ready`, `/system/component-identity`, probes); with `--replicas` also :8081 |
 | http://127.0.0.1:8090, :8091 | carrier and payment provider simulators |
 | http://127.0.0.1:16686 | Jaeger (traces) |
 | http://127.0.0.1:9095 | Prometheus |
@@ -54,6 +54,18 @@ All bound to `127.0.0.1`.
 | 127.0.0.1:14330 | SQL Server (for inspection; `sa` password in `.env`) |
 
 Sidecar ports are not published.
+
+Submit an order (the customer key is in `.env`):
+
+```bash
+. ./.env
+curl -s -X POST http://127.0.0.1:8080/orders -H "X-Api-Key: $CUSTOMER_API_KEY" \
+  -H "Idempotency-Key: $(uuidgen 2>/dev/null || date +%s%N)" -H 'content-type: application/json' \
+  -d '{"customerId":"c-1","lines":[{"sku":"SKU-1","quantity":2}]}'
+```
+
+The order stays `Submitted` with a pending start request until the start
+dispatcher exists.
 
 ## Stop and Reset
 
@@ -66,4 +78,5 @@ bash scripts/reset.sh --yes     # stop and delete all data (SQL and Scheduler vo
 
 ```bash
 bash ci/dotnet-gates.sh         # restore, build, unit tests, format check, drill-flavor tests
+bash ci/integration-tests.sh    # SQL Server integration tests (Docker for Testcontainers)
 ```

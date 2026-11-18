@@ -34,6 +34,14 @@ Added for the solution foundation (pinned 2026-11-18, same rule):
 | Grafana | `grafana/grafana:13.3.0` | 2026-10-27 | |
 | Toxiproxy | `ghcr.io/shopify/toxiproxy:2.13.0` | 2026-10-14 | |
 
+Added for durable order acceptance (pinned 2026-11-18, same rule):
+
+| Component | Version | Released | Notes |
+|---|---|---|---|
+| EF Core (`Microsoft.EntityFrameworkCore.SqlServer`, `.Design`; tool `dotnet-ef`) | 10.0.14 | 2026-10-25 | same servicing release as the `aspnet:10.0.14` runtime; 10.0.15 (2026-11-10) too recent; requires SqlClient ≥ 6.1.7, the pinned 7.1.1 is used |
+| `Microsoft.AspNetCore.Mvc.Testing` | 10.0.14 | 2026-10-25 | integration tests host the order API in-process |
+| `Testcontainers.MsSql` | 4.16.0 | 2026-10-08 | 4.17.0 (2026-11-16) too recent; runs the stack's SQL Server image |
+
 ## Foundation Versus the Compatibility Spike
 
 The foundation uses the behavior the spike verified, with these deliberate

@@ -5,13 +5,23 @@ using Fulfillment.Contracts.Diagnostics;
 using Fulfillment.Messaging;
 using Fulfillment.OrderApi;
 using Fulfillment.OrderApi.Diagnostics;
+using Fulfillment.OrderApi.Orders;
+using Fulfillment.OrderApi.Persistence;
 using Fulfillment.ServiceDefaults;
+
+// One-shot schema step (Compose job order-db-migrate); the app never migrates at start.
+if (OrderDbMigrations.IsMigrateCommand(args))
+{
+    return await OrderDbMigrations.RunAsync(args);
+}
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults(new ServiceDefaultsOptions(AppIds.OrderApi, UsesDaprSidecar: true, DatabaseConnectionName: "OrderDb"));
 
 var orderDb = builder.Configuration.GetConnectionString("OrderDb")!;
 builder.Services.AddSingleton(new ProbeStore(orderDb));
+builder.Services.AddDbContext<OrderDbContext>(o => OrderDbContext.Configure(o, orderDb));
+builder.Services.AddScoped<OrderAcceptance>();
 builder.Services.AddSidecarInvoker();
 builder.Services.AddTransient<WorkflowHostClient>();
 
@@ -23,8 +33,10 @@ builder.Services.AddDaprWorkflow(options =>
 });
 
 var app = builder.Build();
+await OrderDbMigrations.EnsureCurrentAsync(app.Services);
 await app.Services.GetRequiredService<ProbeStore>().EnsureSchemaAsync();
 app.MapServiceDefaults();
+app.MapOrders();
 
 // Runtime probe (operational diagnostic, admin key): exercises execution claim, cross-app
 // activities, durable timer, and keyed effects end to end. Not business functionality.
@@ -70,7 +82,8 @@ probes.MapGet("/{probeId}", async (string probeId, ProbeStore store, WorkflowHos
         : Results.Ok(new { probe = record, workflow = await workflows.GetStateAsync(RuntimeProbe.InstanceId(probeId), ct) });
 });
 
-app.Run();
+await app.RunAsync();
+return 0;
 
 internal static partial class ProbeIds
 {

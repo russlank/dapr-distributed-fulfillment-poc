@@ -19,6 +19,7 @@
     <Project Path="Fulfillment.ServiceDefaults/Fulfillment.ServiceDefaults.csproj" />
   </Folder>
   <Folder Name="/Tests/">
+    <Project Path="Fulfillment.IntegrationTests/Fulfillment.IntegrationTests.csproj" />
     <Project Path="Fulfillment.UnitTests/Fulfillment.UnitTests.csproj" />
   </Folder>
 </Solution>

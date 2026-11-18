@@ -28,7 +28,7 @@ app's network namespace.
 | `Fulfillment.ClientSimulator` | none | none | external customer/operator CLI |
 
 Shared libraries: `Fulfillment.Contracts` (app ids, activity names and
-payloads, management API contracts), `Fulfillment.Primitives` (operation
+payloads, management API contracts, public order API contracts), `Fulfillment.Primitives` (operation
 keys), `Fulfillment.Messaging` (caller-side invocation with retries; outbox
 and inbox later), `Fulfillment.ServiceDefaults` (identity, health,
 telemetry, sidecar-token check, test-only failpoints).
@@ -54,6 +54,62 @@ business change commits in one local transaction of its owning database.
   So the application enforces "one execution" itself: a unique start record in
   SQL, a first workflow step that claims execution in SQL and ends the run
   without effects if the subject is already finished, and keyed effects.
+
+## Order Acceptance
+
+`POST /orders` (customer key, `Idempotency-Key` header) is the only way an
+order enters the system. The request is checked for syntax and bounds only
+(at most 20 lines, quantity 1-100, body at most 64 KB; unknown, duplicate, or
+missing members are refused); business rules are the workflow's job. An
+accepted order is committed in **one `OrderDb` transaction**:
+
+| Table (`orders` schema) | Row | Kind of state |
+|---|---|---|
+| `Order` | the order, status `Submitted` | business |
+| `OrderLine` | one per line, numbered from 1 in request order | business |
+| `OrderStatusHistory` | sequence 1, `Submitted`, reason `Accepted` | business |
+| `IdempotencyKey` | the client's key and the SHA-256 of the normalized request | business (client contract) |
+| `WorkflowStartRequest` | `Pending`, instance id `fulfill-{orderId:N}`, attempt and lease columns, execution-claim counters | workflow execution |
+
+Business state and execution state are separate: the order's status is
+business truth; the start request only records how far starting its workflow
+has got, and `GET /orders/{id}` returns the business view only.
+
+Acceptance starts no workflow. The order is durable at commit; a start
+dispatcher (next step of the implementation) claims due `Pending` start
+requests and starts the instance through the workflow host's management
+API. A crash between commit and start therefore loses nothing.
+
+Idempotency:
+
+- same key, same normalized request → the original order (`200`, `replayed`);
+  the first acceptance returns `201`;
+- same key, different request → `422 idempotency-key-reused`, nothing
+  written;
+- concurrent submissions with one key, on any replica: the key's primary key
+  decides. The first commit wins; a concurrent insert waits for it and then
+  fails with a unique violation, after which the stored key is compared like
+  a sequential retry. `OrderDb` uses read committed snapshot, so the lookup
+  never blocks, and the losing transaction leaves no rows.
+
+The normalized request is a fixed, versioned rendering of the validated
+fields in request order: member order and whitespace of the body do not
+change it; line order does, because it defines the line numbers.
+
+Constraints in the database carry the invariants the code relies on: one
+start request per order (its key is the order id), one order per idempotency
+key, unique instance ids, contiguous status-history sequences, bounded line
+numbers and quantities, allowed status values, and a consistent start-request
+lifecycle (`Started` has a start time, `Closed` a close time, a lease has an
+owner and an expiry).
+
+The schema comes from EF Core migrations in `Fulfillment.OrderApi`
+(`Persistence/Migrations`), applied by a one-shot `migrate` run of the order
+API image (`order-db-migrate` in Compose) before any replica starts. The app
+never migrates at start: replicas starting together must not race on DDL. It
+checks that no migration is pending and refuses to start otherwise. The
+runtime probe's `diagnostics` schema is separate and not part of the
+migrations.
 
 ## Workflow Management Lives With the Workflow Host
 

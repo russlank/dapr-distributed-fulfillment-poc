@@ -12,6 +12,7 @@
     <ProjectReference Include="..\Fulfillment.Messaging\Fulfillment.Messaging.csproj" />
     <ProjectReference Include="..\Fulfillment.ServiceDefaults\Fulfillment.ServiceDefaults.csproj" />
     <ProjectReference Include="..\Fulfillment.WorkflowHost\Fulfillment.WorkflowHost.csproj" />
+    <ProjectReference Include="..\Fulfillment.OrderApi\Fulfillment.OrderApi.csproj" />
     <ProjectReference Include="..\Fulfillment.CarrierSimulator\Fulfillment.CarrierSimulator.csproj" />
     <ProjectReference Include="..\Fulfillment.PaymentProviderSimulator\Fulfillment.PaymentProviderSimulator.csproj" />
     <ProjectReference Include="..\Fulfillment.ClientSimulator\Fulfillment.ClientSimulator.csproj" />

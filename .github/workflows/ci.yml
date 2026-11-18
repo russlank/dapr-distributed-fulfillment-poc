@@ -14,3 +14,13 @@ jobs:
         run: bash ci/dotnet-gates.sh
       - name: Compose configuration
         run: bash ci/compose-config.sh
+  integration:
+    # SQL Server integration tests; the runner's Docker hosts the Testcontainers SQL Server.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: src/global.json
+      - name: Integration tests
+        run: bash ci/integration-tests.sh

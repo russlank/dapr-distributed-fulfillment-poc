@@ -1,7 +1,21 @@
 when:
   - event: [push, pull_request]
+services:
+  # Ephemeral SQL Server for the integration tests (no Docker inside the build step). The password
+  # exists only for this throwaway CI container; nothing else uses it.
+  - name: sqlserver
+    image: mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Ci-only-throwaway-1"
 steps:
   - name: dotnet-gates
     image: mcr.microsoft.com/dotnet/sdk:10.0.403
     commands:
       - bash ci/dotnet-gates.sh
+  - name: integration-tests
+    image: mcr.microsoft.com/dotnet/sdk:10.0.403
+    environment:
+      FULFILLMENT_TEST_SQL_SERVER: "Server=sqlserver,1433;Database=master;User Id=sa;Password=Ci-only-throwaway-1;TrustServerCertificate=true"
+    commands:
+      - bash ci/integration-tests.sh

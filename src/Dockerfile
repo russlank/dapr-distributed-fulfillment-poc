@@ -25,4 +25,5 @@ EXPOSE 8080
 USER $APP_UID
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
   CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080 && printf "GET /health/live HTTP/1.0\r\n\r\n" >&3 && head -1 <&3 | grep -q " 200 "'
-ENTRYPOINT ["/bin/sh", "-c", "exec dotnet \"$(cat /app/.project).dll\""]
+# Arguments (for example the order API's "migrate" command) are passed through to the app.
+ENTRYPOINT ["/bin/sh", "-c", "exec dotnet \"$(cat /app/.project).dll\" \"$@\"", "--"]
