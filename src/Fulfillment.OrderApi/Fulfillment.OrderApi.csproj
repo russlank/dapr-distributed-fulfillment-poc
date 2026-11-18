@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- Dapr app order-api: public HTTP ingress; owns OrderDb; hosts OrderDb activities. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Fulfillment.ServiceDefaults\Fulfillment.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\Fulfillment.Contracts\Fulfillment.Contracts.csproj" />
+    <ProjectReference Include="..\Fulfillment.Messaging\Fulfillment.Messaging.csproj" />
+    <PackageReference Include="Dapr.AspNetCore" />
+    <PackageReference Include="Dapr.Workflow" />
+  </ItemGroup>
+</Project>

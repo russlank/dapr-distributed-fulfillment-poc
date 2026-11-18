@@ -1,0 +1,17 @@
+<Project>
+  <!-- Compile-time symbols appended after the project body (constitution 7.3.1). -->
+  <PropertyGroup>
+    <DefineConstants Condition="'$(EnableFailpoints)' == 'true'">$(DefineConstants);FULFILLMENT_FAILPOINTS</DefineConstants>
+  </PropertyGroup>
+
+  <Target Name="FailIfSharedPropsMissing" BeforeTargets="Build">
+    <Error Condition="'$(RepoBuildPropsImported)' != 'true'"
+           Text="$(MSBuildProjectName) did not import Directory.Build.props; keep projects under src/." />
+  </Target>
+
+  <!-- Failure injection must never reach a release-flavor build. -->
+  <Target Name="FailIfFailpointsInReleaseFlavor" BeforeTargets="Build">
+    <Error Condition="'$(EnableFailpoints)' == 'true' And '$(BuildFlavor)' != 'drill'"
+           Text="EnableFailpoints=true requires BuildFlavor=drill." />
+  </Target>
+</Project>

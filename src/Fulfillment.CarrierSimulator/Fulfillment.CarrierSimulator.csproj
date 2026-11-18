@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- External carrier simulator: durable jobs and callbacks in CarrierSimDb (from M3). No Dapr sidecar and no Dapr packages (checked by a unit test). -->
+  <ItemGroup>
+    <ProjectReference Include="..\Fulfillment.ServiceDefaults\Fulfillment.ServiceDefaults.csproj" />
+  </ItemGroup>
+</Project>

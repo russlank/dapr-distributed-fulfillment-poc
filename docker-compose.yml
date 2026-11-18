@@ -1,0 +1,682 @@
+# Fulfillment PoC local stack. Generated layout, edited by hand only through the generator.
+# Profiles: (none) = core, one replica per role; "replicas" adds the default replica counts;
+# "scale" adds the maximum counts. Every Dapr-enabled replica is an app container plus its own
+# daprd sidecar sharing the app's network namespace. Ports bind to 127.0.0.1 only.
+# Start with scripts/stack-up.sh (it waits for init jobs and readiness); secrets come from .env.
+name: fulfillment
+
+x-sql-image: &sql-image mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04
+
+x-app: &app
+  restart: "no"
+  mem_limit: 256m
+  depends_on:
+    db-init:
+      condition: service_completed_successfully
+
+x-app-env: &app-env
+  DAPR_API_TOKEN: ${DAPR_API_TOKEN:?set DAPR_API_TOKEN in .env}
+  APP_API_TOKEN: ${APP_API_TOKEN:?set APP_API_TOKEN in .env}
+  DAPR_POC_ENV: ${DAPR_POC_ENV:-local}
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+
+x-build-args: &build-args
+  BUILD_FLAVOR: ${BUILD_FLAVOR:-release}
+  SOURCE_REVISION_ID: ${GIT_COMMIT:-unknown}
+  SOURCE_BRANCH: ${GIT_BRANCH:-}
+  SOURCE_TREE_STATE: ${GIT_TREE_STATE:-unknown}
+  REPOSITORY_URL: ${GIT_REPOSITORY_URL:-}
+
+x-daprd: &daprd
+  image: daprio/daprd:1.19.1
+  restart: "no"
+  mem_limit: 192m
+  volumes:
+    - ./dapr:/dapr:ro
+  environment:
+    DAPR_API_TOKEN: ${DAPR_API_TOKEN}
+    APP_API_TOKEN: ${APP_API_TOKEN}
+    STATE_STORE_CONN: "Server=toxiproxy,21433;Database=DaprStateDb;User Id=dapr_state;Password=${DAPR_STATE_DB_PASSWORD:?set DAPR_STATE_DB_PASSWORD in .env};TrustServerCertificate=true"
+    RABBIT_CONN: "amqp://fulfillment:${RABBIT_PASSWORD:?set RABBIT_PASSWORD in .env}@rabbitmq:5672"
+
+services:
+  sqlserver:
+    image: *sql-image
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${SA_PASSWORD:?set SA_PASSWORD in .env}
+      TZ: Etc/UTC
+    ports:
+      - "127.0.0.1:14330:1433"
+    volumes:
+      - sql-data:/var/opt/mssql
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+
+  # One-shot: databases and one login per service (idempotent; passwords from .env).
+  db-init:
+    image: *sql-image
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      SA_PASSWORD: ${SA_PASSWORD}
+      ORDER_DB_PASSWORD: ${ORDER_DB_PASSWORD:?set ORDER_DB_PASSWORD in .env}
+      INVENTORY_DB_PASSWORD: ${INVENTORY_DB_PASSWORD:?set INVENTORY_DB_PASSWORD in .env}
+      PAYMENT_DB_PASSWORD: ${PAYMENT_DB_PASSWORD:?set PAYMENT_DB_PASSWORD in .env}
+      SHIPPING_DB_PASSWORD: ${SHIPPING_DB_PASSWORD:?set SHIPPING_DB_PASSWORD in .env}
+      CARRIER_SIM_DB_PASSWORD: ${CARRIER_SIM_DB_PASSWORD:?set CARRIER_SIM_DB_PASSWORD in .env}
+      PAYMENT_PROVIDER_SIM_DB_PASSWORD: ${PAYMENT_PROVIDER_SIM_DB_PASSWORD:?set PAYMENT_PROVIDER_SIM_DB_PASSWORD in .env}
+      DAPR_STATE_DB_PASSWORD: ${DAPR_STATE_DB_PASSWORD}
+    volumes:
+      - ./db/init:/init:ro
+    entrypoint: ["/bin/bash", "-c", "/opt/mssql-tools18/bin/sqlcmd -C -S sqlserver -U sa -P \"$$SA_PASSWORD\" -b -i /init/init.sql"]
+    restart: "no"
+    mem_limit: 256m
+
+  rabbitmq:
+    image: rabbitmq:4.3.6-management
+    environment:
+      RABBITMQ_DEFAULT_USER: fulfillment
+      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASSWORD}
+    ports:
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  # Sidecars reach DaprStateDb through this proxy, so drills can cut only the state-store path.
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.13.0
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    volumes:
+      - ./deploy/compose/toxiproxy.json:/config/toxiproxy.json:ro
+    ports:
+      - "127.0.0.1:8474:8474"
+    mem_limit: 64m
+
+  placement:
+    image: daprio/placement:1.19.1
+    command: ["./placement", "--port", "50005", "--healthz-port", "8080"]
+    mem_limit: 128m
+
+  # One-shot: the Scheduler image is distroless and runs as 65532; a fresh named volume is
+  # root-owned, so this job (SQL Server image, which has a shell) hands the directory over once.
+  scheduler-volume-init:
+    image: *sql-image
+    user: "0:0"
+    entrypoint: ["/bin/bash", "-c", "mkdir -p /data/etcd && chown -R 65532:65532 /data"]
+    volumes:
+      - scheduler-data:/data
+    restart: "no"
+    mem_limit: 64m
+
+  # Durable timers and reminders live here: persistent volume, reset together with SQL data.
+  scheduler:
+    image: daprio/scheduler:1.19.1
+    command: ["./scheduler", "--port", "50006", "--healthz-port", "8080", "--etcd-data-dir", "/data/etcd"]
+    depends_on:
+      scheduler-volume-init:
+        condition: service_completed_successfully
+    volumes:
+      - scheduler-data:/data
+    mem_limit: 256m
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.163.2
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./monitoring/otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    mem_limit: 256m
+
+  jaeger:
+    image: jaegertracing/jaeger:2.22.0
+    ports:
+      - "127.0.0.1:16686:16686"
+    mem_limit: 512m
+
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=2d"]
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:9095:9090"
+    mem_limit: 256m
+
+  grafana:
+    image: grafana/grafana:13.3.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    mem_limit: 256m
+
+  order-api:
+    <<: *app
+    build:
+      context: ./src
+      args:
+        <<: *build-args
+        PROJECT: Fulfillment.OrderApi
+    image: fulfillment/order-api:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    environment:
+      <<: *app-env
+      REPLICA_NAME: order-api
+      ConnectionStrings__OrderDb: "Server=sqlserver;Database=OrderDb;User Id=order_api;Password=${ORDER_DB_PASSWORD};TrustServerCertificate=true"
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in .env}
+    ports:
+      - "127.0.0.1:8080:8080"
+  order-api-dapr:
+    <<: *daprd
+    network_mode: "service:order-api"
+    command: ["./daprd", "--app-id", "order-api", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--metrics-port", "9090",
+              "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+              "--resources-path", "/dapr/components", "--config", "/dapr/config/fulfillment.yaml", "--log-level", "info"]
+    depends_on:
+      order-api:
+        condition: service_started
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+
+  order-api-2:
+    <<: *app
+    image: fulfillment/order-api:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    profiles: [replicas]
+    environment:
+      <<: *app-env
+      REPLICA_NAME: order-api-2
+      ConnectionStrings__OrderDb: "Server=sqlserver;Database=OrderDb;User Id=order_api;Password=${ORDER_DB_PASSWORD};TrustServerCertificate=true"
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in .env}
+    ports:
+      - "127.0.0.1:8081:8080"
+  order-api-2-dapr:
+    <<: *daprd
+    profiles: [replicas]
+    network_mode: "service:order-api-2"
+    command: ["./daprd", "--app-id", "order-api", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--metrics-port", "9090",
+              "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+              "--resources-path", "/dapr/components", "--config", "/dapr/config/fulfillment.yaml", "--log-level", "info"]
+    depends_on:
+      order-api-2:
+        condition: service_started
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+
+  workflow-host:
+    <<: *app
+    build:
+      context: ./src
+      args:
+        <<: *build-args
+        PROJECT: Fulfillment.WorkflowHost
+    image: fulfillment/workflow-host:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    environment:
+      <<: *app-env
+      REPLICA_NAME: workflow-host
+  workflow-host-dapr:
+    <<: *daprd
+    network_mode: "service:workflow-host"
+    command: ["./daprd", "--app-id", "workflow-host", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--metrics-port", "9090",
+              "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+              "--resources-path", "/dapr/components", "--config", "/dapr/config/fulfillment.yaml", "--log-level", "info"]
+    depends_on:
+      workflow-host:
+        condition: service_started
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+
+  workflow-host-2:
+    <<: *app
+    image: fulfillment/workflow-host:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    profiles: [replicas]
+    environment:
+      <<: *app-env
+      REPLICA_NAME: workflow-host-2
+  workflow-host-2-dapr:
+    <<: *daprd
+    profiles: [replicas]
+    network_mode: "service:workflow-host-2"
+    command: ["./daprd", "--app-id", "workflow-host", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--metrics-port", "9090",
+              "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+              "--resources-path", "/dapr/components", "--config", "/dapr/config/fulfillment.yaml", "--log-level", "info"]
+    depends_on:
+      workflow-host-2:
+        condition: service_started
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+
+  workflow-host-3:
+    <<: *app
+    image: fulfillment/workflow-host:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    profiles: [scale]
+    environment:
+      <<: *app-env
+      REPLICA_NAME: workflow-host-3
+  workflow-host-3-dapr:
+    <<: *daprd
+    profiles: [scale]
+    network_mode: "service:workflow-host-3"
+    command: ["./daprd", "--app-id", "workflow-host", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--metrics-port", "9090",
+              "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+              "--resources-path", "/dapr/components", "--config", "/dapr/config/fulfillment.yaml", "--log-level", "info"]
+    depends_on:
+      workflow-host-3:
+        condition: service_started
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+
+  compute-worker:
+    <<: *app
+    build:
+      context: ./src
+      args:
+        <<: *build-args
+        PROJECT: Fulfillment.ComputeWorker
+    image: fulfillment/compute-worker:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    environment:
+      <<: *app-env
+      REPLICA_NAME: compute-worker
+  compute-worker-dapr:
+    <<: *daprd
+    network_mode: "service:compute-worker"
+    command: ["./daprd", "--app-id", "compute-worker", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--metrics-port", "9090",
+              "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+              "--resources-path", "/dapr/components", "--config", "/dapr/config/fulfillment.yaml", "--log-level", "info"]
+    depends_on:
+      compute-worker:
+        condition: service_started
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+
+  compute-worker-2:
+    <<: *app
+    image: fulfillment/compute-worker:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    profiles: [replicas]
+    environment:
+      <<: *app-env
+      REPLICA_NAME: compute-worker-2
+  compute-worker-2-dapr:
+    <<: *daprd
+    profiles: [replicas]
+    network_mode: "service:compute-worker-2"
+    command: ["./daprd", "--app-id", "compute-worker", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--metrics-port", "9090",
+              "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+              "--resources-path", "/dapr/components", "--config", "/dapr/config/fulfillment.yaml", "--log-level", "info"]
+    depends_on:
+      compute-worker-2:
+        condition: service_started
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+
+  compute-worker-3:
+    <<: *app
+    image: fulfillment/compute-worker:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    profiles: [scale]
+    environment:
+      <<: *app-env
+      REPLICA_NAME: compute-worker-3
+  compute-worker-3-dapr:
+    <<: *daprd
+    profiles: [scale]
+    network_mode: "service:compute-worker-3"
+    command: ["./daprd", "--app-id", "compute-worker", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--metrics-port", "9090",
+              "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+              "--resources-path", "/dapr/components", "--config", "/dapr/config/fulfillment.yaml", "--log-level", "info"]
+    depends_on:
+      compute-worker-3:
+        condition: service_started
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+
+  compute-worker-4:
+    <<: *app
+    image: fulfillment/compute-worker:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    profiles: [scale]
+    environment:
+      <<: *app-env
+      REPLICA_NAME: compute-worker-4
+  compute-worker-4-dapr:
+    <<: *daprd
+    profiles: [scale]
+    network_mode: "service:compute-worker-4"
+    command: ["./daprd", "--app-id", "compute-worker", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--metrics-port", "9090",
+              "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+              "--resources-path", "/dapr/components", "--config", "/dapr/config/fulfillment.yaml", "--log-level", "info"]
+    depends_on:
+      compute-worker-4:
+        condition: service_started
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+
+  compute-worker-5:
+    <<: *app
+    image: fulfillment/compute-worker:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    profiles: [scale]
+    environment:
+      <<: *app-env
+      REPLICA_NAME: compute-worker-5
+  compute-worker-5-dapr:
+    <<: *daprd
+    profiles: [scale]
+    network_mode: "service:compute-worker-5"
+    command: ["./daprd", "--app-id", "compute-worker", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--metrics-port", "9090",
+              "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+              "--resources-path", "/dapr/components", "--config", "/dapr/config/fulfillment.yaml", "--log-level", "info"]
+    depends_on:
+      compute-worker-5:
+        condition: service_started
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+
+  inventory-service:
+    <<: *app
+    build:
+      context: ./src
+      args:
+        <<: *build-args
+        PROJECT: Fulfillment.InventoryService
+    image: fulfillment/inventory-service:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    environment:
+      <<: *app-env
+      REPLICA_NAME: inventory-service
+      ConnectionStrings__InventoryDb: "Server=sqlserver;Database=InventoryDb;User Id=inventory_service;Password=${INVENTORY_DB_PASSWORD};TrustServerCertificate=true"
+  inventory-service-dapr:
+    <<: *daprd
+    network_mode: "service:inventory-service"
+    command: ["./daprd", "--app-id", "inventory-service", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--metrics-port", "9090",
+              "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+              "--resources-path", "/dapr/components", "--config", "/dapr/config/fulfillment.yaml", "--log-level", "info"]
+    depends_on:
+      inventory-service:
+        condition: service_started
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+
+  inventory-service-2:
+    <<: *app
+    image: fulfillment/inventory-service:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    profiles: [replicas]
+    environment:
+      <<: *app-env
+      REPLICA_NAME: inventory-service-2
+      ConnectionStrings__InventoryDb: "Server=sqlserver;Database=InventoryDb;User Id=inventory_service;Password=${INVENTORY_DB_PASSWORD};TrustServerCertificate=true"
+  inventory-service-2-dapr:
+    <<: *daprd
+    profiles: [replicas]
+    network_mode: "service:inventory-service-2"
+    command: ["./daprd", "--app-id", "inventory-service", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--metrics-port", "9090",
+              "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+              "--resources-path", "/dapr/components", "--config", "/dapr/config/fulfillment.yaml", "--log-level", "info"]
+    depends_on:
+      inventory-service-2:
+        condition: service_started
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+
+  inventory-service-3:
+    <<: *app
+    image: fulfillment/inventory-service:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    profiles: [replicas]
+    environment:
+      <<: *app-env
+      REPLICA_NAME: inventory-service-3
+      ConnectionStrings__InventoryDb: "Server=sqlserver;Database=InventoryDb;User Id=inventory_service;Password=${INVENTORY_DB_PASSWORD};TrustServerCertificate=true"
+  inventory-service-3-dapr:
+    <<: *daprd
+    profiles: [replicas]
+    network_mode: "service:inventory-service-3"
+    command: ["./daprd", "--app-id", "inventory-service", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--metrics-port", "9090",
+              "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+              "--resources-path", "/dapr/components", "--config", "/dapr/config/fulfillment.yaml", "--log-level", "info"]
+    depends_on:
+      inventory-service-3:
+        condition: service_started
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+
+  payment-service:
+    <<: *app
+    build:
+      context: ./src
+      args:
+        <<: *build-args
+        PROJECT: Fulfillment.PaymentService
+    image: fulfillment/payment-service:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    environment:
+      <<: *app-env
+      REPLICA_NAME: payment-service
+      ConnectionStrings__PaymentDb: "Server=sqlserver;Database=PaymentDb;User Id=payment_service;Password=${PAYMENT_DB_PASSWORD};TrustServerCertificate=true"
+  payment-service-dapr:
+    <<: *daprd
+    network_mode: "service:payment-service"
+    command: ["./daprd", "--app-id", "payment-service", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--metrics-port", "9090",
+              "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+              "--resources-path", "/dapr/components", "--config", "/dapr/config/fulfillment.yaml", "--log-level", "info"]
+    depends_on:
+      payment-service:
+        condition: service_started
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+
+  payment-service-2:
+    <<: *app
+    image: fulfillment/payment-service:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    profiles: [replicas]
+    environment:
+      <<: *app-env
+      REPLICA_NAME: payment-service-2
+      ConnectionStrings__PaymentDb: "Server=sqlserver;Database=PaymentDb;User Id=payment_service;Password=${PAYMENT_DB_PASSWORD};TrustServerCertificate=true"
+  payment-service-2-dapr:
+    <<: *daprd
+    profiles: [replicas]
+    network_mode: "service:payment-service-2"
+    command: ["./daprd", "--app-id", "payment-service", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--metrics-port", "9090",
+              "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+              "--resources-path", "/dapr/components", "--config", "/dapr/config/fulfillment.yaml", "--log-level", "info"]
+    depends_on:
+      payment-service-2:
+        condition: service_started
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+
+  shipping-service:
+    <<: *app
+    build:
+      context: ./src
+      args:
+        <<: *build-args
+        PROJECT: Fulfillment.ShippingService
+    image: fulfillment/shipping-service:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    environment:
+      <<: *app-env
+      REPLICA_NAME: shipping-service
+      ConnectionStrings__ShippingDb: "Server=sqlserver;Database=ShippingDb;User Id=shipping_service;Password=${SHIPPING_DB_PASSWORD};TrustServerCertificate=true"
+  shipping-service-dapr:
+    <<: *daprd
+    network_mode: "service:shipping-service"
+    command: ["./daprd", "--app-id", "shipping-service", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--metrics-port", "9090",
+              "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+              "--resources-path", "/dapr/components", "--config", "/dapr/config/fulfillment.yaml", "--log-level", "info"]
+    depends_on:
+      shipping-service:
+        condition: service_started
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+
+  shipping-service-2:
+    <<: *app
+    image: fulfillment/shipping-service:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    profiles: [replicas]
+    environment:
+      <<: *app-env
+      REPLICA_NAME: shipping-service-2
+      ConnectionStrings__ShippingDb: "Server=sqlserver;Database=ShippingDb;User Id=shipping_service;Password=${SHIPPING_DB_PASSWORD};TrustServerCertificate=true"
+  shipping-service-2-dapr:
+    <<: *daprd
+    profiles: [replicas]
+    network_mode: "service:shipping-service-2"
+    command: ["./daprd", "--app-id", "shipping-service", "--app-port", "8080", "--dapr-http-port", "3500", "--dapr-grpc-port", "50001", "--metrics-port", "9090",
+              "--placement-host-address", "placement:50005", "--scheduler-host-address", "scheduler:50006",
+              "--resources-path", "/dapr/components", "--config", "/dapr/config/fulfillment.yaml", "--log-level", "info"]
+    depends_on:
+      shipping-service-2:
+        condition: service_started
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+
+  # External simulator: no Dapr sidecar.
+  carrier-simulator:
+    <<: *app
+    build:
+      context: ./src
+      args:
+        <<: *build-args
+        PROJECT: Fulfillment.CarrierSimulator
+    image: fulfillment/carrier-simulator:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    environment:
+      REPLICA_NAME: carrier-simulator
+      DAPR_POC_ENV: ${DAPR_POC_ENV:-local}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      ConnectionStrings__CarrierSimDb: "Server=sqlserver;Database=CarrierSimDb;User Id=carrier_simulator;Password=${CARRIER_SIM_DB_PASSWORD};TrustServerCertificate=true"
+    ports:
+      - "127.0.0.1:8090:8080"
+
+  # External simulator: no Dapr sidecar.
+  payment-provider-simulator:
+    <<: *app
+    build:
+      context: ./src
+      args:
+        <<: *build-args
+        PROJECT: Fulfillment.PaymentProviderSimulator
+    image: fulfillment/payment-provider-simulator:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    environment:
+      REPLICA_NAME: payment-provider-simulator
+      DAPR_POC_ENV: ${DAPR_POC_ENV:-local}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      ConnectionStrings__PaymentProviderSimDb: "Server=sqlserver;Database=PaymentProviderSimDb;User Id=payment_provider_sim;Password=${PAYMENT_PROVIDER_SIM_DB_PASSWORD};TrustServerCertificate=true"
+    ports:
+      - "127.0.0.1:8091:8080"
+
+volumes:
+  sql-data:
+  scheduler-data:
+  rabbitmq-data:

@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Contracts only: app ids, activity names and payloads, events. No runtime logic. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Fulfillment.Primitives\Fulfillment.Primitives.csproj" />
+  </ItemGroup>
+</Project>

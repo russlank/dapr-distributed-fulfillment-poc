@@ -1,0 +1,16 @@
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  gates:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: src/global.json
+      - name: .NET gates
+        run: bash ci/dotnet-gates.sh
+      - name: Compose configuration
+        run: bash ci/compose-config.sh

@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Small Dapr-neutral value types shared by every role. No package dependencies. -->
+</Project>

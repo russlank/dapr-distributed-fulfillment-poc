@@ -3,6 +3,106 @@
 What broke, what surprised us, and what we changed. Newest first. Each entry
 keeps the expectation that turned out wrong.
 
+## 2026-11-18: Foundation (solution skeleton, Compose stack, runtime smoke)
+
+### A workflow instance belongs to the app that scheduled it
+
+- **Expected:** the order API, which owns the SQL start records, would
+  schedule workflows that run on the workflow host.
+- **Observed:** the runtime probe, scheduled through the order API's
+  sidecar, failed within two seconds: `WorkflowNotFound: Workflow
+  'RuntimeProbeWorkflow' is not registered in this app`. The order API's
+  sidecar logged that it had started the instance itself.
+- **Cause:** a Dapr workflow instance is owned by the app whose sidecar
+  scheduled it; the .NET workflow client cannot target another app. The
+  compatibility spike did not show this because its control API ran in the
+  same app as its workflows.
+- **Change:** the workflow host exposes an internal workflow-management API
+  (start with a state check first, state, events), reached through service
+  invocation with caller-side retries; the order API keeps the SQL records
+  and calls that API ([architecture.md](architecture.md)).
+
+### The local.env secret store refuses DAPR_-prefixed names
+
+- **Expected:** a component secret named `DAPR_STATE_CONN` would resolve from
+  the sidecar's environment, as `SPIKE_STATE_CONN` did in the spike.
+- **Observed:** every sidecar exited: `Access to env var DAPR_STATE_CONN is
+  forbidden`, then `missing connection string`.
+- **Change:** `STATE_STORE_CONN`.
+
+### Every host crashed when the OTLP endpoint was set
+
+- **Observed:** all apps exited at start in Compose: "Signal-specific
+  AddOtlpExporter methods and the cross-cutting UseOtlpExporter method being
+  invoked on the same IServiceCollection is not supported." Unit tests passed
+  because none built a host with an OTLP endpoint.
+- **Change:** only `UseOtlpExporter` (it covers logs too); a unit test now
+  builds a host with and without the endpoint and fails on the old code.
+
+### SqlClient does not work in invariant globalization mode
+
+- **Observed:** apps with a database exited with `Globalization Invariant Mode
+  is not supported`.
+- **Change:** `InvariantGlobalization` removed from the shared build
+  properties.
+
+### Restarted apps left their sidecars in a dead network namespace
+
+- **Expected:** restarting an app container (or letting Compose recreate it)
+  and then its sidecar would give a working pair.
+- **Observed:** twice the sidecar showed as running while its DNS lookups
+  failed and the app got "connection refused" from `127.0.0.1:3500`: once
+  after `docker compose restart <app>` with the sidecar recreated in a
+  separate call that failed silently, once when Compose recreated an app and
+  its sidecar in the same `up`.
+- **Cause:** the sidecar joins the namespace of one specific app container;
+  when that container is replaced, the sidecar must be recreated after the
+  new app container runs.
+- **Change:** `stack-up.sh` starts everything except sidecars, waits for the
+  apps, then force-recreates every sidecar; `start_pair` and `restart_pair`
+  recreate the sidecar after the app runs and wait for readiness, and no
+  longer hide errors.
+
+### Sidecars starting together race on the state-store schema
+
+- **Expected:** every sidecar initializes the `state.sqlserver` v2 component
+  independently (the first start of the release stack worked).
+- **Observed:** on the first start of a fresh drill stack, one sidecar exited:
+  `failed to create stored procedures: mssql: There is already an object
+  named 'sp_Upsert_v5_state' in the database`. Its app never became ready, and
+  the drill's runtime probe hung at the step that needed it.
+- **Cause:** the component creates its tables and stored procedures at start;
+  concurrent first starts on an empty `DaprStateDb` collide.
+- **Change:** `stack-up.sh` starts one sidecar alone, waits until it is
+  ready (the schema then exists), and only then starts the others. The drill
+  preflight now also requires every role to be ready, not only to report a
+  drill identity; it had let the drill run against a broken role.
+
+### The first recovery check missed its failure window
+
+- **Expected:** killing the workflow host right after the first effect
+  appeared would land inside the probe's 20 s durable timer.
+- **Observed:** the check failed, and the evidence showed why: each SQL poll
+  through `docker exec` takes several seconds on Windows, so the kill came
+  after the timer had fired and the second effect had been written. The check
+  would have passed for the wrong reason had the rest worked.
+- **Change:** the check records whether the second effect exists at kill time
+  and fails as "window missed" if it does; the timer is 45 s.
+
+### Smaller problems
+
+- **Image tags:** `stack-up.sh` tagged images `local-release`, while other
+  scripts ran Compose without that variable and looked for `local`. Build and
+  run variables now come from one place (`scripts/lib.sh`), and the tag is
+  derived from the flavor inside the Compose file.
+- **A dirty working tree looked clean:** the commit was shortened to ten
+  characters, which cut off a `-dirty` suffix. Identity now has a separate
+  tree state (`clean` or `dirty`).
+- **Scheduler volume permissions:** the Scheduler image runs as uid 65532 and
+  a fresh named volume is root-owned; a one-shot job (using the SQL Server
+  image, which has a shell) hands the directory to that uid, so the Scheduler
+  no longer runs as root.
+
 ## 2026-11-18: Dapr 1.19 compatibility spike
 
 Context: a small two-role spike (`spikes/dapr-compat`) to observe the

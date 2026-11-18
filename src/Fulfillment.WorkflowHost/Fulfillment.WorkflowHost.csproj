@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- Dapr app workflow-host: workflow orchestrations only (no database, no I/O in workflows). -->
+  <ItemGroup>
+    <ProjectReference Include="..\Fulfillment.ServiceDefaults\Fulfillment.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\Fulfillment.Contracts\Fulfillment.Contracts.csproj" />
+    <PackageReference Include="Dapr.AspNetCore" />
+    <PackageReference Include="Dapr.Workflow" />
+  </ItemGroup>
+</Project>

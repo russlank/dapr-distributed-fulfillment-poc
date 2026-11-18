@@ -1,0 +1,24 @@
+<Solution>
+  <Folder Name="/Apps/">
+    <Project Path="Fulfillment.OrderApi/Fulfillment.OrderApi.csproj" />
+    <Project Path="Fulfillment.WorkflowHost/Fulfillment.WorkflowHost.csproj" />
+    <Project Path="Fulfillment.ComputeWorker/Fulfillment.ComputeWorker.csproj" />
+    <Project Path="Fulfillment.InventoryService/Fulfillment.InventoryService.csproj" />
+    <Project Path="Fulfillment.PaymentService/Fulfillment.PaymentService.csproj" />
+    <Project Path="Fulfillment.ShippingService/Fulfillment.ShippingService.csproj" />
+  </Folder>
+  <Folder Name="/Tools/">
+    <Project Path="Fulfillment.ClientSimulator/Fulfillment.ClientSimulator.csproj" />
+    <Project Path="Fulfillment.CarrierSimulator/Fulfillment.CarrierSimulator.csproj" />
+    <Project Path="Fulfillment.PaymentProviderSimulator/Fulfillment.PaymentProviderSimulator.csproj" />
+  </Folder>
+  <Folder Name="/Shared/">
+    <Project Path="Fulfillment.Contracts/Fulfillment.Contracts.csproj" />
+    <Project Path="Fulfillment.Primitives/Fulfillment.Primitives.csproj" />
+    <Project Path="Fulfillment.Messaging/Fulfillment.Messaging.csproj" />
+    <Project Path="Fulfillment.ServiceDefaults/Fulfillment.ServiceDefaults.csproj" />
+  </Folder>
+  <Folder Name="/Tests/">
+    <Project Path="Fulfillment.UnitTests/Fulfillment.UnitTests.csproj" />
+  </Folder>
+</Solution>

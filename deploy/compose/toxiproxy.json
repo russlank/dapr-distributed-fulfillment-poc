@@ -1,0 +1,8 @@
+[
+  {
+    "name": "dapr-state-sql",
+    "listen": "0.0.0.0:21433",
+    "upstream": "sqlserver:1433",
+    "enabled": true
+  }
+]

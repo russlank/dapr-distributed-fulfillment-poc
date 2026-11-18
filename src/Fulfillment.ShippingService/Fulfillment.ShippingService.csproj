@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- Dapr app shipping-service: owns ShippingDb and carrier status history (from M3). -->
+  <ItemGroup>
+    <ProjectReference Include="..\Fulfillment.ServiceDefaults\Fulfillment.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\Fulfillment.Contracts\Fulfillment.Contracts.csproj" />
+    <PackageReference Include="Dapr.AspNetCore" />
+    <PackageReference Include="Dapr.Workflow" />
+  </ItemGroup>
+</Project>

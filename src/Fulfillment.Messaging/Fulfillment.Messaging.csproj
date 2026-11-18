@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Shared messaging building blocks (outbox, inbox, relays arrive in later milestones).
+       M0: caller-side bounded retries for Dapr service invocation. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+</Project>

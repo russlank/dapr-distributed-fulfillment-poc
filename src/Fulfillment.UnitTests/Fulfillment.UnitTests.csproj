@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Test names follow Unit_Condition_Result (constitution 13.3). -->
+    <NoWarn>$(NoWarn);CA1707</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Fulfillment.Primitives\Fulfillment.Primitives.csproj" />
+    <ProjectReference Include="..\Fulfillment.Messaging\Fulfillment.Messaging.csproj" />
+    <ProjectReference Include="..\Fulfillment.ServiceDefaults\Fulfillment.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\Fulfillment.WorkflowHost\Fulfillment.WorkflowHost.csproj" />
+    <ProjectReference Include="..\Fulfillment.CarrierSimulator\Fulfillment.CarrierSimulator.csproj" />
+    <ProjectReference Include="..\Fulfillment.PaymentProviderSimulator\Fulfillment.PaymentProviderSimulator.csproj" />
+    <ProjectReference Include="..\Fulfillment.ClientSimulator\Fulfillment.ClientSimulator.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,20 @@
+# Business events from M4. Declared now so every sidecar starts with its final component set.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: pubsub
+spec:
+  type: pubsub.rabbitmq
+  version: v1
+  metadata:
+    - name: connectionString
+      secretKeyRef:
+        name: RABBIT_CONN
+        key: RABBIT_CONN
+    - name: durable
+      value: "true"
+    - name: deletedWhenUnused
+      value: "false"
+auth:
+  secretStore: envsecrets
+scopes: [order-api, inventory-service, payment-service, shipping-service]

@@ -1,0 +1,19 @@
+# Bounded redelivery for inbound pub/sub. Service invocation gets no retry policy here: Dapr 1.19.1
+# did not retry application 5xx responses under such a policy (docs/versions.md), so callers retry
+# themselves with backoff (Fulfillment.Messaging.SidecarInvoker) and receivers are idempotent.
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: fulfillment-resiliency
+spec:
+  policies:
+    retries:
+      pubsubInbound:
+        policy: exponential
+        maxInterval: 10s
+        maxRetries: 5
+  targets:
+    components:
+      pubsub:
+        inbound:
+          retry: pubsubInbound

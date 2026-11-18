@@ -22,6 +22,34 @@ time.
 | `System.Security.Cryptography.Pkcs` | 10.0.14 | 2026-10-25 | explicit reference overrides a vulnerable transitive 9.0.4 |
 | `xunit.v3` | 4.0.2 | 2026-10-09 | runs on Microsoft.Testing.Platform (`global.json`) |
 
+Added for the solution foundation (pinned 2026-11-18, same rule):
+
+| Component | Version | Released | Notes |
+|---|---|---|---|
+| OpenTelemetry .NET (`Extensions.Hosting`, `Exporter.OpenTelemetryProtocol`, `Instrumentation.AspNetCore`, `.Http`, `.Runtime`) | 1.20.1 | 2026-10-20/21 | 1.21.0 (2026-11-11) too recent |
+| `System.CommandLine` | 2.0.14 | 2026-10-25 | client simulator |
+| OpenTelemetry Collector contrib | `otel/opentelemetry-collector-contrib:0.163.2` | 2026-10-21 | |
+| Jaeger | `jaegertracing/jaeger:2.22.0` | 2026-10-06 | query API under `/api/v3` |
+| Prometheus | `prom/prometheus:v3.15.1` | 2026-10-21 | |
+| Grafana | `grafana/grafana:13.3.0` | 2026-10-27 | |
+| Toxiproxy | `ghcr.io/shopify/toxiproxy:2.13.0` | 2026-10-14 | |
+
+## Foundation Versus the Compatibility Spike
+
+The foundation uses the behavior the spike verified, with these deliberate
+differences:
+
+| Aspect | Spike | Foundation | Why |
+|---|---|---|---|
+| State-store table | `state_v2` next to a corrupted v1 table | `state` (fresh database, component v2 from the start) | no v1 rows exist |
+| SQL logins | `sa` for everything | one login per owning service; the state store has its own login on `DaprStateDb` only | database ownership |
+| State-store path | direct to SQL Server | through Toxiproxy | drills can cut only this path |
+| Component secret names | `SPIKE_*` | `STATE_STORE_CONN`, `RABBIT_CONN` | `secretstores.local.env` refuses names starting with `DAPR_` (observed) |
+| Scheduler | ran as root | runs as its image user (65532); a one-shot job hands over the volume | no root containers |
+| Who schedules workflows | the app that also hosts them | SQL-owning roles call the workflow host's internal management API | an instance belongs to the app whose sidecar scheduled it (observed) |
+| Service invocation retries | resiliency policy (not applied to 5xx) | no invocation policy; caller-side bounded retries | as observed in the spike |
+| Concurrency limits | `maxConcurrentActivityInvocations: 2` (to observe the limit) | 100 / 100 | production-like default; the setting is the verified sidecar setting |
+
 ## Compatibility Checks
 
 Environment for every check: Docker Desktop 29.9.3 (Compose v5.7.0) on
