@@ -11,14 +11,22 @@ public static class Fulfilling
     public static FulfillmentSteps Steps(string connectionString, StepCheckpoint? checkpoint = null, string replica = "it-replica") =>
         new(connectionString, replica, checkpoint ?? StepCheckpoints.None);
 
-    public static RecordChecksRequest Checks(Guid orderId, long total = 1000, int score = 10) =>
-        new(orderId, new PriceQuote(total, "EUR", "stub-v1", Ran), new RiskAssessment(score, false, "stub-v1", Ran));
+    public static RecordChecksRequest Checks(Guid orderId, long total = 1000, int score = 10, bool review = false, string version = "stub-v2") =>
+        new(orderId, new PriceQuote(total, "EUR", "stub-v1", Ran), new RiskAssessment(score, review, version, Ran));
 
-    /// <summary>Validation, checks, and every stub line step: the order is left Validating, ready for completion.</summary>
-    public static async Task<OrderValidationResult> PrepareAsync(FulfillmentSteps steps, Guid orderId, CancellationToken ct = default)
+    /// <summary>Validation, checks without review, and BeginFulfillment: the order is Reserving.</summary>
+    public static async Task<OrderValidationResult> EnterFulfillmentAsync(FulfillmentSteps steps, Guid orderId, CancellationToken ct = default)
     {
         var validation = await steps.ValidateAsync(new ValidateOrderRequest(orderId, FulfillmentWorkflow.InstanceId(orderId)), ct);
         await steps.RecordChecksAsync(Checks(orderId), ct);
+        await steps.BeginFulfillmentAsync(new BeginFulfillmentRequest(orderId), ct);
+        return validation;
+    }
+
+    /// <summary>Everything before completion, without review: the order is Reserving with every stub line step applied.</summary>
+    public static async Task<OrderValidationResult> PrepareAsync(FulfillmentSteps steps, Guid orderId, CancellationToken ct = default)
+    {
+        var validation = await EnterFulfillmentAsync(steps, orderId, ct);
         foreach (var line in validation.Lines)
         {
             await steps.ApplyStubStepAsync(new StubStepRequest(orderId, StubSteps.Fulfil, StubSteps.LineQualifier(line.LineNumber)), ct);

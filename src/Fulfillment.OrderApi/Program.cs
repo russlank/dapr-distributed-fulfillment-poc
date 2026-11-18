@@ -9,7 +9,9 @@ using Fulfillment.OrderApi.Diagnostics;
 using Fulfillment.OrderApi.Dispatch;
 using Fulfillment.OrderApi.Orders;
 using Fulfillment.OrderApi.Persistence;
+using Fulfillment.OrderApi.Reviews;
 using Fulfillment.ServiceDefaults;
+using Microsoft.Extensions.Options;
 
 // One-shot schema step (Compose job order-db-migrate); the app never migrates at start.
 if (OrderDbMigrations.IsMigrateCommand(args))
@@ -28,10 +30,20 @@ builder.Services.AddSingleton(new ExecutionFence(orderDb));
 // Fulfillment steps; their transaction checkpoints are failpoints in drill builds (no-ops otherwise).
 builder.Services.AddSingleton(sp =>
 {
-    var failpoints = sp.GetRequiredService<Failpoints>();
-    return new FulfillmentSteps(orderDb, sp.GetRequiredService<RuntimeIdentity>().Replica,
-        Failpoints.Compiled ? failpoints.HitAsync : StepCheckpoints.None);
+    return new FulfillmentSteps(orderDb, sp.GetRequiredService<RuntimeIdentity>().Replica, Checkpoints(sp));
 });
+
+// Reviews: decisions (operator key), review steps, and the signal dispatcher that wakes workflows
+// through the workflow host's management API. Review timing follows the environment's time profile.
+builder.Services.AddOptions<ReviewOptions>()
+    .Configure(o => ReviewOptions.ForEnvironment(o, Environment.GetEnvironmentVariable("DAPR_POC_ENV")))
+    .Bind(builder.Configuration.GetSection(ReviewOptions.Section));
+builder.Services.AddSingleton(sp => new ReviewDecisions(orderDb, Checkpoints(sp)));
+builder.Services.AddSingleton(sp => new ReviewSteps(orderDb, sp.GetRequiredService<IOptions<ReviewOptions>>().Value, Checkpoints(sp)));
+builder.Services.Configure<SignalDispatcherOptions>(builder.Configuration.GetSection(SignalDispatcherOptions.Section));
+builder.Services.AddSingleton(new SignalStore(orderDb));
+builder.Services.AddTransient<IWorkflowSignaler, WorkflowHostSignaler>();
+builder.Services.AddHostedService<SignalDispatcher>();
 
 // Durable start dispatcher: starts fulfillment workflows through the workflow host's management API.
 builder.Services.Configure<StartDispatcherOptions>(builder.Configuration.GetSection(StartDispatcherOptions.Section));
@@ -51,6 +63,10 @@ builder.Services.AddDaprWorkflow(options =>
     options.RegisterActivity<RecordFulfillmentChecksActivity>(FulfillmentWorkflow.RecordChecksActivity);
     options.RegisterActivity<ApplyStubFulfillmentStepActivity>(FulfillmentWorkflow.ApplyStubStepActivity);
     options.RegisterActivity<CompleteStubFulfillmentActivity>(FulfillmentWorkflow.CompleteStubFulfillmentActivity);
+    options.RegisterActivity<BeginStubFulfillmentActivity>(FulfillmentWorkflow.BeginFulfillmentActivity);
+    options.RegisterActivity<CreateReviewTaskActivity>(FulfillmentWorkflow.CreateReviewTaskActivity);
+    options.RegisterActivity<ResolveReviewActivity>(FulfillmentWorkflow.ResolveReviewActivity);
+    options.RegisterActivity<ExpireOrEscalateReviewActivity>(FulfillmentWorkflow.ExpireOrEscalateReviewActivity);
 });
 
 var app = builder.Build();
@@ -59,6 +75,7 @@ await app.Services.GetRequiredService<ProbeStore>().EnsureSchemaAsync();
 await app.Services.GetRequiredService<Failpoints>().EnsureStoreAsync();
 app.MapServiceDefaults();
 app.MapOrders();
+app.MapReviews();
 app.MapOrderExecutionDiagnostics();
 
 // Runtime probe (operational diagnostic, admin key): exercises execution claim, cross-app
@@ -107,6 +124,10 @@ probes.MapGet("/{probeId}", async (string probeId, ProbeStore store, WorkflowHos
 
 await app.RunAsync();
 return 0;
+
+// Transaction checkpoints are failpoints in drill builds (no-ops otherwise).
+static StepCheckpoint Checkpoints(IServiceProvider sp) =>
+    Failpoints.Compiled ? sp.GetRequiredService<Failpoints>().HitAsync : StepCheckpoints.None;
 
 internal static partial class ProbeIds
 {

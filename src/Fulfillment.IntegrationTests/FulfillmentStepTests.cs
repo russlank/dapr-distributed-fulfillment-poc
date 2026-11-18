@@ -14,7 +14,8 @@ public sealed class FulfillmentStepTests(SqlServerFixture sql) : IAsyncLifetime
 {
     private const string Accepted = "1:>Submitted:Accepted";
     private const string Validating = "2:Submitted>Validating:ValidationStarted";
-    private const string Completed = "3:Validating>Completed:StubFulfillmentCompleted";
+    private const string Reserving = "3:Validating>Reserving:NoReviewRequired";
+    private const string Completed = "4:Reserving>Completed:StubFulfillmentCompleted";
 
     private string db = "";
     private OrderApiHost api = null!;
@@ -44,7 +45,7 @@ public sealed class FulfillmentStepTests(SqlServerFixture sql) : IAsyncLifetime
         Assert.Equal(StepOutcomes.Applied, result.Outcome);
         var s = await Fulfilling.SnapshotAsync(db, orderId);
         Assert.Equal("Completed", s.Status);
-        Assert.Equal([Accepted, Validating, Completed], s.History);
+        Assert.Equal([Accepted, Validating, Reserving, Completed], s.History);
         Assert.Equal(
             new Dictionary<string, int> { [Key(orderId, "stub-complete:1")] = 0, [Key(orderId, "stub-fulfil:line-1")] = 0, [Key(orderId, "stub-fulfil:line-2")] = 0 },
             s.Effects);
@@ -118,7 +119,7 @@ public sealed class FulfillmentStepTests(SqlServerFixture sql) : IAsyncLifetime
     {
         var orderId = await AcceptAsync(("SKU-1", 1));
         var steps = Fulfilling.Steps(db);
-        await steps.ValidateAsync(new ValidateOrderRequest(orderId, FulfillmentWorkflow.InstanceId(orderId)), TestContext.Current.CancellationToken);
+        await Fulfilling.EnterFulfillmentAsync(steps, orderId, TestContext.Current.CancellationToken);
         var step = new StubStepRequest(orderId, StubSteps.Fulfil, "line-1");
 
         var first = await steps.ApplyStubStepAsync(step, TestContext.Current.CancellationToken);
@@ -133,7 +134,7 @@ public sealed class FulfillmentStepTests(SqlServerFixture sql) : IAsyncLifetime
     public async Task StubStep_CrashAfterCommitBeforeReturn_RetryFindsTheCommittedEffect()
     {
         var orderId = await AcceptAsync(("SKU-1", 1));
-        await Fulfilling.Steps(db).ValidateAsync(new ValidateOrderRequest(orderId, FulfillmentWorkflow.InstanceId(orderId)), TestContext.Current.CancellationToken);
+        await Fulfilling.EnterFulfillmentAsync(Fulfilling.Steps(db), orderId, TestContext.Current.CancellationToken);
         var step = new StubStepRequest(orderId, StubSteps.Fulfil, "line-1");
 
         // The process "dies" after the commit: the caller never gets the result.
@@ -160,7 +161,7 @@ public sealed class FulfillmentStepTests(SqlServerFixture sql) : IAsyncLifetime
         await Assert.ThrowsAsync<InjectedFault>(() => Fulfilling.CompleteAsync(Fulfilling.Steps(db, FailAt(point, onlyFor: "stub-complete")), orderId, TestContext.Current.CancellationToken));
 
         var after = await Fulfilling.SnapshotAsync(db, orderId);
-        Assert.Equal(("Validating", "Started"), (after.Status, after.RequestState));
+        Assert.Equal(("Reserving", "Started"), (after.Status, after.RequestState));
         Assert.Equal(before.History, after.History);
         Assert.Equal(before.Effects, after.Effects);
         Assert.False(after.ClosedAtSet);
@@ -170,7 +171,7 @@ public sealed class FulfillmentStepTests(SqlServerFixture sql) : IAsyncLifetime
         Assert.Equal(StepOutcomes.Applied, retried.Outcome);
         var done = await Fulfilling.SnapshotAsync(db, orderId);
         Assert.Equal(("Completed", "Closed", true, true), (done.Status, done.RequestState, done.StartedAtSet, done.ClosedAtSet));
-        Assert.Equal([Accepted, Validating, Completed], done.History);
+        Assert.Equal([Accepted, Validating, Reserving, Completed], done.History);
         Assert.Equal(0, done.Effects[Key(orderId, "stub-complete:1")]);
     }
 
@@ -203,7 +204,7 @@ public sealed class FulfillmentStepTests(SqlServerFixture sql) : IAsyncLifetime
         Assert.Single(results, r => r.Outcome == StepOutcomes.Applied);
         Assert.Equal(19, results.Count(r => r.Outcome == StepOutcomes.AlreadyApplied));
         var s = await Fulfilling.SnapshotAsync(db, orderId);
-        Assert.Equal([Accepted, Validating, Completed], s.History);
+        Assert.Equal([Accepted, Validating, Reserving, Completed], s.History);
         Assert.Equal(19, s.Effects[Key(orderId, "stub-complete:1")]);
         Assert.Equal("Closed", s.RequestState);
     }
@@ -212,7 +213,7 @@ public sealed class FulfillmentStepTests(SqlServerFixture sql) : IAsyncLifetime
     public async Task Steps_RacingTheTerminalTransaction_NeverAddAnEffectAfterIt()
     {
         var orderId = await AcceptAsync(("SKU-1", 1), ("SKU-2", 1), ("SKU-3", 1));
-        await Fulfilling.Steps(db).ValidateAsync(new ValidateOrderRequest(orderId, FulfillmentWorkflow.InstanceId(orderId)), TestContext.Current.CancellationToken);
+        await Fulfilling.EnterFulfillmentAsync(Fulfilling.Steps(db), orderId, TestContext.Current.CancellationToken);
 
         var steps = Enumerable.Range(1, 3).SelectMany(line => Enumerable.Range(0, 5).Select(_ =>
             Task.Run(() => Fulfilling.Steps(db).ApplyStubStepAsync(new StubStepRequest(orderId, StubSteps.Fulfil, $"line-{line}")))));
@@ -221,7 +222,7 @@ public sealed class FulfillmentStepTests(SqlServerFixture sql) : IAsyncLifetime
 
         Assert.All(results, r => Assert.Contains(r.Outcome, new[] { StepOutcomes.Applied, StepOutcomes.AlreadyApplied, StepOutcomes.AlreadyTerminal }));
         var s = await Fulfilling.SnapshotAsync(db, orderId);
-        Assert.Equal([Accepted, Validating, Completed], s.History);
+        Assert.Equal([Accepted, Validating, Reserving, Completed], s.History);
         // The order row lock serializes the steps: no simulated effect was committed after completion.
         Assert.Equal(0, await Db.ScalarAsync<int>(db,
             """
@@ -236,7 +237,7 @@ public sealed class FulfillmentStepTests(SqlServerFixture sql) : IAsyncLifetime
     {
         var orderId = await AcceptAsync(("SKU-1", 1), ("SKU-2", 1));
         var steps = Fulfilling.Steps(db);
-        await steps.ValidateAsync(new ValidateOrderRequest(orderId, FulfillmentWorkflow.InstanceId(orderId)), TestContext.Current.CancellationToken);
+        await Fulfilling.EnterFulfillmentAsync(steps, orderId, TestContext.Current.CancellationToken);
         await steps.ApplyStubStepAsync(new StubStepRequest(orderId, StubSteps.Fulfil, "line-1"), TestContext.Current.CancellationToken);
         await Fulfilling.CompleteAsync(steps, orderId, TestContext.Current.CancellationToken);
         var before = await Fulfilling.SnapshotAsync(db, orderId);
@@ -249,7 +250,7 @@ public sealed class FulfillmentStepTests(SqlServerFixture sql) : IAsyncLifetime
         var after = await Fulfilling.SnapshotAsync(db, orderId);
         Assert.Equal(before.History, after.History);
         Assert.Equal(before.Effects, after.Effects);
-        Assert.Empty(after.Checks);
+        Assert.Equal(before.Checks, after.Checks);
     }
 
     [Fact]
@@ -276,6 +277,7 @@ public sealed class FulfillmentStepTests(SqlServerFixture sql) : IAsyncLifetime
         var second = await steps.RecordChecksAsync(Fulfilling.Checks(orderId, total: 2000, score: 20), TestContext.Current.CancellationToken);
 
         Assert.Equal((StepOutcomes.Applied, StepOutcomes.AlreadyApplied), (first.Outcome, second.Outcome));
+        Assert.Equal((10, 10), (first.RiskScore, second.RiskScore));
         Assert.Equal(["price:1000:", "risk::10"], (await Fulfilling.SnapshotAsync(db, orderId)).Checks);
         Assert.Equal(2, await Db.ScalarAsync<int>(db, "SELECT SUM(Replays) FROM orders.OrderCheck WHERE OrderId = @o", ("@o", orderId)));
     }

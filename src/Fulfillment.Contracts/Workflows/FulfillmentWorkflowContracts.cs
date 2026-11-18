@@ -22,8 +22,20 @@ public static class FulfillmentWorkflow
     /// <summary>On compute-worker: risk score and whether a human review is required.</summary>
     public const string AssessOrderRiskActivity = "AssessOrderRisk";
 
-    /// <summary>On order-api: stores the check results once per check (keyed).</summary>
+    /// <summary>On order-api: stores the check results once per check (keyed) and returns the stored review requirement.</summary>
     public const string RecordChecksActivity = "RecordFulfillmentChecks";
+
+    /// <summary>On order-api: creates the review task of round 1 (idempotent) and moves the order to AwaitingApproval.</summary>
+    public const string CreateReviewTaskActivity = "CreateReviewTask";
+
+    /// <summary>On order-api: reads the review's state from SQL after every wake-up; applies a rejection to the order.</summary>
+    public const string ResolveReviewActivity = "ResolveReview";
+
+    /// <summary>On order-api: the only way a review leaves Pending by time (next round, or final expiry: Rejected).</summary>
+    public const string ExpireOrEscalateReviewActivity = "ExpireOrEscalateReview";
+
+    /// <summary>On order-api: enters the (simulated) fulfillment: Validating or AwaitingApproval → Reserving, guarded by the stored review requirement or an approved review.</summary>
+    public const string BeginFulfillmentActivity = "BeginStubFulfillment";
 
     /// <summary>On order-api: one simulated fulfillment step, recorded once per operation key.</summary>
     public const string ApplyStubStepActivity = "ApplyStubFulfillmentStep";
@@ -99,6 +111,92 @@ public sealed record RiskAssessment(int Score, bool ReviewRequired, string RuleV
 
 public sealed record RecordChecksRequest(Guid OrderId, PriceQuote Price, RiskAssessment Risk);
 
+/// <summary>
+/// The stored check results as they govern the order: the first committed risk result decides
+/// whether a review is required, whatever a repeated computation returned.
+/// </summary>
+/// <param name="Outcome">Applied (stored now), AlreadyApplied (stored before; the stored values are returned), or AlreadyTerminal.</param>
+public sealed record ChecksRecorded(string Outcome, string OrderStatus, bool ReviewRequired, int RiskScore, string RiskRuleVersion)
+{
+    public bool Terminal => Outcome == StepOutcomes.AlreadyTerminal;
+}
+
+/// <summary>Review purposes (closed code domain; M1 has the approval review only).</summary>
+public static class ReviewPurposes
+{
+    public const string Approval = "Approval";
+}
+
+/// <summary>Review states in SQL (closed code domain).</summary>
+public static class ReviewStates
+{
+    public const string Pending = "Pending";
+    public const string Approved = "Approved";
+    public const string Rejected = "Rejected";
+    public const string Expired = "Expired";
+}
+
+/// <summary>Why the workflow resolves a review (recorded with every resolution).</summary>
+public static class ReviewWakes
+{
+    /// <summary>Before the first wait of a round (a decision may already be committed).</summary>
+    public const string Initial = "Initial";
+    public const string Signal = "Signal";
+    public const string Timer = "Timer";
+
+    /// <summary>After an expiry attempt found the review decided.</summary>
+    public const string Recheck = "Recheck";
+}
+
+/// <summary>The wake-up event of a review round; it carries no business data.</summary>
+public static class ReviewSignals
+{
+    public static string EventName(Guid reviewId) => $"ReviewSignal_{reviewId:N}";
+}
+
+/// <summary>Payload of a review wake-up: only the id of the signal row (the decision itself is read from SQL).</summary>
+public sealed record ReviewSignal(Guid SignalId);
+
+public sealed record CreateReviewRequest(Guid OrderId);
+
+/// <summary>A review round as stored: the deadline is SQL time; the workflow's timer is set at deadline + grace.</summary>
+/// <param name="Outcome">Applied (created now), AlreadyApplied (existed), or AlreadyTerminal (no review; the order is terminal).</param>
+public sealed record ReviewRound(string Outcome, Guid ReviewId, int Round, DateTime DeadlineAtUtc, TimeSpan TimerGrace, string OrderStatus)
+{
+    public bool Terminal => Outcome == StepOutcomes.AlreadyTerminal;
+}
+
+public sealed record ResolveReviewRequest(Guid OrderId, Guid ReviewId, string Wake);
+
+/// <param name="State">The review's state in SQL (Pending, Approved, Rejected, Expired).</param>
+/// <param name="DeadlinePassed">SQL time is at or past the deadline (only meaningful while Pending).</param>
+/// <param name="OrderStatus">The order's status after the resolution (Rejected when a rejection was applied).</param>
+public sealed record ReviewResolution(string State, bool DeadlinePassed, string OrderStatus, bool OrderTerminal);
+
+public sealed record ExpireReviewRequest(Guid OrderId, Guid ReviewId);
+
+/// <summary>Outcomes of an expiry attempt (closed code domain).</summary>
+public static class ExpiryOutcomes
+{
+    /// <summary>SQL time is before the deadline: nothing changed (an early timer); wait again.</summary>
+    public const string NotDue = "NotDue";
+
+    /// <summary>The round expired; the next round is open (NextRound).</summary>
+    public const string NextRound = "NextRound";
+
+    /// <summary>The last round expired: the order is Rejected (ReviewExpired).</summary>
+    public const string FinalExpiry = "FinalExpiry";
+
+    /// <summary>The review was decided before it could expire: resolve it again.</summary>
+    public const string AlreadyDecided = "AlreadyDecided";
+
+    public const string AlreadyTerminal = "AlreadyTerminal";
+}
+
+public sealed record ExpiryResult(string Outcome, ReviewRound? NextRound, string OrderStatus);
+
+public sealed record BeginFulfillmentRequest(Guid OrderId);
+
 /// <summary>Check names and their operation-key qualifiers (one stored result per check).</summary>
 public static class FulfillmentChecks
 {
@@ -143,7 +241,7 @@ public static class FulfillmentOutcomes
     /// <summary>The order was already terminal: the run ended without any effect.</summary>
     public const string Fenced = "AlreadyTerminal";
 
-    /// <summary>The order broke a business rule and was rejected.</summary>
+    /// <summary>The order broke a business rule, or its review rejected it or expired finally.</summary>
     public const string Rejected = "Rejected";
 
     /// <summary>The simulated fulfillment completed the order.</summary>

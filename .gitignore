@@ -34,3 +34,6 @@ Thumbs.db
 # Local runtime data
 data/
 *.log
+
+# Local launch profiles written by IDEs and tools
+**/Properties/launchSettings.json

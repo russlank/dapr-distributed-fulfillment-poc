@@ -287,6 +287,317 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.PendingSignal", b =>
+                {
+                    b.Property<Guid>("SignalId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier")
+                        .HasDefaultValueSql("NEWID()");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("CausedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ClosedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<string>("EventName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<DateTime?>("ForwardedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("InstanceId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<string>("LastErrorCode")
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<DateTime?>("LeaseExpiresAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("LeaseOwner")
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<Guid?>("LeaseToken")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("NextAttemptAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.HasKey("SignalId");
+
+                    b.HasIndex("NextAttemptAt")
+                        .HasDatabaseName("IX_PendingSignal_Due")
+                        .HasFilter("[State] = 'Pending'");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("NextAttemptAt"), new[] { "LeaseExpiresAt" });
+
+                    b.HasIndex("OrderId");
+
+                    b.HasIndex("CausedBy", "EventName")
+                        .IsUnique()
+                        .HasDatabaseName("UX_PendingSignal_Cause");
+
+                    b.ToTable("PendingSignal", "orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_PendingSignal_Counters", "[Attempts] >= 0");
+
+                            t.HasCheckConstraint("CK_PendingSignal_Lease", "([LeaseOwner] IS NULL AND [LeaseExpiresAt] IS NULL AND [LeaseToken] IS NULL) OR ([LeaseOwner] IS NOT NULL AND [LeaseExpiresAt] IS NOT NULL AND [LeaseToken] IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_PendingSignal_Lifecycle", "([State] = 'Pending' AND [ForwardedAt] IS NULL AND [ClosedAt] IS NULL) OR ([State] = 'Forwarded' AND [ForwardedAt] IS NOT NULL AND [LeaseToken] IS NULL) OR ([State] IN ('Discarded', 'Stuck') AND [ClosedAt] IS NOT NULL AND [LeaseToken] IS NULL)");
+
+                            t.HasCheckConstraint("CK_PendingSignal_State", "[State] IN ('Pending', 'Forwarded', 'Discarded', 'Stuck')");
+                        });
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.ReviewDecision", b =>
+                {
+                    b.Property<Guid>("DecisionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Comment")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime>("DecidedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<string>("OperatorId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Outcome")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<byte[]>("PayloadHash")
+                        .IsRequired()
+                        .HasColumnType("binary(32)");
+
+                    b.Property<Guid>("ReviewId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("DecisionId");
+
+                    b.HasIndex("ReviewId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_ReviewDecision_Review");
+
+                    b.ToTable("ReviewDecision", "orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_ReviewDecision_Hash", "DATALENGTH([PayloadHash]) = 32");
+
+                            t.HasCheckConstraint("CK_ReviewDecision_Outcome", "[Outcome] IN ('Approved', 'Rejected')");
+                        });
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.ReviewTask", b =>
+                {
+                    b.Property<Guid>("ReviewId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier")
+                        .HasDefaultValueSql("NEWID()");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<DateTime>("DeadlineAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<DateTime?>("DecidedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<Guid?>("DecisionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ExpiredAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Purpose")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<int>("Round")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.HasKey("ReviewId");
+
+                    b.HasIndex("OrderId", "Purpose", "Round")
+                        .IsUnique()
+                        .HasDatabaseName("UX_ReviewTask_Order_Purpose_Round");
+
+                    b.ToTable("ReviewTask", "orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_ReviewTask_Lifecycle", "([Status] = 'Pending' AND [DecidedAt] IS NULL AND [DecisionId] IS NULL AND [ExpiredAt] IS NULL) OR ([Status] IN ('Approved', 'Rejected') AND [DecidedAt] IS NOT NULL AND [DecisionId] IS NOT NULL AND [ExpiredAt] IS NULL) OR ([Status] = 'Expired' AND [ExpiredAt] IS NOT NULL AND [DecidedAt] IS NULL AND [DecisionId] IS NULL)");
+
+                            t.HasCheckConstraint("CK_ReviewTask_Purpose", "[Purpose] IN ('Approval')");
+
+                            t.HasCheckConstraint("CK_ReviewTask_Round", "[Round] >= 1");
+
+                            t.HasCheckConstraint("CK_ReviewTask_Status", "[Status] IN ('Pending', 'Approved', 'Rejected', 'Expired')");
+                        });
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.ReviewWake", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTime>("At")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<bool>("DeadlinePassed")
+                        .HasColumnType("bit");
+
+                    b.Property<Guid>("ReviewId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("SeenStatus")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<string>("Wake")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ReviewId", "At")
+                        .HasDatabaseName("IX_ReviewWake_Review");
+
+                    b.ToTable("ReviewWake", "orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_ReviewWake_Wake", "[Wake] IN ('Initial', 'Signal', 'Timer', 'Recheck')");
+                        });
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.SignalAttempt", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<int>("Attempt")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CalledAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("DispatcherId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<int?>("HttpStatus")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("InvocationAttempts")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("LeaseToken")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ReportedStatus")
+                        .HasMaxLength(32)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(32)");
+
+                    b.Property<string>("Result")
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<Guid>("SignalId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("TransportError")
+                        .HasMaxLength(200)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(200)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LeaseToken")
+                        .IsUnique()
+                        .HasDatabaseName("UX_SignalAttempt_LeaseToken");
+
+                    b.HasIndex("SignalId", "CalledAt")
+                        .HasDatabaseName("IX_SignalAttempt_Signal");
+
+                    b.ToTable("SignalAttempt", "orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_SignalAttempt_Result", "[Result] IS NULL OR [Result] IN ('Forwarded', 'Discarded', 'Stuck', 'NotStarted', 'NotRunning', 'Ambiguous', 'Rejected', 'LeaseLost', 'Unexpected')");
+                        });
+                });
+
             modelBuilder.Entity("Fulfillment.OrderApi.Domain.StubEffect", b =>
                 {
                     b.Property<string>("OperationKey")
@@ -521,6 +832,51 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                     b.HasOne("Fulfillment.OrderApi.Domain.Order", null)
                         .WithMany("History")
                         .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.PendingSignal", b =>
+                {
+                    b.HasOne("Fulfillment.OrderApi.Domain.Order", null)
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.ReviewDecision", b =>
+                {
+                    b.HasOne("Fulfillment.OrderApi.Domain.ReviewTask", null)
+                        .WithMany()
+                        .HasForeignKey("ReviewId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.ReviewTask", b =>
+                {
+                    b.HasOne("Fulfillment.OrderApi.Domain.Order", null)
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.ReviewWake", b =>
+                {
+                    b.HasOne("Fulfillment.OrderApi.Domain.ReviewTask", null)
+                        .WithMany()
+                        .HasForeignKey("ReviewId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.SignalAttempt", b =>
+                {
+                    b.HasOne("Fulfillment.OrderApi.Domain.PendingSignal", null)
+                        .WithMany()
+                        .HasForeignKey("SignalId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

@@ -33,6 +33,16 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
 
     public DbSet<OrderCheck> OrderChecks => Set<OrderCheck>();
 
+    public DbSet<ReviewTask> ReviewTasks => Set<ReviewTask>();
+
+    public DbSet<ReviewDecision> ReviewDecisions => Set<ReviewDecision>();
+
+    public DbSet<PendingSignal> PendingSignals => Set<PendingSignal>();
+
+    public DbSet<SignalAttempt> SignalAttempts => Set<SignalAttempt>();
+
+    public DbSet<ReviewWake> ReviewWakes => Set<ReviewWake>();
+
     /// <summary>Applies the SQL Server options shared by the app, the migration job, and the design-time factory.</summary>
     public static void Configure(DbContextOptionsBuilder builder, string connectionString) =>
         builder.UseSqlServer(connectionString, sql => sql.MigrationsHistoryTable("__EFMigrationsHistory", Schema));
@@ -49,6 +59,11 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         ConfigureExecutionClaim(modelBuilder.Entity<ExecutionClaim>());
         ConfigureStubEffect(modelBuilder.Entity<StubEffect>());
         ConfigureOrderCheck(modelBuilder.Entity<OrderCheck>());
+        ConfigureReviewTask(modelBuilder.Entity<ReviewTask>());
+        ConfigureReviewDecision(modelBuilder.Entity<ReviewDecision>());
+        ConfigurePendingSignal(modelBuilder.Entity<PendingSignal>());
+        ConfigureSignalAttempt(modelBuilder.Entity<SignalAttempt>());
+        ConfigureReviewWake(modelBuilder.Entity<ReviewWake>());
     }
 
     private static string InList<TEnum>(string column)
@@ -220,6 +235,118 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         check.Property(c => c.RecordedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
         check.HasIndex(c => c.OperationKey).IsUnique().HasDatabaseName("UX_OrderCheck_OperationKey");
         check.HasOne<Order>().WithMany().HasForeignKey(c => c.OrderId).OnDelete(DeleteBehavior.Cascade);
+    }
+
+    private static void ConfigureReviewTask(EntityTypeBuilder<ReviewTask> review)
+    {
+        review.ToTable("ReviewTask", t =>
+        {
+            t.HasCheckConstraint("CK_ReviewTask_Purpose", "[Purpose] IN ('Approval')");
+            t.HasCheckConstraint("CK_ReviewTask_Round", "[Round] >= 1");
+            t.HasCheckConstraint("CK_ReviewTask_Status", "[Status] IN ('Pending', 'Approved', 'Rejected', 'Expired')");
+            t.HasCheckConstraint("CK_ReviewTask_Lifecycle",
+                "([Status] = 'Pending' AND [DecidedAt] IS NULL AND [DecisionId] IS NULL AND [ExpiredAt] IS NULL)"
+                + " OR ([Status] IN ('Approved', 'Rejected') AND [DecidedAt] IS NOT NULL AND [DecisionId] IS NOT NULL AND [ExpiredAt] IS NULL)"
+                + " OR ([Status] = 'Expired' AND [ExpiredAt] IS NOT NULL AND [DecidedAt] IS NULL AND [DecisionId] IS NULL)");
+        });
+        review.HasKey(r => r.ReviewId);
+        review.Property(r => r.ReviewId).HasDefaultValueSql("NEWID()");
+        review.Property(r => r.Purpose).HasMaxLength(16).IsUnicode(false);
+        review.Property(r => r.Status).HasMaxLength(16).IsUnicode(false);
+        review.Property(r => r.CreatedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+        review.Property(r => r.DeadlineAt).HasColumnType("datetime2(3)");
+        review.Property(r => r.DecidedAt).HasColumnType("datetime2(3)");
+        review.Property(r => r.ExpiredAt).HasColumnType("datetime2(3)");
+        review.HasIndex(r => new { r.OrderId, r.Purpose, r.Round }).IsUnique().HasDatabaseName("UX_ReviewTask_Order_Purpose_Round");
+        review.HasOne<Order>().WithMany().HasForeignKey(r => r.OrderId).OnDelete(DeleteBehavior.Cascade);
+    }
+
+    private static void ConfigureReviewDecision(EntityTypeBuilder<ReviewDecision> decision)
+    {
+        decision.ToTable("ReviewDecision", t =>
+        {
+            t.HasCheckConstraint("CK_ReviewDecision_Outcome", "[Outcome] IN ('Approved', 'Rejected')");
+            t.HasCheckConstraint("CK_ReviewDecision_Hash", "DATALENGTH([PayloadHash]) = 32");
+        });
+        decision.HasKey(d => d.DecisionId);
+        decision.Property(d => d.DecisionId).ValueGeneratedNever();
+        decision.Property(d => d.Outcome).HasMaxLength(16).IsUnicode(false);
+        decision.Property(d => d.OperatorId).HasMaxLength(64).IsUnicode(false);
+        decision.Property(d => d.Comment).HasMaxLength(500);
+        decision.Property(d => d.PayloadHash).HasColumnType("binary(32)");
+        decision.Property(d => d.DecidedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+        // At most one accepted decision per review (one outcome per review).
+        decision.HasIndex(d => d.ReviewId).IsUnique().HasDatabaseName("UX_ReviewDecision_Review");
+        // Cascades from the review only (a second cascade path from the order is not allowed).
+        decision.HasOne<ReviewTask>().WithMany().HasForeignKey(d => d.ReviewId).OnDelete(DeleteBehavior.Cascade);
+    }
+
+    private static void ConfigurePendingSignal(EntityTypeBuilder<PendingSignal> signal)
+    {
+        signal.ToTable("PendingSignal", t =>
+        {
+            t.HasCheckConstraint("CK_PendingSignal_State", "[State] IN ('Pending', 'Forwarded', 'Discarded', 'Stuck')");
+            t.HasCheckConstraint("CK_PendingSignal_Counters", "[Attempts] >= 0");
+            t.HasCheckConstraint("CK_PendingSignal_Lifecycle",
+                "([State] = 'Pending' AND [ForwardedAt] IS NULL AND [ClosedAt] IS NULL)"
+                + " OR ([State] = 'Forwarded' AND [ForwardedAt] IS NOT NULL AND [LeaseToken] IS NULL)"
+                + " OR ([State] IN ('Discarded', 'Stuck') AND [ClosedAt] IS NOT NULL AND [LeaseToken] IS NULL)");
+            t.HasCheckConstraint("CK_PendingSignal_Lease",
+                "([LeaseOwner] IS NULL AND [LeaseExpiresAt] IS NULL AND [LeaseToken] IS NULL)"
+                + " OR ([LeaseOwner] IS NOT NULL AND [LeaseExpiresAt] IS NOT NULL AND [LeaseToken] IS NOT NULL)");
+        });
+        signal.HasKey(s => s.SignalId);
+        signal.Property(s => s.SignalId).HasDefaultValueSql("NEWID()");
+        signal.Property(s => s.InstanceId).HasMaxLength(64).IsUnicode(false);
+        signal.Property(s => s.EventName).HasMaxLength(100).IsUnicode(false);
+        signal.Property(s => s.State).HasMaxLength(16).IsUnicode(false);
+        signal.Property(s => s.NextAttemptAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+        signal.Property(s => s.LeaseOwner).HasMaxLength(64).IsUnicode(false);
+        signal.Property(s => s.LeaseExpiresAt).HasColumnType("datetime2(3)");
+        signal.Property(s => s.LastErrorCode).HasMaxLength(64).IsUnicode(false);
+        signal.Property(s => s.CreatedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+        signal.Property(s => s.ForwardedAt).HasColumnType("datetime2(3)");
+        signal.Property(s => s.ClosedAt).HasColumnType("datetime2(3)");
+        // One signal per causing fact and event.
+        signal.HasIndex(s => new { s.CausedBy, s.EventName }).IsUnique().HasDatabaseName("UX_PendingSignal_Cause");
+        signal.HasIndex(s => s.NextAttemptAt).HasDatabaseName("IX_PendingSignal_Due")
+            .HasFilter("[State] = 'Pending'").IncludeProperties(s => new { s.LeaseExpiresAt });
+        signal.HasOne<Order>().WithMany().HasForeignKey(s => s.OrderId).OnDelete(DeleteBehavior.Cascade);
+    }
+
+    private static void ConfigureSignalAttempt(EntityTypeBuilder<SignalAttempt> attempt)
+    {
+        attempt.ToTable("SignalAttempt", t =>
+        {
+            t.HasCheckConstraint("CK_SignalAttempt_Result",
+                "[Result] IS NULL OR [Result] IN ('Forwarded', 'Discarded', 'Stuck', 'NotStarted', 'NotRunning', 'Ambiguous', 'Rejected', 'LeaseLost', 'Unexpected')");
+        });
+        attempt.HasKey(a => a.Id);
+        attempt.Property(a => a.Id).UseIdentityColumn();
+        attempt.Property(a => a.DispatcherId).HasMaxLength(64).IsUnicode(false);
+        attempt.Property(a => a.CalledAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+        attempt.Property(a => a.CompletedAt).HasColumnType("datetime2(3)");
+        attempt.Property(a => a.Result).HasMaxLength(16).IsUnicode(false);
+        attempt.Property(a => a.ReportedStatus).HasMaxLength(32).IsUnicode(false);
+        attempt.Property(a => a.TransportError).HasMaxLength(200).IsUnicode(false);
+        attempt.HasIndex(a => a.LeaseToken).IsUnique().HasDatabaseName("UX_SignalAttempt_LeaseToken");
+        attempt.HasIndex(a => new { a.SignalId, a.CalledAt }).HasDatabaseName("IX_SignalAttempt_Signal");
+        attempt.HasOne<PendingSignal>().WithMany().HasForeignKey(a => a.SignalId).OnDelete(DeleteBehavior.Cascade);
+    }
+
+    private static void ConfigureReviewWake(EntityTypeBuilder<ReviewWake> wake)
+    {
+        wake.ToTable("ReviewWake", t =>
+        {
+            t.HasCheckConstraint("CK_ReviewWake_Wake", "[Wake] IN ('Initial', 'Signal', 'Timer', 'Recheck')");
+        });
+        wake.HasKey(w => w.Id);
+        wake.Property(w => w.Id).UseIdentityColumn();
+        wake.Property(w => w.Wake).HasMaxLength(16).IsUnicode(false);
+        wake.Property(w => w.SeenStatus).HasMaxLength(16).IsUnicode(false);
+        wake.Property(w => w.At).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+        wake.HasIndex(w => new { w.ReviewId, w.At }).HasDatabaseName("IX_ReviewWake_Review");
+        wake.HasOne<ReviewTask>().WithMany().HasForeignKey(w => w.ReviewId).OnDelete(DeleteBehavior.Cascade);
     }
 }
 

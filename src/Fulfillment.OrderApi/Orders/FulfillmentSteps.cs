@@ -17,7 +17,8 @@ public static class OrderRules
             return OrderReasonCodes.NoLines;
         }
 
-        // One line per SKU: reservations and allocations work per SKU.
+        // One line per SKU: a deliberate limitation of this PoC's order model (reservations and
+        // allocations then work per line and SKU); not a requirement of the runtime or the inventory design.
         return lines.Select(l => l.Sku).Distinct(StringComparer.Ordinal).Count() != lines.Count ? OrderReasonCodes.DuplicateSku : null;
     }
 }
@@ -30,6 +31,11 @@ public static class OrderRules
 /// committed returns the stored result instead of applying it again. A step for a terminal order
 /// changes nothing and tells the run to end. The transaction that makes an order terminal also
 /// closes its start request.
+///
+/// Lifecycle: Submitted → Validating → (AwaitingApproval →) Reserving → Completed. The simulated
+/// steps run in Reserving, which an order enters only through <see cref="BeginFulfillmentAsync"/>:
+/// from Validating when the stored risk result requires no review, or from AwaitingApproval when its
+/// review is Approved. Validation may end in Rejected, a review in Rejected.
 /// </summary>
 public sealed class FulfillmentSteps(string connectionString, string replica, StepCheckpoint checkpoint)
 {
@@ -50,6 +56,13 @@ public sealed class FulfillmentSteps(string connectionString, string replica, St
         {
             await OrderTransitions.TryTransitionAsync(connection, tx, request.OrderId, OrderStatus.Submitted, OrderStatus.Validating,
                 OrderReasonCodes.ValidationStarted, checkpoint, key, ct);
+        }
+        else if (status is OrderStatus.AwaitingApproval or OrderStatus.Reserving)
+        {
+            // A second run of the instance: this order passed validation before.
+            var validated = await ReadLinesAsync(connection, tx, request.OrderId, ct);
+            await tx.CommitAsync(ct);
+            return new OrderValidationResult(StepOutcomes.Valid, status.ToString(), null, customerId, validated);
         }
         else if (status != OrderStatus.Validating)
         {
@@ -72,8 +85,12 @@ public sealed class FulfillmentSteps(string connectionString, string replica, St
         return new OrderValidationResult(StepOutcomes.Valid, nameof(OrderStatus.Validating), null, customerId, lines);
     }
 
-    /// <summary>Stores each check's result once; a repeated execution keeps the first result.</summary>
-    public async Task<StepResult> RecordChecksAsync(RecordChecksRequest request, CancellationToken ct = default)
+    /// <summary>
+    /// Stores each check's result once; a repeated execution keeps the first result. Returns the
+    /// stored risk result: it, not the caller's (possibly recomputed) one, decides whether the order
+    /// needs a review.
+    /// </summary>
+    public async Task<ChecksRecorded> RecordChecksAsync(RecordChecksRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         await using var connection = await OpenAsync(ct);
@@ -81,16 +98,82 @@ public sealed class FulfillmentSteps(string connectionString, string replica, St
         var (status, _) = await LockOrThrowAsync(connection, tx, request.OrderId, ct);
         if (OrderStatuses.IsTerminal(status))
         {
+            var stored = await StoredRiskAsync(connection, tx, request.OrderId, ct);
             await tx.CommitAsync(ct);
-            return new StepResult(StepOutcomes.AlreadyTerminal, null, status.ToString());
+            return new ChecksRecorded(StepOutcomes.AlreadyTerminal, status.ToString(), stored?.ReviewRequired ?? false, stored?.Score ?? 0, stored?.Version ?? "");
         }
 
         var price = await RecordCheckAsync(connection, tx, request.OrderId, FulfillmentChecks.Price, request.Price.Execution,
             request.Price.TotalMinor, request.Price.Currency, null, null, request.Price.PriceListVersion, ct);
         var risk = await RecordCheckAsync(connection, tx, request.OrderId, FulfillmentChecks.Risk, request.Risk.Execution,
             null, null, request.Risk.Score, request.Risk.ReviewRequired, request.Risk.RuleVersion, ct);
+        var authoritative = await StoredRiskAsync(connection, tx, request.OrderId, ct)
+            ?? throw new InvalidOperationException("risk result missing after recording");
         await tx.CommitAsync(ct);
-        return new StepResult(price && risk ? StepOutcomes.Applied : StepOutcomes.AlreadyApplied, null, status.ToString());
+        return new ChecksRecorded(price && risk ? StepOutcomes.Applied : StepOutcomes.AlreadyApplied, status.ToString(),
+            authoritative.ReviewRequired, authoritative.Score, authoritative.Version);
+    }
+
+    /// <summary>
+    /// Enters the simulated fulfillment (→ Reserving). From Validating only if the stored risk result
+    /// requires no review; from AwaitingApproval only if the order's latest review is Approved. Any
+    /// other case is refused, so no path skips a required review.
+    /// </summary>
+    public async Task<StepResult> BeginFulfillmentAsync(BeginFulfillmentRequest request, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var key = OperationKey.For(request.OrderId, "begin-fulfillment", "1").Value;
+        await using var connection = await OpenAsync(ct);
+        await using var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct);
+        var (status, _) = await LockOrThrowAsync(connection, tx, request.OrderId, ct);
+        if (OrderStatuses.IsTerminal(status))
+        {
+            await tx.CommitAsync(ct);
+            return new StepResult(StepOutcomes.AlreadyTerminal, key, status.ToString());
+        }
+
+        if (status == OrderStatus.Reserving)
+        {
+            await tx.CommitAsync(ct);
+            return new StepResult(StepOutcomes.AlreadyApplied, key, status.ToString());
+        }
+
+        if (status == OrderStatus.Validating)
+        {
+            var risk = await StoredRiskAsync(connection, tx, request.OrderId, ct);
+            if (risk is not { ReviewRequired: false })
+            {
+                throw new InvalidOperationException(risk is null
+                    ? "fulfillment cannot begin before the checks are stored"
+                    : "fulfillment cannot begin: the stored risk result requires a review");
+            }
+
+            await OrderTransitions.TryTransitionAsync(connection, tx, request.OrderId, OrderStatus.Validating, OrderStatus.Reserving,
+                OrderReasonCodes.NoReviewRequired, checkpoint, key, ct);
+        }
+        else if (status == OrderStatus.AwaitingApproval)
+        {
+            await using var approved = new SqlCommand(
+                """
+                SELECT TOP (1) Status FROM orders.ReviewTask
+                WHERE OrderId = @o AND Purpose = 'Approval' ORDER BY Round DESC;
+                """, connection, tx);
+            approved.Parameters.AddWithValue("@o", request.OrderId);
+            if (await approved.ExecuteScalarAsync(ct) as string != "Approved")
+            {
+                throw new InvalidOperationException("fulfillment cannot begin: the order's review is not approved");
+            }
+
+            await OrderTransitions.TryTransitionAsync(connection, tx, request.OrderId, OrderStatus.AwaitingApproval, OrderStatus.Reserving,
+                OrderReasonCodes.ReviewApproved, checkpoint, key, ct);
+        }
+        else
+        {
+            throw new InvalidOperationException($"fulfillment cannot begin for an order in status {status}");
+        }
+
+        await tx.CommitAsync(ct);
+        return new StepResult(StepOutcomes.Applied, key, nameof(OrderStatus.Reserving));
     }
 
     /// <summary>One simulated fulfillment step (not the completion), committed at most once per operation key.</summary>
@@ -113,7 +196,7 @@ public sealed class FulfillmentSteps(string connectionString, string replica, St
             return new StepResult(StepOutcomes.AlreadyTerminal, key, status.ToString());
         }
 
-        if (status != OrderStatus.Validating)
+        if (status != OrderStatus.Reserving)
         {
             throw new InvalidOperationException($"simulated fulfillment step of an order in status {status}");
         }
@@ -132,7 +215,7 @@ public sealed class FulfillmentSteps(string connectionString, string replica, St
     }
 
     /// <summary>
-    /// The terminal transaction: the stub completion effect, Validating → Completed with its history
+    /// The terminal transaction: the stub completion effect, Reserving → Completed with its history
     /// row, and the start request Closed, all or nothing. A repeated execution finds the effect and
     /// returns AlreadyApplied without any change.
     /// </summary>
@@ -155,7 +238,7 @@ public sealed class FulfillmentSteps(string connectionString, string replica, St
             return new StepResult(StepOutcomes.AlreadyTerminal, key, status.ToString());
         }
 
-        if (!await OrderTransitions.TryTransitionAsync(connection, tx, request.OrderId, OrderStatus.Validating, OrderStatus.Completed,
+        if (!await OrderTransitions.TryTransitionAsync(connection, tx, request.OrderId, OrderStatus.Reserving, OrderStatus.Completed,
                 OrderReasonCodes.StubFulfillmentCompleted, checkpoint, key, ct))
         {
             throw new InvalidOperationException($"completion of an order in status {status}");
@@ -170,7 +253,17 @@ public sealed class FulfillmentSteps(string connectionString, string replica, St
         return new StepResult(StepOutcomes.Applied, key, nameof(OrderStatus.Completed));
     }
 
-    private static async Task<(OrderStatus Status, string CustomerId)> LockOrThrowAsync(SqlConnection connection, SqlTransaction tx, Guid orderId, CancellationToken ct) =>
+    /// <summary>The stored (first committed) risk result of the order, or null before it is stored.</summary>
+    internal static async Task<(bool ReviewRequired, int Score, string Version)?> StoredRiskAsync(SqlConnection connection, SqlTransaction tx, Guid orderId, CancellationToken ct)
+    {
+        await using var command = new SqlCommand(
+            "SELECT ReviewRequired, RiskScore, RuleVersion FROM orders.OrderCheck WHERE OrderId = @o AND CheckName = 'risk';", connection, tx);
+        command.Parameters.AddWithValue("@o", orderId);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? (reader.GetBoolean(0), reader.GetInt32(1), reader.GetString(2)) : null;
+    }
+
+    internal static async Task<(OrderStatus Status, string CustomerId)> LockOrThrowAsync(SqlConnection connection, SqlTransaction tx, Guid orderId, CancellationToken ct) =>
         await OrderTransitions.LockAsync(connection, tx, orderId, ct)
         ?? throw new InvalidOperationException("fulfillment step for an order that does not exist");
 

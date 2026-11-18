@@ -16,10 +16,10 @@ public sealed class ComputeCheckOptions
     public int SimulatedWorkMilliseconds { get; set; } = 300;
 
     /// <summary>
-    /// Risk score from which a human review is required; unset means no order requires review. The
-    /// review wait itself is not available yet, so this stays unset until it is.
+    /// Order value (minor units, stub price list) from which a human review is required: 1,000.00 by
+    /// default (owner decision). Unset (null) means no order requires a review.
     /// </summary>
-    public int? ReviewScoreThreshold { get; set; }
+    public long? ReviewAmountThresholdMinor { get; set; } = 100_000;
 }
 
 /// <summary>
@@ -47,10 +47,13 @@ public static class StubPriceList
     public static long TotalMinor(IEnumerable<ValidatedLine> lines) => lines.Sum(l => UnitPriceMinor(l.Sku) * l.Quantity);
 }
 
-/// <summary>Stub risk rule: a score from the order's size; review only from a configured threshold.</summary>
+/// <summary>
+/// Stub risk rule: a score from the order's size; a review is required when the order's value (stub
+/// price list) reaches the configured threshold. The version is stored with each result.
+/// </summary>
 public static class StubRiskRule
 {
-    public const string Version = "stub-v1";
+    public const string Version = "stub-v2";
 
     public static int Score(IReadOnlyCollection<ValidatedLine> lines)
     {
@@ -59,7 +62,7 @@ public static class StubRiskRule
         return Math.Min(100, (lines.Count * 5) + (units / 10));
     }
 
-    public static bool ReviewRequired(int score, int? threshold) => threshold is { } t && score >= t;
+    public static bool ReviewRequired(long valueMinor, long? thresholdMinor) => thresholdMinor is { } t && valueMinor >= t;
 }
 
 /// <summary>Pricing check (stateless; no I/O besides the simulated computation time).</summary>
@@ -84,7 +87,8 @@ public sealed class AssessOrderRiskActivity(IOptions<ComputeCheckOptions> option
         var started = DateTime.UtcNow;
         await Task.Delay(options.Value.SimulatedWorkMilliseconds);
         var score = StubRiskRule.Score(input.Lines.ToList());
-        return new RiskAssessment(score, StubRiskRule.ReviewRequired(score, options.Value.ReviewScoreThreshold), StubRiskRule.Version,
+        var review = StubRiskRule.ReviewRequired(StubPriceList.TotalMinor(input.Lines), options.Value.ReviewAmountThresholdMinor);
+        return new RiskAssessment(score, review, StubRiskRule.Version,
             new CheckExecution(identity.Replica, started, DateTime.UtcNow));
     }
 }

@@ -54,6 +54,12 @@ public sealed class SchemaTests(SqlServerFixture sql)
         // One stored result per check.
         { "INSERT orders.OrderCheck (OrderId, CheckName, OperationKey, Replica, StartedAt, CompletedAt, RuleVersion, Replays) VALUES (@o, 'price', 'c1', 'r', SYSUTCDATETIME(), SYSUTCDATETIME(), 'v', 0), (@o, 'price', 'c2', 'r', SYSUTCDATETIME(), SYSUTCDATETIME(), 'v', 0)", "PK_OrderCheck" },
         { "INSERT orders.WorkflowStartAttempt (OrderId, LeaseToken, DispatcherId, InstanceId, Attempt, Result) VALUES (@o, NEWID(), 'd', 'i', 1, 'Lost')", "CK_WorkflowStartAttempt_Result" },
+        // One review per (order, purpose, round); a consistent review lifecycle; known signal states.
+        { "INSERT orders.ReviewTask (OrderId, Purpose, Round, Status, DeadlineAt) VALUES (@o, 'Approval', 1, 'Pending', SYSUTCDATETIME()), (@o, 'Approval', 1, 'Pending', SYSUTCDATETIME())", "UX_ReviewTask_Order_Purpose_Round" },
+        { "INSERT orders.ReviewTask (OrderId, Purpose, Round, Status, DeadlineAt) VALUES (@o, 'Approval', 1, 'Approved', SYSUTCDATETIME())", "CK_ReviewTask_Lifecycle" },
+        { "INSERT orders.ReviewTask (OrderId, Purpose, Round, Status, DeadlineAt) VALUES (@o, 'Escalation', 1, 'Pending', SYSUTCDATETIME())", "CK_ReviewTask_Purpose" },
+        { "INSERT orders.ReviewDecision (DecisionId, ReviewId, OrderId, Outcome, OperatorId, PayloadHash) VALUES (NEWID(), NEWID(), @o, 'Approved', 'op', 0x" + new string('0', 64) + ")", "FK_ReviewDecision_ReviewTask_ReviewId" },
+        { "INSERT orders.PendingSignal (OrderId, InstanceId, EventName, CausedBy, State, Attempts) VALUES (@o, 'i', 'e', NEWID(), 'Delivered', 0)", "CK_PendingSignal_" },
     };
 
     [Theory]

@@ -194,6 +194,8 @@ services:
       ConnectionStrings__OrderDb: "Server=sqlserver;Database=OrderDb;User Id=order_api;Password=${ORDER_DB_PASSWORD};TrustServerCertificate=true"
       ADMIN_API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in .env}
       CUSTOMER_API_KEY: ${CUSTOMER_API_KEY:?set CUSTOMER_API_KEY in .env}
+      # Operator role key for review decisions (distinct from the customer key).
+      OPERATOR_API_KEY: ${OPERATOR_API_KEY:?set OPERATOR_API_KEY in .env}
       # Start dispatcher lease (hh:mm:ss); S51 shortens it on a drill stack to force lease expiry.
       StartDispatcher__Lease: ${START_DISPATCHER_LEASE:-00:00:30}
     ports:
@@ -229,6 +231,8 @@ services:
       ConnectionStrings__OrderDb: "Server=sqlserver;Database=OrderDb;User Id=order_api;Password=${ORDER_DB_PASSWORD};TrustServerCertificate=true"
       ADMIN_API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in .env}
       CUSTOMER_API_KEY: ${CUSTOMER_API_KEY:?set CUSTOMER_API_KEY in .env}
+      # Operator role key for review decisions (distinct from the customer key).
+      OPERATOR_API_KEY: ${OPERATOR_API_KEY:?set OPERATOR_API_KEY in .env}
       # Start dispatcher lease (hh:mm:ss); S51 shortens it on a drill stack to force lease expiry.
       StartDispatcher__Lease: ${START_DISPATCHER_LEASE:-00:00:30}
     ports:

@@ -17,12 +17,21 @@ public sealed class OrderApiHost(string connectionString, Action<IServiceCollect
     : WebApplicationFactory<Program>
 {
     public const string CustomerApiKey = "integration-customer-key";
+    public const string OperatorApiKey = "integration-operator-key";
 
     static OrderApiHost()
     {
         // API keys are read from the environment when endpoints are mapped (same value for every host).
         Environment.SetEnvironmentVariable(OrderEndpoints.ApiKeyVariable, CustomerApiKey);
         Environment.SetEnvironmentVariable("ADMIN_API_KEY", "integration-admin-key");
+        Environment.SetEnvironmentVariable("OPERATOR_API_KEY", OperatorApiKey);
+    }
+
+    public HttpClient CreateOperatorClient()
+    {
+        var client = CreateClient();
+        client.DefaultRequestHeaders.Add(OrderRoutes.ApiKeyHeader, OperatorApiKey);
+        return client;
     }
 
     public HttpClient CreateCustomerClient()
@@ -43,6 +52,7 @@ public sealed class OrderApiHost(string connectionString, Action<IServiceCollect
         builder.UseSetting("Logging:LogLevel:Grpc", "Error");
         // The start dispatcher runs only in tests that enable it (it would act on every pending row).
         builder.UseSetting("StartDispatcher:Enabled", dispatcherEnabled ? "true" : "false");
+        builder.UseSetting("SignalDispatcher:Enabled", "false");
         if (configureServices is not null)
         {
             builder.ConfigureTestServices(configureServices);

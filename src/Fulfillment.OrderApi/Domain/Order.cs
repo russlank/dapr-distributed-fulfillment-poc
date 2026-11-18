@@ -39,8 +39,27 @@ public static class OrderReasonCodes
     /// <summary>Rejected by validation: the order has no lines (defensive; the API refuses such requests).</summary>
     public const string NoLines = "NoLines";
 
-    /// <summary>Rejected by validation: a SKU appears on more than one line.</summary>
+    /// <summary>
+    /// Rejected by validation: a SKU appears on more than one line. A deliberate limitation of this
+    /// PoC's order model (one line per SKU keeps reservations and allocations per SKU simple), not a
+    /// requirement of the runtime or the inventory design.
+    /// </summary>
     public const string DuplicateSku = "DuplicateSku";
+
+    /// <summary>Validating → Reserving: the stored risk check requires no review.</summary>
+    public const string NoReviewRequired = "NoReviewRequired";
+
+    /// <summary>Validating → AwaitingApproval: the stored risk check requires a review.</summary>
+    public const string ReviewRequired = "ReviewRequired";
+
+    /// <summary>AwaitingApproval → Reserving: the review was approved (decision in SQL).</summary>
+    public const string ReviewApproved = "ReviewApproved";
+
+    /// <summary>AwaitingApproval → Rejected: the review was rejected (decision in SQL).</summary>
+    public const string ReviewRejected = "ReviewRejected";
+
+    /// <summary>AwaitingApproval → Rejected: the last review round expired without a decision.</summary>
+    public const string ReviewExpired = "ReviewExpired";
 }
 
 /// <summary>

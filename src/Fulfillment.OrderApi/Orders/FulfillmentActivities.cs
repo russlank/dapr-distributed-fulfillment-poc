@@ -11,9 +11,14 @@ public sealed class ValidateFulfillmentOrderActivity(FulfillmentSteps steps) : W
     public override Task<OrderValidationResult> RunAsync(WorkflowActivityContext context, ValidateOrderRequest input) => steps.ValidateAsync(input);
 }
 
-public sealed class RecordFulfillmentChecksActivity(FulfillmentSteps steps) : WorkflowActivity<RecordChecksRequest, StepResult>
+public sealed class RecordFulfillmentChecksActivity(FulfillmentSteps steps) : WorkflowActivity<RecordChecksRequest, ChecksRecorded>
 {
-    public override Task<StepResult> RunAsync(WorkflowActivityContext context, RecordChecksRequest input) => steps.RecordChecksAsync(input);
+    public override Task<ChecksRecorded> RunAsync(WorkflowActivityContext context, RecordChecksRequest input) => steps.RecordChecksAsync(input);
+}
+
+public sealed class BeginStubFulfillmentActivity(FulfillmentSteps steps) : WorkflowActivity<BeginFulfillmentRequest, StepResult>
+{
+    public override Task<StepResult> RunAsync(WorkflowActivityContext context, BeginFulfillmentRequest input) => steps.BeginFulfillmentAsync(input);
 }
 
 public sealed class ApplyStubFulfillmentStepActivity(FulfillmentSteps steps) : WorkflowActivity<StubStepRequest, StepResult>
