@@ -38,8 +38,20 @@ scoped to one drill run; unfired rows are removed by the drill's cleanup.
 |---|---|
 | `AfterProbeEffectCommitBeforeActivityCompletion` | inventory service, after the probe effect transaction commits, before the activity returns |
 | `BeforeWorkflowStartCall` | order API start dispatcher, after the attempt is recorded, before the workflow host is called (key: order id, `N` format) |
+| `BeforeStubFulfillmentStep` | order API, before a simulated step's transaction (key: the step's operation key) |
+| `AfterStubEffectCommitBeforeActivityCompletion` | order API, after a simulated step committed, before the activity returns |
+| `AfterOrderStatusUpdate`, `AfterOrderStatusHistoryInsert`, `AfterStubEffectInsert`, `AfterStartRequestClose` | order API, between the statements of a fulfillment transaction (before its commit) |
+| `AfterTerminalCommitBeforeActivityCompletion` | order API, after the terminal transaction committed, before the activity returns |
 
 Further boundaries arrive with the functionality they test.
+
+## Drill-Only Controls
+
+| Control | Does |
+|---|---|
+| `scripts/drills/sql/reset-start-request.sql` (`drill_reset_start_request` in `scripts/drills/lib.sh`) | puts the start request of **one terminal order** back to `Pending` (an operator error or a bug), due after a given delay so the drill can observe it first; refuses unless the database has the drill schema, the order is terminal, and the request is `Closed`; keeps the original row in `drill.StartRequestBackup` |
+| `scripts/drills/sql/restore-start-request.sql` (`drill_restore_start_request`) | puts the saved row back |
+| `POST /internal/drill/fulfillment/{orderId}/schedule` on the workflow host (`drill_schedule_fulfillment`) | schedules `fulfill-{orderId:N}` directly through the Dapr workflow API, without the management API's existence check; returns Dapr's answer. Compiled only into drill builds, mapped only in the drill environment, app token required |
 
 ## Lifecycle of a Drill Script
 
@@ -57,5 +69,8 @@ Further boundaries arrive with the functionality they test.
 
 ```bash
 bash scripts/stack-up.sh --drill
-bash scripts/drills/R00-failpoint-selftest.sh
+bash scripts/drills/R00-failpoint-selftest.sh      # core profile only (one inventory replica)
+bash scripts/scenarios/S49-execution-fence.sh
+bash scripts/stack-up.sh --drill --replicas
+bash scripts/checks/fulfillment-recovery-check.sh   # replicas profile
 ```

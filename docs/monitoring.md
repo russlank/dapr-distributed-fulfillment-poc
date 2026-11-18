@@ -28,7 +28,7 @@ name. Health endpoints are excluded from tracing.
 
 | Metric | Meaning |
 |---|---|
-| `workflow_start_attempts_total{result}` | start attempts by result: `Started`, `AlreadyExists`, `Ambiguous`, `Rejected`, `LeaseLost` |
+| `workflow_start_attempts_total{result}` | start attempts by result: `Started`, `AlreadyExists`, `Ambiguous`, `Rejected`, `LeaseLost`, `AlreadyClosed` (the order completed before the start was acknowledged), `Unexpected` |
 | `workflow_start_requests_closed_terminal_total` | start requests closed because the order was already terminal |
 | `fence_rejections_total` | execution claims rejected because the order was already terminal |
 

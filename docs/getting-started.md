@@ -65,8 +65,10 @@ curl -s -X POST http://127.0.0.1:8080/orders -H "X-Api-Key: $CUSTOMER_API_KEY" \
 ```
 
 Within about a second the start dispatcher starts its workflow through the
-workflow host. The workflow is still a minimal shell (it claims execution and
-ends), so the order stays `Submitted`; the execution view shows the start:
+workflow host, and within a few seconds more the order is `Completed` (the
+fulfillment steps are simulated in this version). `GET /orders/<orderId>`
+shows the status and its history; the execution view shows the start, the
+checks, the simulated effects, and the workflow:
 `curl -s http://127.0.0.1:8080/system/orders/<orderId>/execution -H "X-Api-Key: $ADMIN_API_KEY"`.
 
 ## Stop and Reset

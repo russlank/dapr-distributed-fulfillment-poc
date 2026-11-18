@@ -58,6 +58,13 @@ dotnet ef migrations add <Name> --project Fulfillment.OrderApi --output-dir Pers
 
 Generated migration files are excluded from analyzers (`src/.editorconfig`).
 
+## Compute Checks
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `ComputeChecks__SimulatedWorkMilliseconds` | `300` | simulated computation time of each check (the checks run concurrently; S02 measures it) |
+| `ComputeChecks__ReviewScoreThreshold` | unset | risk score from which a review is required. Leave unset: the review wait is not available yet, so a required review fails the run |
+
 ## Dapr
 
 | File | Content |

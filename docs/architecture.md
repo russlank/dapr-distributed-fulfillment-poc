@@ -133,11 +133,20 @@ id `fulfill-{orderId:N}`; it never uses its own sidecar's workflow API.
 | refused (4xx, e.g. the management policy) | stays `Pending`, released with a long backoff (`StartRejected`) |
 | the dispatcher dies | nothing is written; the lease expires and any replica claims the request again |
 
-Every change after the claim is conditional on the lease token. A dispatcher
-whose lease expired and was claimed by another (a hung call, a pause) changes
-nothing when it comes back: its attempt ends `LeaseLost`. A slow start never
-blocks the dispatcher: starts run concurrently, up to a bound, while it keeps
-polling.
+Every change after the claim is conditional on the lease token. When such an
+update changes nothing, the dispatcher reads the request in the same batch to
+say why, and the attempt records it:
+
+| Found | Attempt result | Meaning |
+|---|---|---|
+| a later claim than its own (the claim counter moved on) | `LeaseLost` | its lease expired and another dispatcher took the request over (a hung call, a pause) |
+| no later claim, request `Closed` | `AlreadyClosed` | the order became terminal while the start was in flight: a fast workflow can complete the order, and its terminal transaction close the request, before the start answer arrives |
+| anything else (no later claim, not `Closed`, token gone) | `Unexpected` | no dispatcher or terminal transaction makes this change; logged as an error |
+
+In every case the request is left as it is: a closed request is never
+reopened or marked `Started` afterwards, so the terminal state stands. A
+slow start never blocks the dispatcher: starts run concurrently, up to a
+bound, while it keeps polling.
 
 Two dispatchers can still both call the workflow host for one order (a lease
 that expired during a slow call), and the host's state-first check is not
@@ -150,12 +159,64 @@ audited in `ExecutionClaim`. More than one claim for a non-terminal order is
 normal after a replay or a second start; effects are keyed, so they are not
 repeated.
 
-The fulfillment workflow is a minimal shell for now: it claims execution and
-ends (`ShellClaimed`), or ends at once when the claim is rejected
-(`AlreadyTerminal`). The fulfillment steps follow the claim.
-
-`GET /system/orders/{orderId}/execution` (admin key) shows the start
+`GET /system/orders/{orderId}/execution` (admin key) shows the order's
+status and history, its simulated effects and check results, the start
 request, its attempts, the claims, and the workflow's runtime state.
+
+## Fulfillment Workflow
+
+`FulfillOrderWorkflow` runs on the workflow host; every step that touches
+business state is an activity on the service that owns the data. In this
+version the fulfillment itself is **simulated**: reservation, payment, and
+shipment do not exist yet, and nothing outside `OrderDb` is changed.
+
+| Step | Where | Does |
+|---|---|---|
+| `ClaimFulfillmentExecution` | order API | the execution claim (above); a terminal order ends the run |
+| `ValidateFulfillmentOrder` | order API | `Submitted` → `Validating`, reads the lines, applies the business rules (today: one line per SKU); an order that breaks one is `Rejected` |
+| `PriceOrder`, `AssessOrderRisk` | compute worker | independent checks, scheduled together and awaited together, so they run at the same time (on one or two compute replicas). Pricing uses a fixed stub price list (`stub-v1`); the risk rule scores the order's size |
+| `RecordFulfillmentChecks` | order API | stores both results once (`OrderCheck`) |
+| review gate | workflow | only the path without review exists: a required review needs a durable wait for a recorded human decision, which is not available yet. The review threshold is unset, so no order requires one; if it were set and reached, the run fails visibly instead of continuing as if approved |
+| `ApplyStubFulfillmentStep` | order API | one simulated step per line, in line order (`stub-fulfil`, qualifier `line-N`) |
+| `CompleteStubFulfillment` | order API | the terminal transaction (below) |
+
+Every order API step starts by locking the order row (`UPDLOCK`), so all
+steps of one order, from any replica, retry, or repeated run, are
+serialized. Each step is safe to repeat:
+
+- **Status changes are conditional.** An update applies only if the order is
+  still in the expected status, and the history row is appended in the same
+  transaction with the next sequence number (the lock keeps the numbering
+  contiguous; the unique `(OrderId, Sequence)` index is the backstop). A
+  repeated validation finds `Validating` and changes nothing.
+- **Effects are keyed.** Simulated effects (`StubEffect`) and check results
+  (`OrderCheck`) are stored under their operation key
+  (`{orderId:N}:{step}:{qualifier}`, for example `…:stub-fulfil:line-2`,
+  `…:check:price`). The key is the primary key, so an effect exists at most
+  once; an execution that finds it returns the stored result and only counts
+  a replay (`Replays`). Simulated steps are recognisable everywhere: their
+  names start with `stub-`, a check constraint enforces it, and they have
+  their own table.
+- **A terminal order ends the run.** Every step that finds the order
+  terminal changes nothing and returns `AlreadyTerminal`; the workflow then
+  ends without further steps.
+
+The **terminal transaction** inserts the completion effect
+(`…:stub-complete:1`), moves the order `Validating` → `Completed` with its
+history row (`StubFulfillmentCompleted`), and closes the start request
+(`Closed`, lease cleared), all or nothing. A rejection by validation closes
+the request the same way. The workflow is deterministic: no clock, random
+numbers, or I/O in its code; later steps work from earlier results in its
+history (the validated lines), and keys derive from the order id and step.
+Activities are retried by the workflow on failure (5 attempts, exponential
+backoff); every step tolerates it.
+
+| Status | Set by |
+|---|---|
+| `Submitted` | acceptance |
+| `Validating` | validation (the order stays `Validating` during the simulated steps: the in-between statuses belong to the real steps) |
+| `Completed` | the terminal transaction |
+| `Rejected` | validation |
 
 ## Workflow Management Lives With the Workflow Host
 
@@ -176,10 +237,16 @@ reached by Dapr service invocation and protected by the app token:
 | `POST /internal/workflows/{instanceId}/events/{event}` | raises only to a running instance; otherwise returns the state (a completed instance silently ignores events, a missing one returns an error) |
 
 Access is limited to the calling apps and workflow types the workflow host
-lists explicitly (today `order-api` and the runtime probe workflow). The
+lists explicitly (today `order-api`, with the runtime probe and the
+fulfillment workflow). The
 caller is the app id Dapr attaches to the invocation (`dapr-caller-app-id`);
 other callers get `403`, unknown workflow types `400`. Replacing an existing
 instance is allowed only for probe instances of the probe workflow.
+
+Drill builds add one control under `/internal/drill` (app token, drill
+environment only, compiled out of release images): it schedules
+`fulfill-{orderId:N}` directly through the Dapr workflow API, without the
+existence check, to test the execution fence (scenario S49).
 
 The workflow host keeps no business logic and no database. Callers commit
 their SQL record first and call this API with bounded retries. The

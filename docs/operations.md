@@ -9,6 +9,9 @@
 | `scripts/stack-down.sh` | stops the stack, keeps data |
 | `scripts/reset.sh --yes` | stops the stack and deletes all data volumes |
 | `scripts/scenarios/S00-runtime-smoke.sh` | runtime smoke checks (see [testing.md](testing.md)) |
+| `scripts/scenarios/S02-parallel-checks.sh` | the compute checks of an order run concurrently |
+| `scripts/scenarios/S49-execution-fence.sh`, `S51-concurrent-start.sh` | execution fence and concurrent starts (drill stack) |
+| `scripts/checks/*.sh` | order acceptance, observability, fulfillment recovery (drill stack) |
 | `scripts/drills/*.sh` | resilience drills, drill stack only |
 
 ## Health
@@ -43,7 +46,15 @@ curl -s http://127.0.0.1:8080/system/orders/<orderId>/execution -H "X-Api-Key: $
 
 `LastErrorCode` on the start request names the last problem
 (`StartAmbiguous`, `StartRejected`, `OrderTerminal`); the attempts list shows
-every call with its dispatcher and result.
+every call with its dispatcher and result. A request is `Closed` by the
+transaction that makes its order terminal; `Started` may never be seen for a
+fast order (the attempt then ends `AlreadyClosed`). `OrderTerminal` on a
+closed request means the dispatcher found a pending request of an order that
+was already terminal and closed it without starting anything.
+
+An order that stays `Validating` with a `Failed` workflow whose failure says
+a review is required means `ComputeChecks__ReviewScoreThreshold` is set; the
+review path does not exist yet.
 
 ## Restarting a Replica
 

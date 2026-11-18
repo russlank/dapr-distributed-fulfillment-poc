@@ -3,6 +3,67 @@
 What broke, what surprised us, and what we changed. Newest first. Each entry
 keeps the expectation that turned out wrong.
 
+## 2026-11-18: Fulfillment steps, terminal transaction, execution fence on completed orders
+
+### A start acknowledged after the order completed looked like a lost lease
+
+- **Expected (before):** a token-fenced update of a start request that
+  changes nothing means another dispatcher took the lease over.
+- **Wrong because:** with the fulfillment steps in place, a fast workflow
+  can complete its order, and the terminal transaction close the start
+  request (clearing the lease token), before the start answer reaches the
+  dispatcher. Its update then changes nothing although no other dispatcher
+  was involved.
+- **Fix:** when a fenced update changes nothing, the dispatcher reads the
+  request in the same batch: a later claim (the claim counter moved past its
+  own) is `LeaseLost`; otherwise a `Closed` request is `AlreadyClosed`;
+  anything else is `Unexpected` (logged as an error). The request is never
+  reopened. An integration test forces the order of events (the fake
+  workflow host runs the real steps to completion before it answers); no
+  timing is involved.
+
+### The drill reset of a start request failed on a filtered index
+
+- **Expected:** the drill-only SQL reset runs through `sqlcmd` like the
+  other drill statements.
+- **Observed:** `UPDATE failed because the following SET options have
+  incorrect settings: 'QUOTED_IDENTIFIER'` (first S49 run, `FAIL` before any
+  change: the transaction rolled back).
+- **Cause:** `sqlcmd` runs with `QUOTED_IDENTIFIER OFF` unless `-I` is given;
+  updating a table with a filtered index (the dispatcher's due-work index on
+  `WorkflowStartRequest`) requires it `ON`. Earlier drill statements only
+  touched `drill.Failpoint`, which has no such index.
+- **Fix:** drill SQL scripts run with `-I`. The next S49 run: `PASS`.
+
+### Scheduling a completed fulfillment instance again replaces it
+
+- **Observed (S49 variant D):** the workflow host's drill-only control
+  scheduled `fulfill-{orderId:N}` of a completed order directly through the
+  Dapr workflow API: Dapr accepted it (`scheduled: true`, previous status
+  `Completed`) and started a new run with a new creation time, as it did for
+  the runtime probe. The new run's claim found the order `Completed` and
+  ended `AlreadyTerminal`: one more fence rejection and audit row, no other
+  activity, effects and history unchanged.
+- **Consequence:** none; the design does not depend on Dapr refusing the
+  schedule. It confirms that the execution claim, not the runtime, keeps a
+  completed order from running again.
+
+### The execution view lost the workflow for a while after the workflow hosts restarted
+
+- **Expected:** once a run completed after every workflow-host replica was
+  killed and started again, the order API's execution view shows it.
+- **Observed (first fulfillment recovery check):** the order was already
+  `Completed` with correct rows, but the view's `workflow` was empty about
+  15 s after both hosts were ready again; a minute later it showed the
+  completed instance. The run itself had resumed and completed meanwhile.
+- **Cause:** not determined. The view returns no workflow when the workflow
+  host's management API cannot be reached through service invocation (it
+  catches that case), so the call failed for a while after the restart.
+  Possibly stale name resolution in the calling sidecar; not verified.
+- **Consequence:** the business state does not depend on it. Start
+  requests issued in such a window stay `Pending` and are retried. The
+  recovery check now waits up to 60 s for the view before judging.
+
 ## 2026-11-18: Workflow start dispatcher and execution claim
 
 ### Every replica re-claimed its own expired leases

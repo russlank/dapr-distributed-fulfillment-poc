@@ -22,10 +22,15 @@ cd src && dotnet test --project Fulfillment.UnitTests -c Release
 Deterministic, no infrastructure. They cover order request parsing, contract
 bounds, the idempotency hash (invariant to member order and whitespace,
 sensitive to every field and to line order), messages that never quote
-values, the order model and instance-id rule, the fulfillment workflow shell
-on a fake context (claim on `order-api`, fenced end), the classification of
-workflow-host answers (always the management API, one idempotency key),
-dispatcher backoff, the management policy entry for the fulfillment workflow, operation keys, build identity,
+values, the order model and instance-id rule, the fulfillment workflow on a
+fake context (every step on its owning app in order; both checks scheduled
+before either completes; a terminal order found at any step ends the run;
+rejection ends it before the checks; a required review fails it before any
+simulated step; the same input twice gives the same calls and inputs), the
+key scheme and the stub price list and risk rule, the validation rules, the
+classification of a fenced dispatcher update (`LeaseLost`, `AlreadyClosed`,
+`Unexpected`), the classification of workflow-host answers (always the
+management API, one idempotency key), dispatcher backoff, the management policy entry for the fulfillment workflow, operation keys, build identity,
 the caller-side invocation retries (5xx and transport errors retried with the
 same idempotency key, 4xx not retried, bounded attempts), the runtime probe
 workflow on a fake workflow context (execution claim rejection, step order,
@@ -59,8 +64,10 @@ persisted rows with plain SQL, independent of the model under test.
 | restart | after the host is disposed and connection pools cleared, a new host returns the same order for the retry |
 | contract | invalid JSON, unknown, duplicate, missing, or null members, bounds, missing or invalid keys, oversize bodies, missing or wrong API key: refused with a stable code, nothing persisted, no input echoed |
 | dispatcher | real dispatchers (separate identities, like replicas) on one database against a fake workflow host: start and mark `Started`; existing instance; lost answer after the instance was created (`Pending` with backoff, then found on the next attempt, one instance); refusal (long backoff); terminal guard (closed, no call); a held lease is not claimed; crash after starting (lease expiry, recovery by another dispatcher, the old token changes nothing); a slow start outliving its lease (overlapping attempts, the stale one `LeaseLost`); three concurrent dispatchers start 30 orders exactly once; the hosted dispatcher starts accepted orders and is not blocked by a slow start |
+| start acknowledgement | forced order of events, no timing: the instance is created, the workflow's real steps complete the order (the request is closed), and only then does the start answer reach the dispatcher: the attempt ends `AlreadyClosed`, the request stays `Closed` (never `Started`), nothing is started again; the same with a lost answer (not reopened with backoff); a stale dispatcher overtaken by a later claim is still `LeaseLost` after the completion; an unknown writer's change is `Unexpected` (logged as an error) and left alone |
+| fulfillment steps | all steps: `Completed`, history `Submitted`/`Validating`/`Completed`, one effect per key, request `Closed`; repeated and 20 concurrent validations transition once; a duplicate SKU is `Rejected` with the request closed in the same transaction; a repeated simulated step is applied once and counted as a replay; a crash after its commit (before the result is returned) is retried on another replica and finds the effect; a fault after each statement of the terminal transaction (status, history, effect, request close) rolls all of them back and the retry completes; a crash after the terminal commit changes nothing on retry; 20 concurrent completions make one transition; simulated steps racing the completion never add an effect after it; steps on a terminal order change nothing; completion of an order that is not `Validating` fails without change; repeated check results keep the first |
 | fence | the claim counts every claim of a non-terminal order and audits it; terminal orders (all four statuses) are rejected, counted, and audited; 20 concurrent claims all count; an unknown order fails without writing |
-| schema | migrations apply twice without change; the API refuses to start on an unmigrated database; the database rejects a second start request, a second order per key, duplicate instance ids or history sequences, out-of-range lines, unknown statuses, and inconsistent start-request lifecycle or lease values |
+| schema | migrations apply twice without change; the API refuses to start on an unmigrated database; the database rejects a second start request, a second order per key, duplicate instance ids or history sequences, out-of-range lines, unknown statuses, inconsistent start-request lifecycle or lease values, a second effect per operation key, a simulated step not named `stub-…`, a second result per check, and unknown attempt results |
 
 ## Scenarios
 
@@ -84,12 +91,12 @@ with `--replicas` for ACC-4). Evidence: `artifacts/checks/ACC-<time>/`.
 
 | Check | PASS when (from `OrderDb` rows) |
 |---|---|
-| ACC-1 accept | `201`; order `Submitted`, both lines, history row 1, key, start request (`Pending`, or already `Started`) with `fulfill-{orderId:N}` |
-| ACC-2 replay | same key and payload through the second replica: `200`, same order, row counts unchanged |
+| ACC-1 accept | `201 Submitted`; both lines, history row 1, key, start request with `fulfill-{orderId:N}` (the order may already be further on when the rows are read: no transient status or request state is required) |
+| ACC-2 replay | same key and payload through the second replica: `200`, same order, acceptance row counts unchanged |
 | ACC-3 conflict | same key, other payload: `422 idempotency-key-reused`, row counts unchanged |
 | ACC-4 replicas | 20 concurrent submissions with one key, alternating `order-api` and `order-api-2`: one `201`, nineteen `200`, one order (`UNVERIFIED` without the second replica) |
 | ACC-5 restart | after a cold restart of the order API the retry returns the same order |
-| ACC-6 dispatched | the start request becomes `Started`; the workflow ran (`Completed`, `ShellClaimed`, at least one claim); its state in `DaprStateDb` belongs to `workflow-host` only, none to `order-api`'s own sidecar |
+| ACC-6 completed | started by the dispatcher; the order is `Completed` with history `Submitted`, `Validating`, `Completed`; the start request `Closed` without error code (`Started` need not be observed); one simulated effect per key (two lines, completion); workflow `Completed` with outcome `Completed`; its state in `DaprStateDb` belongs to `workflow-host` only, none to `order-api`'s own sidecar |
 
 ### S51 Concurrent Workflow Start
 
@@ -108,12 +115,54 @@ while the first attempt is still in flight. Evidence:
 | Check | PASS when (from `OrderDb` and `DaprStateDb` rows) |
 |---|---|
 | S51-race | at least one order has overlapping attempts from both replicas, and the earlier ended `LeaseLost` (otherwise `UNVERIFIED`, which fails the run) |
-| S51-start | 20 orders, 20 start requests, all `Started` without error code or lease; every `LeaseLost` attempt has another attempt that recorded the start |
-| S51-instance | every instance `Completed` on `workflow-host` with the shell outcome; claim rows equal `ExecutionClaims` (at least 1); no fence rejection; no workflow state under `order-api` |
+| S51-start | 20 orders, 20 start requests, all `Closed` by the completion without error code or lease; every `LeaseLost` attempt has another attempt that recorded the start or found the request closed |
+| S51-instance | every instance `Completed` on `workflow-host` (outcome `Completed`, or `AlreadyTerminal` if a second schedule replaced the finished instance); claim rows equal claims plus fence rejections, at least one claim (more are allowed); no workflow state under `order-api` |
+| S51-effects | every order `Completed` with one history row per status and exactly one effect per operation key and one result per check |
 | S51-accept | 5 keys × 4 concurrent identical submissions over both replicas: one order per key (5 × `201`, 15 × `200`) |
 
-With the fulfillment steps in place, S51 also asserts that every order ends
-`Completed` with one effect per operation key.
+### S02 Parallel Independent Checks
+
+`bash scripts/scenarios/S02-parallel-checks.sh` on any ready stack. 10 orders
+are fulfilled; each check stores where and when it ran (compute replica
+clock; replicas share the host clock) and takes a simulated 300 ms.
+Evidence: `artifacts/scenarios/S02-<time>/`.
+
+| Check | PASS when (from `OrderDb` rows) |
+|---|---|
+| S02-1 completed | every order `Completed`, with a price and a risk result |
+| S02-2 overlap | for every order the two execution intervals overlap (`max(start) < min(end)`) and the check phase is shorter than the sum of both: they ran concurrently, not one after the other |
+
+### S49 Execution Fence on a Completed Order
+
+`bash scripts/scenarios/S49-execution-fence.sh` on a drill stack. A fresh
+order is fulfilled; its business rows are fingerprinted (status, history,
+effects with replay counts, check results). Evidence:
+`artifacts/drills/S49-<run>/` (fingerprints, execution views, Dapr's answer).
+
+| Check | PASS when |
+|---|---|
+| S49-setup | order `Completed`, request `Closed`, workflow `Completed` |
+| S49-C-reset | the drill-only reset makes the request `Pending` while the order is `Completed` (observed before the dispatcher acts) |
+| S49-C-guard | the dispatcher closes it again (`OrderTerminal`) without a start attempt; the instance is unchanged |
+| S49-C-unchanged | fingerprint, claims, and attempts unchanged |
+| S49-D-schedule | the drill-only control's direct schedule of the existing id was accepted by Dapr (else D is `UNVERIFIED`) |
+| S49-D-fenced | the new run ended `AlreadyTerminal` at the claim: one more fence rejection and one audit row, no new `Proceed` claim |
+| S49-D-unchanged | fingerprint unchanged |
+| S49-D-metric | `fence_rejections_total` rose in Prometheus |
+| S49-restore | the cleanup puts the start request back to its saved row |
+
+### Fulfillment Recovery Check
+
+`bash scripts/checks/fulfillment-recovery-check.sh` on a drill stack with
+`--replicas`. Each check fulfils a fresh two-line order and injects one fault;
+the order must end `Completed` once, with one effect per key. Evidence:
+`artifacts/drills/REC-<run>/`.
+
+| Check | Fault | PASS when |
+|---|---|---|
+| REC-1 crash after commit | the order API replica running the first simulated step ends right after the step committed (`FailFast`) | the step ran again, found its effect (replay counted, committed by the crashed replica), the order completed once |
+| REC-2 workflow host down | every workflow-host replica is `SIGKILL`ed while a step is held (10 s), restarted after 5 s | the run resumed from its history and completed once |
+| REC-3 order API replica | the replica holding a step (before its transaction) is `SIGKILL`ed | the step ran on the other replica; completed once |
 
 ## Drills
 

@@ -9,11 +9,17 @@
 # PASS when, from OrderDb and DaprStateDb rows:
 #   S51-race       concurrent start attempts actually occurred: at least one order has overlapping
 #                  attempts from both replicas, and the late attempt ended LeaseLost (else UNVERIFIED)
-#   S51-start      every order: one start request, Started, no error code, no lease left; every
-#                  LeaseLost attempt has another attempt (other token) that recorded the start
-#   S51-instance   every order: its workflow ran on workflow-host (Completed, shell outcome), claims
-#                  counted and audited (claim rows = ExecutionClaims >= 1, no fence rejection), no
-#                  workflow state under order-api's own sidecar
+#   S51-start      every order: one start request, Closed with the order's completion, no error code,
+#                  no lease left; every LeaseLost attempt has another attempt (other token) that
+#                  recorded the start or found the request closed by the completion. Started is not
+#                  required to be observed: a fast run closes the request first
+#   S51-instance   every order: its workflow ran on workflow-host (Completed; outcome Completed, or
+#                  AlreadyTerminal when a second schedule replaced the finished instance), claims
+#                  counted and audited (claim rows = claims + fence rejections, claims >= 1; more
+#                  than one claim is allowed), no workflow state under order-api's own sidecar
+#   S51-effects    every order Completed with one history row per status (Submitted, Validating,
+#                  Completed) and exactly one committed effect per operation key (stub-fulfil:line-1,
+#                  stub-complete:1) and per check; repeated executions show only as replay counts
 #   S51-accept     concurrent identical submissions over both replicas: one order per key
 DRILL_ID=S51
 . "$(dirname "$0")/../drills/lib.sh"
@@ -54,8 +60,8 @@ for i in $(seq 1 "$N"); do
   submit "$base" "$CUSTOMER_PREFIX-key-$i" '{"customerId":"'$CUSTOMER_PREFIX-$i'","lines":[{"sku":"SKU-1","quantity":1}]}' >> "$DRILL_DIR/accepted.txt"
 done
 accepted="$(grep -c '^201 ' "$DRILL_DIR/accepted.txt")"
-all_started() { [[ "$(sql OrderDb "SELECT COUNT(*) FROM orders.WorkflowStartRequest WHERE State = 'Started' AND OrderId IN ($run_orders)")" == "$N" ]]; }
-wait_until 120 "all $N start requests Started" all_started
+all_completed() { [[ "$(sql OrderDb "SELECT COUNT(*) FROM orders.WorkflowStartRequest r JOIN orders.[Order] o ON o.OrderId = r.OrderId WHERE r.State = 'Closed' AND o.Status = 'Completed' AND r.OrderId IN ($run_orders)")" == "$N" ]]; }
+wait_until 180 "all $N orders Completed with their start request Closed" all_completed
 fired="$(sql OrderDb "SELECT COUNT(*) FROM drill.Failpoint WHERE DrillRunId LIKE '$DRILL_RUN_ID-%' AND FiredAt IS NOT NULL")"
 FAULT_OBSERVED="holds fired: $fired"
 # Let every held attempt finish (hold + call) before reading the attempt log.
@@ -83,16 +89,17 @@ else
   assert S51-race UNVERIFIED "concurrent start attempts from both replicas on one order" "$observed"
 fi
 
-# S51-start: one Started request per order, untouched by stale dispatchers.
-start="$(sql OrderDb "SELECT CONCAT(COUNT(*), '|', SUM(CASE WHEN r.State = 'Started' AND r.LastErrorCode IS NULL AND r.LeaseToken IS NULL AND r.StartedAt IS NOT NULL THEN 1 ELSE 0 END), '|',
+# S51-start: one request per order, closed by the completion, untouched by stale dispatchers.
+start="$(sql OrderDb "SELECT CONCAT(COUNT(*), '|', SUM(CASE WHEN r.State = 'Closed' AND r.LastErrorCode IS NULL AND r.LeaseToken IS NULL AND r.ClosedAt IS NOT NULL THEN 1 ELSE 0 END), '|',
   (SELECT COUNT(*) FROM orders.[Order] WHERE CustomerId LIKE '$CUSTOMER_PREFIX-%'), '|',
   (SELECT COUNT(*) FROM orders.WorkflowStartAttempt l WHERE l.OrderId IN ($run_orders) AND l.Result = 'LeaseLost'
      AND NOT EXISTS (SELECT 1 FROM orders.WorkflowStartAttempt w WHERE w.OrderId = l.OrderId AND w.LeaseToken <> l.LeaseToken
-                     AND w.Result IN ('Started', 'AlreadyExists'))))
+                     AND w.Result IN ('Started', 'AlreadyExists', 'AlreadyClosed'))))
   FROM orders.WorkflowStartRequest r WHERE r.OrderId IN ($run_orders)")"
 IFS='|' read -r requests clean orders unexplained <<< "$start"
 if [[ "$accepted" == "$N" && "$orders" == "$N" && "$requests" == "$N" && "$clean" == "$N" && "${unexplained:-1}" == 0 ]]; then
-  assert S51-start PASS "$N orders, $N start requests, all Started cleanly; every lost lease has another attempt that recorded the start" "accepted=$accepted orders=$orders requests=$requests clean=$clean lease-lost-without-winner=$unexplained"
+  results="$(sql OrderDb "SELECT STRING_AGG(CONCAT(Result, 'x', n), ' ') FROM (SELECT Result, COUNT(*) AS n FROM orders.WorkflowStartAttempt WHERE OrderId IN ($run_orders) GROUP BY Result) s")"
+  assert S51-start PASS "$N orders, $N start requests, all Closed cleanly by the completion; every lost lease has another attempt that started or found it closed" "accepted=$accepted orders=$orders requests=$requests clean=$clean lease-lost-without-winner=$unexplained; attempt results: $results"
 else
   assert S51-start FAIL "$N/$N/$N/$N/0" "accepted=$accepted orders=$orders requests=$requests clean=$clean lease-lost-without-winner=$unexplained"
 fi
@@ -108,18 +115,38 @@ for order in $(sql OrderDb "$run_orders"); do
   claim_rows="$(sql OrderDb "SELECT COUNT(*) FROM orders.ExecutionClaim WHERE OrderId = '$order'")"
   own_rows="$(sql DaprStateDb "SELECT COUNT(*) FROM dbo.state WHERE [Key] LIKE 'order-api||%||fulfill-$normalized||%'")"
   host_rows="$(sql DaprStateDb "SELECT COUNT(*) FROM dbo.state WHERE [Key] LIKE 'workflow-host||%||fulfill-$normalized||%'")"
-  if [[ "$(json_get "$execution" workflow.status)" == Completed && "$(json_get "$execution" workflow.output.outcome)" == ShellClaimed \
-        && "${claims:-0}" -ge 1 && "$claim_rows" == "$claims" && "$rejections" == 0 && "$own_rows" == 0 && "${host_rows:-0}" -gt 0 ]]; then
+  outcome="$(json_get "$execution" workflow.output.outcome)"
+  if [[ "$(json_get "$execution" workflow.status)" == Completed && ( "$outcome" == Completed || "$outcome" == AlreadyTerminal ) \
+        && "${claims:-0}" -ge 1 && "$claim_rows" == "$(( claims + rejections ))" && "$own_rows" == 0 && "${host_rows:-0}" -gt 0 ]]; then
     instances_ok=$((instances_ok + 1))
   else
-    details+=("$order: status=$(json_get "$execution" workflow.status) claims=$claims rows=$claim_rows rejections=$rejections order-api=$own_rows workflow-host=$host_rows")
+    details+=("$order: status=$(json_get "$execution" workflow.status)/$outcome claims=$claims rows=$claim_rows rejections=$rejections order-api=$own_rows workflow-host=$host_rows")
   fi
 done
 claim_spread="$(sql OrderDb "SELECT STRING_AGG(CONCAT(ExecutionClaims, 'x', n), ' ') FROM (SELECT ExecutionClaims, COUNT(*) AS n FROM orders.WorkflowStartRequest WHERE OrderId IN ($run_orders) GROUP BY ExecutionClaims) s")"
+rejected_total="$(sql OrderDb "SELECT SUM(FenceRejections) FROM orders.WorkflowStartRequest WHERE OrderId IN ($run_orders)")"
 if [[ "$instances_ok" == "$N" ]]; then
-  assert S51-instance PASS "every instance Completed on workflow-host; claims = audit rows >= 1; no rejection; no order-api state" "$instances_ok/$N ok; claims per order (claims x orders): $claim_spread"
+  assert S51-instance PASS "every instance Completed on workflow-host; claim rows = claims + rejections, claims >= 1; no order-api state" "$instances_ok/$N ok; claims per order (claims x orders): $claim_spread; fence rejections: $rejected_total"
 else
   assert S51-instance FAIL "$N/$N" "$instances_ok/$N ok; ${details[*]:0:3}"
+fi
+
+# S51-effects: completed once, one committed effect per operation key; repeats are replays only.
+effects="$(sql OrderDb "SELECT CONCAT(
+  (SELECT COUNT(*) FROM orders.[Order] WHERE OrderId IN ($run_orders) AND Status = 'Completed'), '|',
+  (SELECT COUNT(*) FROM (SELECT h.OrderId FROM orders.OrderStatusHistory h WHERE h.OrderId IN ($run_orders) GROUP BY h.OrderId
+     HAVING STRING_AGG(CONCAT(h.Sequence, ':', h.ToStatus), ',') WITHIN GROUP (ORDER BY h.Sequence) = '1:Submitted,2:Validating,3:Completed') x), '|',
+  (SELECT COUNT(*) FROM (SELECT e.OrderId FROM orders.StubEffect e WHERE e.OrderId IN ($run_orders) GROUP BY e.OrderId
+     HAVING STRING_AGG(SUBSTRING(e.OperationKey, 34, 100), ',') WITHIN GROUP (ORDER BY e.OperationKey) = 'stub-complete:1,stub-fulfil:line-1') x), '|',
+  (SELECT COUNT(*) FROM (SELECT c.OrderId FROM orders.OrderCheck c WHERE c.OrderId IN ($run_orders) GROUP BY c.OrderId HAVING COUNT(*) = 2) x), '|',
+  (SELECT ISNULL(SUM(Replays), 0) FROM orders.StubEffect WHERE OrderId IN ($run_orders)), '|',
+  (SELECT COUNT(*) FROM orders.StubEffect WHERE OrderId IN ($run_orders)))")"
+IFS='|' read -r completed_orders history_ok effects_ok checks_ok replays effect_rows <<< "$effects"
+observed="completed=$completed_orders history-ok=$history_ok effects-ok=$effects_ok checks-ok=$checks_ok effect rows=$effect_rows replays=$replays"
+if [[ "$completed_orders" == "$N" && "$history_ok" == "$N" && "$effects_ok" == "$N" && "$checks_ok" == "$N" ]]; then
+  assert S51-effects PASS "every order Completed once (3 history rows), one effect per operation key, one result per check" "$observed"
+else
+  assert S51-effects FAIL "$N/$N/$N/$N" "$observed"
 fi
 
 # S51-accept: concurrent identical submissions over both replicas.
