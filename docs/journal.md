@@ -40,6 +40,38 @@ keeps the expectation that turned out wrong.
 - **Fix:** R00 refuses stacks with additional inventory replicas; it passes
   on the core drill stack.
 
+### The SQL Server clock stepped back under load
+
+- **Expected:** a lease of 800 ms set by one statement has expired 1.2 s
+  later by the same server's clock.
+- **Observed:** intermittently (about 1 in 7 full integration runs), the
+  crash-recovery test found the lease still valid: the row expired 1.4 s
+  *after* the server's current time, so `SYSUTCDATETIME()` had gone back by
+  about 1.8 s between the two statements (SQL Server on Linux in Docker
+  Desktop's WSL2 VM, under the parallel test load).
+- **Consequence for the design:** none for correctness. Leases use the
+  database clock only; a backward step only delays a takeover, and an early
+  expiry (forward step) is covered by lease tokens, the state-first start,
+  and the execution claim.
+- **Fix (tests):** lease tests wait until the database reports the lease
+  expired instead of sleeping on the client; the slow-call test holds the
+  call on an explicit gate; the backoff in tests is 10 s. Afterwards: 20
+  isolated and 21 full-suite runs without this failure.
+
+### Open: two intermittent test failures without a known cause
+
+- `RunOnce_HostRefuses_ReleasesWithLongBackoff` failed once in about 40
+  full-suite runs (`LastErrorCode` was not `StartRejected`; the run took 4 s
+  instead of milliseconds). Not reproduced in 21 further runs. The test now
+  reports the start-request row and the dispatcher's log on failure. A
+  transient SQL error in the release step would produce exactly this (the
+  dispatcher then leaves the lease to expire, which is the intended
+  behavior); unconfirmed.
+- Twice, every test failed at fixture start: the Testcontainers SQL Server
+  container disappeared during start-up (`No such container`). Both times the
+  run started right after a previous test process had ended; memory was not
+  short. Not reproduced in 21 further runs.
+
 ### Smaller problems
 
 - The first concurrent-dispatcher test passed its correctness assertions but

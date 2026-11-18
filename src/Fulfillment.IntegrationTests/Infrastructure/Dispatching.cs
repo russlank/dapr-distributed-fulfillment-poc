@@ -3,6 +3,7 @@ using Fulfillment.Contracts.Workflows;
 using Fulfillment.OrderApi.Dispatch;
 using Fulfillment.ServiceDefaults;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -40,6 +41,11 @@ public sealed class FakeWorkflowHost : IWorkflowStarter
             await Task.Delay(script.DelayBefore, ct);
         }
 
+        if (script.Gate is not null)
+        {
+            await script.Gate.WaitAsync(ct);
+        }
+
         if (script.Refuse)
         {
             return new StartOutcome(StartOutcomeKind.Rejected, "403");
@@ -55,7 +61,8 @@ public sealed class FakeWorkflowHost : IWorkflowStarter
         return created ? new StartOutcome(StartOutcomeKind.Started, "Scheduled") : new StartOutcome(StartOutcomeKind.AlreadyExists, "Completed");
     }
 
-    public sealed record Script(TimeSpan DelayBefore = default, bool LoseAnswer = false, bool Refuse = false)
+    /// <summary>Gate: the call waits until the test completes the task (deterministic "slow call").</summary>
+    public sealed record Script(TimeSpan DelayBefore = default, bool LoseAnswer = false, bool Refuse = false, Task? Gate = null)
     {
         public static Script Normal { get; } = new();
     }
@@ -63,23 +70,62 @@ public sealed class FakeWorkflowHost : IWorkflowStarter
 
 public static class Dispatching
 {
-    public static WorkflowStartDispatcher Create(string connectionString, FakeWorkflowHost host, string replica, TimeSpan lease, int batchSize = 50)
+    public static WorkflowStartDispatcher Create(string connectionString, FakeWorkflowHost host, string replica, TimeSpan lease, int batchSize = 50, CapturingLogger? log = null)
     {
         var services = new ServiceCollection().AddSingleton<IWorkflowStarter>(host).BuildServiceProvider();
         var options = Options.Create(new StartDispatcherOptions
         {
             Lease = lease,
             BatchSize = batchSize,
-            BaseBackoff = TimeSpan.FromSeconds(1),
+            BaseBackoff = TimeSpan.FromSeconds(10), // large against server clock steps
             MaxBackoff = TimeSpan.FromSeconds(60),
             RejectedBackoff = TimeSpan.FromMinutes(5),
         });
         var identity = new RuntimeIdentity("order-api", replica, "test", null, null, null, null, "release", "absent", "test");
         return new WorkflowStartDispatcher(services.GetRequiredService<IServiceScopeFactory>(), new WorkflowStartStore(connectionString),
-            new Failpoints(null, NullLogger<Failpoints>.Instance), options, identity, NullLogger<WorkflowStartDispatcher>.Instance);
+            new Failpoints(null, NullLogger<Failpoints>.Instance), options, identity, (ILogger<WorkflowStartDispatcher>?)log ?? NullLogger<WorkflowStartDispatcher>.Instance);
+    }
+
+    /// <summary>
+    /// Waits until the database itself considers the order's lease expired. Lease decisions use the
+    /// server clock only, which can step (observed: back by about 2 s in the WSL2-hosted container
+    /// under load), so tests never assume that a client-side sleep expired a lease.
+    /// </summary>
+    public static async Task WaitForLeaseExpiryAsync(string connectionString, Guid orderId, CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (await Db.ScalarAsync<int>(connectionString,
+                   "SELECT CASE WHEN LeaseExpiresAt <= SYSUTCDATETIME() THEN 1 ELSE 0 END FROM orders.WorkflowStartRequest WHERE OrderId = @o", ("@o", orderId)) == 0)
+        {
+            if (DateTime.UtcNow > deadline)
+            {
+                throw new TimeoutException("the lease did not expire by server time");
+            }
+
+            await Task.Delay(100, ct);
+        }
     }
 
     /// <summary>Makes every Pending start request of the database due now (skips the backoff wait).</summary>
     public static Task MakeDueAsync(string connectionString) =>
         Db.ExecuteAsync(connectionString, "UPDATE orders.WorkflowStartRequest SET NextAttemptAt = DATEADD(second, -1, SYSUTCDATETIME()) WHERE State = 'Pending'");
+}
+
+/// <summary>Keeps the dispatcher's log entries (with exceptions) for failure messages.</summary>
+public sealed class CapturingLogger : ILogger<WorkflowStartDispatcher>
+{
+    public ConcurrentQueue<string> Entries { get; } = new();
+
+    public IDisposable? BeginScope<TState>(TState state)
+        where TState : notnull => null;
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+    {
+        ArgumentNullException.ThrowIfNull(formatter);
+        Entries.Enqueue($"{logLevel}: {formatter(state, exception)} {exception?.GetType().Name}: {exception?.Message}");
+    }
+
+    public override string ToString() => string.Join(" || ", Entries);
 }

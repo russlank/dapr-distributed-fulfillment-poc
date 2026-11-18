@@ -101,12 +101,14 @@ public sealed class StartDispatcherTests(SqlServerFixture sql) : IAsyncLifetime
     {
         var orderId = await AcceptAsync();
         var host = new FakeWorkflowHost { Behavior = (_, _) => new FakeWorkflowHost.Script(Refuse: true) };
+        var log = new CapturingLogger();
 
-        await Dispatching.Create(db, host, "replica-a", LongLease).RunOnceAsync(TestContext.Current.CancellationToken);
+        await Dispatching.Create(db, host, "replica-a", LongLease, log: log).RunOnceAsync(TestContext.Current.CancellationToken);
 
         var request = await RequestAsync(orderId);
+        Assert.True(Equals(request["LastErrorCode"], StartErrorCodes.StartRejected),
+            $"request: {string.Join(", ", request.Select(kv => $"{kv.Key}={kv.Value}"))}; log: {log}");
         Assert.Equal("Pending", request["State"]);
-        Assert.Equal(StartErrorCodes.StartRejected, request["LastErrorCode"]);
         Assert.Equal(1, await Db.ScalarAsync<int>(db,
             "SELECT CASE WHEN NextAttemptAt > DATEADD(minute, 4, SYSUTCDATETIME()) THEN 1 ELSE 0 END FROM orders.WorkflowStartRequest WHERE OrderId = @o", ("@o", orderId)));
         Assert.Equal(["Rejected"], (await AttemptsAsync(orderId)).Select(a => a["Result"]));
@@ -159,7 +161,7 @@ public sealed class StartDispatcherTests(SqlServerFixture sql) : IAsyncLifetime
         var storeA = new WorkflowStartStore(db);
         var claimA = Assert.Single((await storeA.ClaimDueAsync("replica-a/crashed", 50, TimeSpan.FromMilliseconds(800), ct)).Claimed);
         await host.StartAsync(claimA.InstanceId, new FulfillmentInput(orderId), ct);
-        await Task.Delay(TimeSpan.FromMilliseconds(1200), ct);
+        await Dispatching.WaitForLeaseExpiryAsync(db, orderId, ct);
 
         // Dispatcher B claims the expired lease, finds the instance, and records the start.
         await Dispatching.Create(db, host, "replica-b", LongLease).RunOnceAsync(ct);
@@ -182,14 +184,22 @@ public sealed class StartDispatcherTests(SqlServerFixture sql) : IAsyncLifetime
     {
         var ct = TestContext.Current.CancellationToken;
         var orderId = await AcceptAsync();
-        var host = new FakeWorkflowHost { Behavior = (n, _) => n == 1 ? new FakeWorkflowHost.Script(DelayBefore: TimeSpan.FromSeconds(2.5)) : FakeWorkflowHost.Script.Normal };
+        var release = new TaskCompletionSource();
+        var host = new FakeWorkflowHost { Behavior = (n, _) => n == 1 ? new FakeWorkflowHost.Script(Gate: release.Task) : FakeWorkflowHost.Script.Normal };
         var lease = TimeSpan.FromMilliseconds(800);
         var a = Dispatching.Create(db, host, "replica-a", lease);
         var b = Dispatching.Create(db, host, "replica-b", lease);
 
+        // A's call hangs until released; B claims once the database says A's lease expired.
         var slow = a.RunOnceAsync(ct);
-        await Task.Delay(TimeSpan.FromMilliseconds(1300), ct);
+        while (host.Calls.IsEmpty)
+        {
+            await Task.Delay(50, ct);
+        }
+
+        await Dispatching.WaitForLeaseExpiryAsync(db, orderId, ct);
         await b.RunOnceAsync(ct);
+        release.SetResult();
         await slow;
 
         // Both attempts were in flight at the same time; one instance; the stale one changed nothing.
