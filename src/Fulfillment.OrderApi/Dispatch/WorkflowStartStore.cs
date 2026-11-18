@@ -16,6 +16,52 @@ public static class StartAttemptResults
     public const string Ambiguous = "Ambiguous";
     public const string Rejected = "Rejected";
     public const string LeaseLost = "LeaseLost";
+
+    /// <summary>The order became terminal while the attempt was in flight: the request is Closed, the terminal state stands.</summary>
+    public const string AlreadyClosed = "AlreadyClosed";
+
+    /// <summary>The request changed in a way no dispatcher or terminal transaction produces (logged as an error).</summary>
+    public const string Unexpected = "Unexpected";
+}
+
+/// <summary>What a dispatcher's fenced update found.</summary>
+public enum FencedUpdateOutcome
+{
+    /// <summary>The update was applied: the lease was still held.</summary>
+    Applied,
+
+    /// <summary>Another dispatcher claimed the request after this claim (its lease expired and was taken over).</summary>
+    LeaseLost,
+
+    /// <summary>No later claim, but the request is Closed: the order became terminal meanwhile.</summary>
+    AlreadyClosed,
+
+    /// <summary>No later claim and not Closed, yet the lease token is gone (or the row is): not a known transition.</summary>
+    Unexpected,
+}
+
+/// <summary>Classifies a fenced update that changed nothing, from the row as it is now.</summary>
+public static class FencedUpdates
+{
+    /// <param name="state">The request's state now; null when the row does not exist.</param>
+    /// <param name="attempts">The request's claim count now.</param>
+    /// <param name="claimAttempt">The claim count this dispatcher's claim produced.</param>
+    public static FencedUpdateOutcome Classify(string? state, int attempts, int claimAttempt)
+    {
+        if (state is null)
+        {
+            return FencedUpdateOutcome.Unexpected;
+        }
+
+        // A later claim means the lease was lost, whatever happened afterwards; otherwise only the
+        // terminal transaction (or the terminal guard) can have removed this claim's token.
+        if (attempts > claimAttempt)
+        {
+            return FencedUpdateOutcome.LeaseLost;
+        }
+
+        return state == nameof(WorkflowStartState.Closed) ? FencedUpdateOutcome.AlreadyClosed : FencedUpdateOutcome.Unexpected;
+    }
 }
 
 /// <summary>Error codes stored on a start request (closed code domain).</summary>
@@ -116,8 +162,8 @@ public sealed class WorkflowStartStore(string connectionString)
         await command.ExecuteNonQueryAsync(ct);
     }
 
-    /// <summary>Marks the request Started; false when the lease was lost (the row is unchanged).</summary>
-    public async Task<bool> MarkStartedAsync(ClaimedStartRequest claim, CancellationToken ct)
+    /// <summary>Marks the request Started; anything but Applied leaves the row unchanged.</summary>
+    public async Task<FencedUpdateOutcome> MarkStartedAsync(ClaimedStartRequest claim, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(claim);
         return await ExecuteFencedAsync(
@@ -129,8 +175,8 @@ public sealed class WorkflowStartStore(string connectionString)
             """, claim, null, TimeSpan.Zero, ct);
     }
 
-    /// <summary>Releases the lease for a later attempt; false when the lease was lost (the row is unchanged).</summary>
-    public async Task<bool> ReleaseForRetryAsync(ClaimedStartRequest claim, string errorCode, TimeSpan backoff, CancellationToken ct)
+    /// <summary>Releases the lease for a later attempt; anything but Applied leaves the row unchanged.</summary>
+    public async Task<FencedUpdateOutcome> ReleaseForRetryAsync(ClaimedStartRequest claim, string errorCode, TimeSpan backoff, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(claim);
         return await ExecuteFencedAsync(
@@ -142,10 +188,17 @@ public sealed class WorkflowStartStore(string connectionString)
             """, claim, errorCode, backoff, ct);
     }
 
-    private async Task<bool> ExecuteFencedAsync(string sql, ClaimedStartRequest claim, string? code, TimeSpan backoff, CancellationToken ct)
+    /// <summary>Runs a token-fenced update; when it changes nothing, reads the row in the same batch to classify why.</summary>
+    private async Task<FencedUpdateOutcome> ExecuteFencedAsync(string sql, ClaimedStartRequest claim, string? code, TimeSpan backoff, CancellationToken ct)
     {
         await using var connection = await OpenAsync(ct);
-        await using var command = new SqlCommand(sql, connection);
+        await using var command = new SqlCommand(
+            sql + """
+
+            IF @@ROWCOUNT = 1 SELECT CAST(1 AS bit), NULL, 0;
+            ELSE SELECT CAST(0 AS bit), r.State, r.Attempts FROM (SELECT 1 AS One) x
+                 LEFT JOIN orders.WorkflowStartRequest r ON r.OrderId = @o;
+            """, connection);
         command.Parameters.AddWithValue("@o", claim.OrderId);
         command.Parameters.AddWithValue("@t", claim.LeaseToken);
         if (code is not null)
@@ -154,7 +207,14 @@ public sealed class WorkflowStartStore(string connectionString)
             command.Parameters.AddWithValue("@backoffMs", (int)backoff.TotalMilliseconds);
         }
 
-        return await command.ExecuteNonQueryAsync(ct) == 1;
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        await reader.ReadAsync(ct);
+        if (reader.GetBoolean(0))
+        {
+            return FencedUpdateOutcome.Applied;
+        }
+
+        return FencedUpdates.Classify(reader.IsDBNull(1) ? null : reader.GetString(1), reader.IsDBNull(2) ? 0 : reader.GetInt32(2), claim.Attempt);
     }
 
     private async Task<SqlConnection> OpenAsync(CancellationToken ct)

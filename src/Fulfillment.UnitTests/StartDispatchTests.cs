@@ -4,47 +4,9 @@ using Fulfillment.Contracts.Workflows;
 using Fulfillment.Messaging;
 using Fulfillment.OrderApi.Dispatch;
 using Fulfillment.WorkflowHost;
-using Fulfillment.WorkflowHost.Orders;
 using Xunit;
 
 namespace Fulfillment.UnitTests;
-
-public class FulfillOrderWorkflowTests
-{
-    private static readonly Guid OrderId = Guid.Parse("3f2b8c1e-5a4d-4e6f-9a1b-2c3d4e5f6a7b");
-
-    [Fact]
-    public async Task Run_ClaimProceeds_ClaimsOnOrderApiThenEndsTheShell()
-    {
-        var context = new FakeWorkflowContext(FulfillmentWorkflow.InstanceId(OrderId))
-        {
-            ActivityResult = (_, _) => new ExecutionClaimResult(ExecutionClaimOutcomes.Proceed, "Submitted", 1),
-        };
-
-        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
-
-        var call = Assert.Single(context.ActivityCalls);
-        Assert.Equal(FulfillmentWorkflow.ClaimExecutionActivity, call.Name);
-        Assert.Equal(AppIds.OrderApi, call.TargetAppId);
-        Assert.Equal(new ExecutionClaimRequest(OrderId, "fulfill-3f2b8c1e5a4d4e6f9a1b2c3d4e5f6a7b"), call.Input);
-        Assert.Equal(new FulfillmentResult(FulfillmentOutcomes.ShellClaimed, 1), result);
-    }
-
-    [Fact]
-    public async Task Run_OrderAlreadyTerminal_EndsAfterTheClaimWithoutFurtherSteps()
-    {
-        var context = new FakeWorkflowContext(FulfillmentWorkflow.InstanceId(OrderId))
-        {
-            ActivityResult = (_, _) => new ExecutionClaimResult(ExecutionClaimOutcomes.AlreadyTerminal, "Completed", 1),
-        };
-
-        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
-
-        Assert.Single(context.ActivityCalls);
-        Assert.Equal(FulfillmentOutcomes.Fenced, result.Outcome);
-        Assert.Empty(context.Timers);
-    }
-}
 
 public class StartDispatchTests
 {

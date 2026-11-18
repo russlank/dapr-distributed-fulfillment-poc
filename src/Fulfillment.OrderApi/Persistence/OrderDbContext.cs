@@ -29,6 +29,10 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
 
     public DbSet<ExecutionClaim> ExecutionClaims => Set<ExecutionClaim>();
 
+    public DbSet<StubEffect> StubEffects => Set<StubEffect>();
+
+    public DbSet<OrderCheck> OrderChecks => Set<OrderCheck>();
+
     /// <summary>Applies the SQL Server options shared by the app, the migration job, and the design-time factory.</summary>
     public static void Configure(DbContextOptionsBuilder builder, string connectionString) =>
         builder.UseSqlServer(connectionString, sql => sql.MigrationsHistoryTable("__EFMigrationsHistory", Schema));
@@ -43,6 +47,8 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         ConfigureStartRequest(modelBuilder.Entity<WorkflowStartRequest>());
         ConfigureStartAttempt(modelBuilder.Entity<WorkflowStartAttempt>());
         ConfigureExecutionClaim(modelBuilder.Entity<ExecutionClaim>());
+        ConfigureStubEffect(modelBuilder.Entity<StubEffect>());
+        ConfigureOrderCheck(modelBuilder.Entity<OrderCheck>());
     }
 
     private static string InList<TEnum>(string column)
@@ -148,7 +154,7 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         attempt.ToTable("WorkflowStartAttempt", t =>
         {
             t.HasCheckConstraint("CK_WorkflowStartAttempt_Result",
-                "[Result] IS NULL OR [Result] IN ('Started', 'AlreadyExists', 'Ambiguous', 'Rejected', 'LeaseLost')");
+                "[Result] IS NULL OR [Result] IN ('Started', 'AlreadyExists', 'Ambiguous', 'Rejected', 'LeaseLost', 'AlreadyClosed', 'Unexpected')");
         });
         attempt.HasKey(a => a.Id);
         attempt.Property(a => a.Id).UseIdentityColumn();
@@ -177,6 +183,43 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         claim.Property(c => c.ClaimedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
         claim.HasIndex(c => new { c.OrderId, c.ClaimedAt }).HasDatabaseName("IX_ExecutionClaim_Order");
         claim.HasOne<Order>().WithMany().HasForeignKey(c => c.OrderId).OnDelete(DeleteBehavior.Cascade);
+    }
+
+    private static void ConfigureStubEffect(EntityTypeBuilder<StubEffect> effect)
+    {
+        effect.ToTable("StubEffect", t =>
+        {
+            t.HasCheckConstraint("CK_StubEffect_Step", "[Step] LIKE 'stub-%'");
+            t.HasCheckConstraint("CK_StubEffect_Replays", "[Replays] >= 0");
+        });
+        effect.HasKey(e => e.OperationKey);
+        effect.Property(e => e.OperationKey).HasMaxLength(200).IsUnicode(false);
+        effect.Property(e => e.Step).HasMaxLength(32).IsUnicode(false);
+        effect.Property(e => e.Qualifier).HasMaxLength(32).IsUnicode(false);
+        effect.Property(e => e.AppliedBy).HasMaxLength(64).IsUnicode(false);
+        effect.Property(e => e.AppliedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+        effect.HasIndex(e => e.OrderId).HasDatabaseName("IX_StubEffect_Order");
+        effect.HasOne<Order>().WithMany().HasForeignKey(e => e.OrderId).OnDelete(DeleteBehavior.Cascade);
+    }
+
+    private static void ConfigureOrderCheck(EntityTypeBuilder<OrderCheck> check)
+    {
+        check.ToTable("OrderCheck", t =>
+        {
+            t.HasCheckConstraint("CK_OrderCheck_Name", "[CheckName] IN ('price', 'risk')");
+            t.HasCheckConstraint("CK_OrderCheck_Replays", "[Replays] >= 0");
+        });
+        check.HasKey(c => new { c.OrderId, c.CheckName });
+        check.Property(c => c.CheckName).HasMaxLength(16).IsUnicode(false);
+        check.Property(c => c.OperationKey).HasMaxLength(200).IsUnicode(false);
+        check.Property(c => c.Replica).HasMaxLength(64).IsUnicode(false);
+        check.Property(c => c.StartedAt).HasColumnType("datetime2(3)");
+        check.Property(c => c.CompletedAt).HasColumnType("datetime2(3)");
+        check.Property(c => c.Currency).HasMaxLength(3).IsUnicode(false).IsFixedLength();
+        check.Property(c => c.RuleVersion).HasMaxLength(32).IsUnicode(false);
+        check.Property(c => c.RecordedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+        check.HasIndex(c => c.OperationKey).IsUnique().HasDatabaseName("UX_OrderCheck_OperationKey");
+        check.HasOne<Order>().WithMany().HasForeignKey(c => c.OrderId).OnDelete(DeleteBehavior.Cascade);
     }
 }
 

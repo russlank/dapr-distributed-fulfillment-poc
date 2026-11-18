@@ -170,8 +170,8 @@ public sealed class StartDispatcherTests(SqlServerFixture sql) : IAsyncLifetime
         Assert.Equal(2, afterB["Attempts"]);
 
         // A comes back with its old token: none of its writes change the row.
-        Assert.False(await storeA.MarkStartedAsync(claimA, ct));
-        Assert.False(await storeA.ReleaseForRetryAsync(claimA, StartErrorCodes.StartAmbiguous, TimeSpan.FromSeconds(1), ct));
+        Assert.Equal(FencedUpdateOutcome.LeaseLost, await storeA.MarkStartedAsync(claimA, ct));
+        Assert.Equal(FencedUpdateOutcome.LeaseLost, await storeA.ReleaseForRetryAsync(claimA, StartErrorCodes.StartAmbiguous, TimeSpan.FromSeconds(1), ct));
         var final = await RequestAsync(orderId);
         Assert.Equal(afterB["StartedAt"], final["StartedAt"]);
         Assert.Equal("Started", final["State"]);
@@ -302,6 +302,92 @@ public sealed class StartDispatcherTests(SqlServerFixture sql) : IAsyncLifetime
             Assert.True(DateTime.UtcNow < deadline, "condition not reached in time");
             await Task.Delay(100, ct);
         }
+    }
+
+    [Fact]
+    public async Task Dispatcher_WorkflowCompletesBeforeTheStartIsAcknowledged_RecordsAlreadyClosedAndTheTerminalStateStands()
+    {
+        // Forced order of events, no timing: the fake host creates the instance, the "workflow" runs
+        // the real order-api steps to completion (terminal transaction closes the request), and only
+        // then does the start answer reach the dispatcher, which still holds its lease token.
+        var ct = TestContext.Current.CancellationToken;
+        var orderId = await AcceptAsync();
+        var steps = Fulfilling.Steps(db);
+        var host = new FakeWorkflowHost { Behavior = (_, _) => new FakeWorkflowHost.Script(OnCreated: () => Fulfilling.RunAsync(steps, orderId, ct)) };
+        var log = new CapturingLogger();
+
+        await Dispatching.Create(db, host, "replica-a", LongLease, log: log).RunOnceAsync(ct);
+
+        var attempt = Assert.Single(await AttemptsAsync(orderId));
+        Assert.Equal("AlreadyClosed", attempt["Result"]);
+        var request = await RequestAsync(orderId);
+        Assert.Equal("Closed", request["State"]);
+        Assert.Null(request["StartedAt"]);
+        Assert.Null(request["LeaseToken"]);
+        Assert.Null(request["LastErrorCode"]);
+        Assert.NotNull(request["ClosedAt"]);
+        Assert.Equal(1, request["Attempts"]);
+        Assert.Equal("Completed", (await Fulfilling.SnapshotAsync(db, orderId)).Status);
+        Assert.DoesNotContain(log.Entries, e => e.Contains("lease lost", StringComparison.Ordinal));
+        Assert.Contains(log.Entries, e => e.Contains("became terminal meanwhile", StringComparison.Ordinal));
+
+        // Nothing is due any more: no second start.
+        Assert.Equal(0, await Dispatching.Create(db, host, "replica-b", LongLease).RunOnceAsync(ct));
+        Assert.Equal(1, host.SchedulesOf(FulfillmentWorkflow.InstanceId(orderId)));
+    }
+
+    [Fact]
+    public async Task Dispatcher_AnswerLostWhileTheOrderCompletes_DoesNotReopenTheClosedRequest()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var orderId = await AcceptAsync();
+        var steps = Fulfilling.Steps(db);
+        var host = new FakeWorkflowHost { Behavior = (_, _) => new FakeWorkflowHost.Script(LoseAnswer: true, OnCreated: () => Fulfilling.RunAsync(steps, orderId, ct)) };
+
+        await Dispatching.Create(db, host, "replica-a", LongLease).RunOnceAsync(ct);
+
+        Assert.Equal("AlreadyClosed", Assert.Single(await AttemptsAsync(orderId))["Result"]);
+        var request = await RequestAsync(orderId);
+        Assert.Equal("Closed", request["State"]);
+        Assert.Null(request["LastErrorCode"]);
+    }
+
+    [Fact]
+    public async Task Dispatcher_RequestChangedByAnUnknownWriter_IsReportedUnexpectedAndLeftAlone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var orderId = await AcceptAsync();
+        // Something other than a dispatcher or a terminal transaction takes the request (not a known transition).
+        var host = new FakeWorkflowHost
+        {
+            Behavior = (_, _) => new FakeWorkflowHost.Script(OnCreated: () => Db.ExecuteAsync(db,
+                $"UPDATE orders.WorkflowStartRequest SET State = 'Started', StartedAt = '2026-01-01', LeaseOwner = NULL, LeaseExpiresAt = NULL, LeaseToken = NULL WHERE OrderId = '{orderId}'")),
+        };
+        var log = new CapturingLogger();
+
+        await Dispatching.Create(db, host, "replica-a", LongLease, log: log).RunOnceAsync(ct);
+
+        Assert.Equal("Unexpected", Assert.Single(await AttemptsAsync(orderId))["Result"]);
+        var request = await RequestAsync(orderId);
+        Assert.Equal(new DateTime(2026, 1, 1), request["StartedAt"]);
+        Assert.Contains(log.Entries, e => e.StartsWith("Error:", StringComparison.Ordinal) && e.Contains("changed unexpectedly", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Dispatcher_StaleDispatcherAfterCompletion_IsStillALostLease()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var orderId = await AcceptAsync();
+        var host = new FakeWorkflowHost();
+        var storeA = new WorkflowStartStore(db);
+        var claimA = Assert.Single((await storeA.ClaimDueAsync("replica-a/stale", 50, TimeSpan.FromMilliseconds(800), ct)).Claimed);
+        await Dispatching.WaitForLeaseExpiryAsync(db, orderId, ct);
+        await Dispatching.Create(db, host, "replica-b", LongLease).RunOnceAsync(ct);
+        await Fulfilling.RunAsync(Fulfilling.Steps(db), orderId, ct);
+
+        // A was overtaken by B's claim: that it is closed now does not make A's loss anything else.
+        Assert.Equal(FencedUpdateOutcome.LeaseLost, await storeA.MarkStartedAsync(claimA, ct));
+        Assert.Equal("Closed", (await RequestAsync(orderId))["State"]);
     }
 
     private async Task<Guid> AcceptAsync()

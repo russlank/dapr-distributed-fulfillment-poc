@@ -29,6 +29,18 @@ public static class OrderStatuses
 public static class OrderReasonCodes
 {
     public const string Accepted = "Accepted";
+
+    /// <summary>The fulfillment run began validating the order.</summary>
+    public const string ValidationStarted = "ValidationStarted";
+
+    /// <summary>The simulated fulfillment of M1 completed the order (no real reservation, payment, or shipment).</summary>
+    public const string StubFulfillmentCompleted = "StubFulfillmentCompleted";
+
+    /// <summary>Rejected by validation: the order has no lines (defensive; the API refuses such requests).</summary>
+    public const string NoLines = "NoLines";
+
+    /// <summary>Rejected by validation: a SKU appears on more than one line.</summary>
+    public const string DuplicateSku = "DuplicateSku";
 }
 
 /// <summary>

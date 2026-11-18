@@ -53,6 +53,12 @@ public sealed class FakeWorkflowHost : IWorkflowStarter
 
         // State first, like the management API: an existing instance is reported, never replaced.
         var created = instances.TryAdd(instanceId, 1);
+        if (created && script.OnCreated is not null)
+        {
+            // What the new instance does before the answer reaches the dispatcher (e.g. run to completion).
+            await script.OnCreated();
+        }
+
         if (script.LoseAnswer)
         {
             return new StartOutcome(StartOutcomeKind.Ambiguous, null);
@@ -62,7 +68,8 @@ public sealed class FakeWorkflowHost : IWorkflowStarter
     }
 
     /// <summary>Gate: the call waits until the test completes the task (deterministic "slow call").</summary>
-    public sealed record Script(TimeSpan DelayBefore = default, bool LoseAnswer = false, bool Refuse = false, Task? Gate = null)
+    /// <summary>OnCreated: runs after the instance was created and before the answer is returned.</summary>
+    public sealed record Script(TimeSpan DelayBefore = default, bool LoseAnswer = false, bool Refuse = false, Task? Gate = null, Func<Task>? OnCreated = null)
     {
         public static Script Normal { get; } = new();
     }

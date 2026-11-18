@@ -19,6 +19,19 @@ public sealed class FakeWorkflowContext(string instanceId = "test-1") : Workflow
 
     public Func<string, object?, object?> ActivityResult { get; init; } = (_, _) => "fake";
 
+    /// <summary>Activities whose result is held back until <see cref="Release"/> (to observe what was scheduled meanwhile).</summary>
+    public ISet<string> Deferred { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+
+    private readonly List<(string Name, Action Complete)> held = [];
+
+    /// <summary>Completes every held activity in the order it was called.</summary>
+    public void Release()
+    {
+        var pending = held.ToList();
+        held.Clear();
+        pending.ForEach(h => h.Complete());
+    }
+
     public List<DateTime> Timers { get; } = [];
 
     public object? CustomStatus { get; private set; }
@@ -36,6 +49,13 @@ public sealed class FakeWorkflowContext(string instanceId = "test-1") : Workflow
     public override Task<T> CallActivityAsync<T>(string name, object? input = null, WorkflowTaskOptions? options = null)
     {
         ActivityCalls.Add((name, input, options?.TargetAppId));
+        if (Deferred.Contains(name))
+        {
+            var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+            held.Add((name, () => completion.SetResult((T)ActivityResult(name, input)!)));
+            return completion.Task;
+        }
+
         return Task.FromResult((T)ActivityResult(name, input)!);
     }
 

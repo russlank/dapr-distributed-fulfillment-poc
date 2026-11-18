@@ -48,6 +48,12 @@ public sealed class SchemaTests(SqlServerFixture sql)
         { "UPDATE orders.WorkflowStartRequest SET ExecutionClaims = -1 WHERE OrderId = @o", "CK_WorkflowStartRequest_Counters" },
         { "UPDATE orders.WorkflowStartRequest SET InstanceId = 'fulfill-x' WHERE OrderId = @o; INSERT orders.[Order] (OrderId, CustomerId, Status) VALUES (@o2, 'c', 'Submitted'); INSERT orders.WorkflowStartRequest (OrderId, InstanceId, State, Attempts, ExecutionClaims, FenceRejections) VALUES (@o2, 'fulfill-x', 'Pending', 0, 0, 0)", "UX_WorkflowStartRequest_Instance" },
         { "INSERT orders.WorkflowStartRequest (OrderId, InstanceId, State, Attempts, ExecutionClaims, FenceRejections) VALUES (@o2, 'fulfill-orphan', 'Pending', 0, 0, 0)", "FK_WorkflowStartRequest_Order_OrderId" },
+        // One simulated effect per operation key; simulated steps are recognisable by name.
+        { "INSERT orders.StubEffect (OperationKey, OrderId, Step, Qualifier, AppliedBy, Replays) VALUES ('k1', @o, 'stub-fulfil', 'line-1', 'r', 0), ('k1', @o, 'stub-fulfil', 'line-1', 'r', 0)", "PK_StubEffect" },
+        { "INSERT orders.StubEffect (OperationKey, OrderId, Step, Qualifier, AppliedBy, Replays) VALUES ('k2', @o, 'reserve', 'line-1', 'r', 0)", "CK_StubEffect_Step" },
+        // One stored result per check.
+        { "INSERT orders.OrderCheck (OrderId, CheckName, OperationKey, Replica, StartedAt, CompletedAt, RuleVersion, Replays) VALUES (@o, 'price', 'c1', 'r', SYSUTCDATETIME(), SYSUTCDATETIME(), 'v', 0), (@o, 'price', 'c2', 'r', SYSUTCDATETIME(), SYSUTCDATETIME(), 'v', 0)", "PK_OrderCheck" },
+        { "INSERT orders.WorkflowStartAttempt (OrderId, LeaseToken, DispatcherId, InstanceId, Attempt, Result) VALUES (@o, NEWID(), 'd', 'i', 1, 'Lost')", "CK_WorkflowStartAttempt_Result" },
     };
 
     [Theory]

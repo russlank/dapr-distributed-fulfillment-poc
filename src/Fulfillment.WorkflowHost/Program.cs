@@ -21,4 +21,7 @@ builder.Services.AddDaprWorkflow(options =>
 var app = builder.Build();
 app.MapServiceDefaults();
 app.MapWorkflowManagement(WorkflowManagementPolicy.Default);
+#if FULFILLMENT_FAILPOINTS
+Fulfillment.WorkflowHost.Drill.DrillControls.MapDrillControls(app);
+#endif
 app.Run();

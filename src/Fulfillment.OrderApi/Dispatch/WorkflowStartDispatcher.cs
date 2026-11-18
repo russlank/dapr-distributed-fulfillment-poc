@@ -164,13 +164,13 @@ public sealed partial class WorkflowStartDispatcher(
             reported = outcome.ReportedStatus;
             result = outcome.Kind switch
             {
-                StartOutcomeKind.Started => await store.MarkStartedAsync(claim, ct) ? StartAttemptResults.Started : StartAttemptResults.LeaseLost,
-                StartOutcomeKind.AlreadyExists => await store.MarkStartedAsync(claim, ct) ? StartAttemptResults.AlreadyExists : StartAttemptResults.LeaseLost,
-                StartOutcomeKind.Rejected => await store.ReleaseForRetryAsync(claim, StartErrorCodes.StartRejected, settings.RejectedBackoff, ct)
-                    ? StartAttemptResults.Rejected : StartAttemptResults.LeaseLost,
-                _ => await store.ReleaseForRetryAsync(claim, StartErrorCodes.StartAmbiguous,
-                        Backoff(claim.Attempt, settings.BaseBackoff, settings.MaxBackoff, Random.Shared.NextDouble()), ct)
-                    ? StartAttemptResults.Ambiguous : StartAttemptResults.LeaseLost,
+                StartOutcomeKind.Started => Result(await store.MarkStartedAsync(claim, ct), StartAttemptResults.Started),
+                StartOutcomeKind.AlreadyExists => Result(await store.MarkStartedAsync(claim, ct), StartAttemptResults.AlreadyExists),
+                StartOutcomeKind.Rejected => Result(await store.ReleaseForRetryAsync(claim, StartErrorCodes.StartRejected, settings.RejectedBackoff, ct),
+                    StartAttemptResults.Rejected),
+                _ => Result(await store.ReleaseForRetryAsync(claim, StartErrorCodes.StartAmbiguous,
+                        Backoff(claim.Attempt, settings.BaseBackoff, settings.MaxBackoff, Random.Shared.NextDouble()), ct),
+                    StartAttemptResults.Ambiguous),
             };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -186,13 +186,20 @@ public sealed partial class WorkflowStartDispatcher(
         }
 
         Attempts.Add(1, new KeyValuePair<string, object?>("result", result));
-        if (result == StartAttemptResults.LeaseLost)
+        switch (result)
         {
-            LogLeaseLost(logger, claim.OrderId, claim.Attempt);
-        }
-        else
-        {
-            LogAttempt(logger, claim.OrderId, claim.Attempt, result, reported);
+            case StartAttemptResults.LeaseLost:
+                LogLeaseLost(logger, claim.OrderId, claim.Attempt);
+                break;
+            case StartAttemptResults.AlreadyClosed:
+                LogAlreadyClosed(logger, claim.OrderId, claim.Attempt, reported);
+                break;
+            case StartAttemptResults.Unexpected:
+                LogUnexpected(logger, claim.OrderId, claim.Attempt, reported);
+                break;
+            default:
+                LogAttempt(logger, claim.OrderId, claim.Attempt, result, reported);
+                break;
         }
 
         if (attemptId != 0)
@@ -208,6 +215,19 @@ public sealed partial class WorkflowStartDispatcher(
         }
     }
 
+    /// <summary>
+    /// Result of an attempt from what its fenced update found. A request closed meanwhile is not a lost
+    /// lease: the order became terminal (a fast workflow can finish before the start is acknowledged),
+    /// and the terminal state stands; the attempt changes nothing.
+    /// </summary>
+    public static string Result(FencedUpdateOutcome update, string applied) => update switch
+    {
+        FencedUpdateOutcome.Applied => applied,
+        FencedUpdateOutcome.LeaseLost => StartAttemptResults.LeaseLost,
+        FencedUpdateOutcome.AlreadyClosed => StartAttemptResults.AlreadyClosed,
+        _ => StartAttemptResults.Unexpected,
+    };
+
     [LoggerMessage(Level = LogLevel.Information, Message = "start dispatcher {DispatcherId} running (lease {LeaseSeconds}s)")]
     private static partial void LogStarted(ILogger logger, string dispatcherId, double leaseSeconds);
 
@@ -222,6 +242,12 @@ public sealed partial class WorkflowStartDispatcher(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "start of order {OrderId}, attempt {Attempt}: lease lost to another dispatcher; request left unchanged")]
     private static partial void LogLeaseLost(ILogger logger, Guid orderId, int attempt);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "start of order {OrderId}, attempt {Attempt}: the order became terminal meanwhile and its request is closed (workflow host reported {Reported}); nothing changed")]
+    private static partial void LogAlreadyClosed(ILogger logger, Guid orderId, int attempt, string? reported);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "start of order {OrderId}, attempt {Attempt}: the start request changed unexpectedly (no later claim, not closed; workflow host reported {Reported}); nothing changed")]
+    private static partial void LogUnexpected(ILogger logger, Guid orderId, int attempt, string? reported);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "start of order {OrderId}, attempt {Attempt} failed; the lease will expire")]
     private static partial void LogAttemptFailed(ILogger logger, Guid orderId, int attempt, Exception exception);

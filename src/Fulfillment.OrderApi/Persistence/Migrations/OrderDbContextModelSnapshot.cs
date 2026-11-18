@@ -139,6 +139,77 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.OrderCheck", b =>
+                {
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CheckName")
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<DateTime>("CompletedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("Currency")
+                        .HasMaxLength(3)
+                        .IsUnicode(false)
+                        .HasColumnType("char(3)")
+                        .IsFixedLength();
+
+                    b.Property<string>("OperationKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<DateTime>("RecordedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<int>("Replays")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Replica")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<bool?>("ReviewRequired")
+                        .HasColumnType("bit");
+
+                    b.Property<int?>("RiskScore")
+                        .HasColumnType("int");
+
+                    b.Property<string>("RuleVersion")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(32)");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<long?>("TotalMinor")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("OrderId", "CheckName");
+
+                    b.HasIndex("OperationKey")
+                        .IsUnique()
+                        .HasDatabaseName("UX_OrderCheck_OperationKey");
+
+                    b.ToTable("OrderCheck", "orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_OrderCheck_Name", "[CheckName] IN ('price', 'risk')");
+
+                            t.HasCheckConstraint("CK_OrderCheck_Replays", "[Replays] >= 0");
+                        });
+                });
+
             modelBuilder.Entity("Fulfillment.OrderApi.Domain.OrderLine", b =>
                 {
                     b.Property<Guid>("OrderId")
@@ -216,6 +287,55 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.StubEffect", b =>
+                {
+                    b.Property<string>("OperationKey")
+                        .HasMaxLength(200)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<DateTime>("AppliedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<string>("AppliedBy")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Qualifier")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(32)");
+
+                    b.Property<int>("Replays")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Step")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(32)");
+
+                    b.HasKey("OperationKey");
+
+                    b.HasIndex("OrderId")
+                        .HasDatabaseName("IX_StubEffect_Order");
+
+                    b.ToTable("StubEffect", "orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_StubEffect_Replays", "[Replays] >= 0");
+
+                            t.HasCheckConstraint("CK_StubEffect_Step", "[Step] LIKE 'stub-%'");
+                        });
+                });
+
             modelBuilder.Entity("Fulfillment.OrderApi.Domain.WorkflowStartAttempt", b =>
                 {
                     b.Property<long>("Id")
@@ -274,7 +394,7 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
 
                     b.ToTable("WorkflowStartAttempt", "orders", t =>
                         {
-                            t.HasCheckConstraint("CK_WorkflowStartAttempt_Result", "[Result] IS NULL OR [Result] IN ('Started', 'AlreadyExists', 'Ambiguous', 'Rejected', 'LeaseLost')");
+                            t.HasCheckConstraint("CK_WorkflowStartAttempt_Result", "[Result] IS NULL OR [Result] IN ('Started', 'AlreadyExists', 'Ambiguous', 'Rejected', 'LeaseLost', 'AlreadyClosed', 'Unexpected')");
                         });
                 });
 
@@ -378,6 +498,15 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.OrderCheck", b =>
+                {
+                    b.HasOne("Fulfillment.OrderApi.Domain.Order", null)
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Fulfillment.OrderApi.Domain.OrderLine", b =>
                 {
                     b.HasOne("Fulfillment.OrderApi.Domain.Order", null)
@@ -391,6 +520,15 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                 {
                     b.HasOne("Fulfillment.OrderApi.Domain.Order", null)
                         .WithMany("History")
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.StubEffect", b =>
+                {
+                    b.HasOne("Fulfillment.OrderApi.Domain.Order", null)
+                        .WithMany()
                         .HasForeignKey("OrderId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

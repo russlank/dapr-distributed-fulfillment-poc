@@ -25,6 +25,13 @@ builder.Services.AddSingleton(new ProbeStore(orderDb));
 builder.Services.AddDbContext<OrderDbContext>(o => OrderDbContext.Configure(o, orderDb));
 builder.Services.AddScoped<OrderAcceptance>();
 builder.Services.AddSingleton(new ExecutionFence(orderDb));
+// Fulfillment steps; their transaction checkpoints are failpoints in drill builds (no-ops otherwise).
+builder.Services.AddSingleton(sp =>
+{
+    var failpoints = sp.GetRequiredService<Failpoints>();
+    return new FulfillmentSteps(orderDb, sp.GetRequiredService<RuntimeIdentity>().Replica,
+        Failpoints.Compiled ? failpoints.HitAsync : StepCheckpoints.None);
+});
 
 // Durable start dispatcher: starts fulfillment workflows through the workflow host's management API.
 builder.Services.Configure<StartDispatcherOptions>(builder.Configuration.GetSection(StartDispatcherOptions.Section));
@@ -40,6 +47,10 @@ builder.Services.AddDaprWorkflow(options =>
     options.RegisterActivity<ClaimProbeExecutionActivity>(ActivityNames.Claim);
     options.RegisterActivity<CompleteProbeExecutionActivity>(ActivityNames.Complete);
     options.RegisterActivity<ClaimFulfillmentExecutionActivity>(FulfillmentWorkflow.ClaimExecutionActivity);
+    options.RegisterActivity<ValidateFulfillmentOrderActivity>(FulfillmentWorkflow.ValidateOrderActivity);
+    options.RegisterActivity<RecordFulfillmentChecksActivity>(FulfillmentWorkflow.RecordChecksActivity);
+    options.RegisterActivity<ApplyStubFulfillmentStepActivity>(FulfillmentWorkflow.ApplyStubStepActivity);
+    options.RegisterActivity<CompleteStubFulfillmentActivity>(FulfillmentWorkflow.CompleteStubFulfillmentActivity);
 });
 
 var app = builder.Build();
