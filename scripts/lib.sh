@@ -14,6 +14,7 @@ fi
 # would recreate containers with different settings when a script starts or restarts one).
 export BUILD_FLAVOR="${BUILD_FLAVOR:-release}"
 export DAPR_POC_ENV="${DAPR_POC_ENV:-local}"
+export START_DISPATCHER_LEASE="${START_DISPATCHER_LEASE:-00:00:30}"
 export GIT_COMMIT="${GIT_COMMIT:-$(git rev-parse --short=10 HEAD 2>/dev/null || echo unknown)}"
 export GIT_BRANCH="${GIT_BRANCH:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)}"
 if [[ -z "${GIT_TREE_STATE:-}" ]]; then

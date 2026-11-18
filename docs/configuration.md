@@ -30,6 +30,20 @@ it). Compose refuses to start when a required value is missing.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | when set, logs, traces, and metrics are exported over OTLP |
 | `DAPR_HTTP_PORT` | sidecar HTTP port (default 3500) |
 
+## Start Dispatcher
+
+Section `StartDispatcher` (environment `StartDispatcher__<Name>`):
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `Enabled` | `true` | the dispatcher runs in every order API replica |
+| `PollInterval` | `00:00:01` | time between polls (jittered 0.5-1.5×) |
+| `BatchSize` | 10 | requests claimed per poll at most |
+| `MaxInFlight` | 32 | concurrent starts per replica at most |
+| `Lease` | `00:00:30` | exclusive claim time; Compose sets it from `START_DISPATCHER_LEASE` |
+| `BaseBackoff` / `MaxBackoff` | `00:00:01` / `00:01:00` | retry delay after an ambiguous answer, doubling |
+| `RejectedBackoff` | `00:05:00` | retry delay after a refusal |
+
 ## Database Schema
 
 The order API's tables (`OrderDb`, schema `orders`) come from EF Core

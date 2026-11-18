@@ -22,7 +22,10 @@ cd src && dotnet test --project Fulfillment.UnitTests -c Release
 Deterministic, no infrastructure. They cover order request parsing, contract
 bounds, the idempotency hash (invariant to member order and whitespace,
 sensitive to every field and to line order), messages that never quote
-values, the order model and instance-id rule, operation keys, build identity,
+values, the order model and instance-id rule, the fulfillment workflow shell
+on a fake context (claim on `order-api`, fenced end), the classification of
+workflow-host answers (always the management API, one idempotency key),
+dispatcher backoff, the management policy entry for the fulfillment workflow, operation keys, build identity,
 the caller-side invocation retries (5xx and transport errors retried with the
 same idempotency key, 4xx not retried, bounded attempts), the runtime probe
 workflow on a fake workflow context (execution claim rejection, step order,
@@ -55,6 +58,8 @@ persisted rows with plain SQL, independent of the model under test.
 | rollback | a failure injected after the inserts executed and before the commit leaves no row of any table and does not consume the key; the retry is accepted |
 | restart | after the host is disposed and connection pools cleared, a new host returns the same order for the retry |
 | contract | invalid JSON, unknown, duplicate, missing, or null members, bounds, missing or invalid keys, oversize bodies, missing or wrong API key: refused with a stable code, nothing persisted, no input echoed |
+| dispatcher | real dispatchers (separate identities, like replicas) on one database against a fake workflow host: start and mark `Started`; existing instance; lost answer after the instance was created (`Pending` with backoff, then found on the next attempt, one instance); refusal (long backoff); terminal guard (closed, no call); a held lease is not claimed; crash after starting (lease expiry, recovery by another dispatcher, the old token changes nothing); a slow start outliving its lease (overlapping attempts, the stale one `LeaseLost`); three concurrent dispatchers start 30 orders exactly once; the hosted dispatcher starts accepted orders and is not blocked by a slow start |
+| fence | the claim counts every claim of a non-terminal order and audits it; terminal orders (all four statuses) are rejected, counted, and audited; 20 concurrent claims all count; an unknown order fails without writing |
 | schema | migrations apply twice without change; the API refuses to start on an unmigrated database; the database rejects a second start request, a second order per key, duplicate instance ids or history sequences, out-of-range lines, unknown statuses, and inconsistent start-request lifecycle or lease values |
 
 ## Scenarios
@@ -79,12 +84,36 @@ with `--replicas` for ACC-4). Evidence: `artifacts/checks/ACC-<time>/`.
 
 | Check | PASS when (from `OrderDb` rows) |
 |---|---|
-| ACC-1 accept | `201`; order `Submitted`, both lines, history row 1, key, start request `Pending` with `fulfill-{orderId:N}` |
+| ACC-1 accept | `201`; order `Submitted`, both lines, history row 1, key, start request (`Pending`, or already `Started`) with `fulfill-{orderId:N}` |
 | ACC-2 replay | same key and payload through the second replica: `200`, same order, row counts unchanged |
 | ACC-3 conflict | same key, other payload: `422 idempotency-key-reused`, row counts unchanged |
 | ACC-4 replicas | 20 concurrent submissions with one key, alternating `order-api` and `order-api-2`: one `201`, nineteen `200`, one order (`UNVERIFIED` without the second replica) |
 | ACC-5 restart | after a cold restart of the order API the retry returns the same order |
-| ACC-6 no start | no workflow state for the order's instance id in `DaprStateDb`; the start request is still `Pending` |
+| ACC-6 dispatched | the start request becomes `Started`; the workflow ran (`Completed`, `ShellClaimed`, at least one claim); its state in `DaprStateDb` belongs to `workflow-host` only, none to `order-api`'s own sidecar |
+
+### S51 Concurrent Workflow Start
+
+```bash
+START_DISPATCHER_LEASE=00:00:02 bash scripts/stack-up.sh --drill --replicas
+COMPOSE_PROJECT_NAME=fulfillment-drill BUILD_FLAVOR=drill DAPR_POC_ENV=drill START_DISPATCHER_LEASE=00:00:02 \
+  bash scripts/scenarios/S51-concurrent-start.sh
+```
+
+20 orders are accepted on both order API replicas. The first start attempt of
+each is held for 6 s before its call (failpoint `BeforeWorkflowStartCall`,
+`Delay`), three times the lease, so either replica claims the request again
+while the first attempt is still in flight. Evidence:
+`artifacts/drills/S51-<run>/` (attempt log, execution views, result).
+
+| Check | PASS when (from `OrderDb` and `DaprStateDb` rows) |
+|---|---|
+| S51-race | at least one order has overlapping attempts from both replicas, and the earlier ended `LeaseLost` (otherwise `UNVERIFIED`, which fails the run) |
+| S51-start | 20 orders, 20 start requests, all `Started` without error code or lease; every `LeaseLost` attempt has another attempt that recorded the start |
+| S51-instance | every instance `Completed` on `workflow-host` with the shell outcome; claim rows equal `ExecutionClaims` (at least 1); no fence rejection; no workflow state under `order-api` |
+| S51-accept | 5 keys × 4 concurrent identical submissions over both replicas: one order per key (5 × `201`, 15 × `200`) |
+
+With the fulfillment steps in place, S51 also asserts that every order ends
+`Completed` with one effect per operation key.
 
 ## Drills
 

@@ -56,7 +56,7 @@ public sealed partial class Failpoints
         await command.ExecuteNonQueryAsync(ct);
     }
 
-    /// <summary>Fires an armed failpoint once; FailFast ends the process, Throw raises a transient error.</summary>
+    /// <summary>Fires an armed failpoint once: FailFast ends the process, Throw raises a transient error, Delay:&lt;ms&gt; waits.</summary>
     public async Task HitAsync(string name, string operationKey, CancellationToken ct = default)
     {
         if (!Active || connectionString is null)
@@ -68,9 +68,13 @@ public sealed partial class Failpoints
         await connection.OpenAsync(ct);
         await using var command = new SqlCommand(
             """
-            UPDATE TOP (1) drill.Failpoint SET FiredAt = SYSUTCDATETIME()
-            OUTPUT inserted.Action, inserted.DrillRunId
-            WHERE Name = @name AND OperationKey = @key AND FiredAt IS NULL;
+            -- An armed row fires once; OperationKey '*' matches any key (exact rows are used first).
+            WITH armed AS (
+                SELECT TOP (1) * FROM drill.Failpoint WITH (UPDLOCK, READPAST, ROWLOCK)
+                WHERE Name = @name AND (OperationKey = @key OR OperationKey = '*') AND FiredAt IS NULL
+                ORDER BY CASE WHEN OperationKey = @key THEN 0 ELSE 1 END, ArmedAt)
+            UPDATE armed SET FiredAt = SYSUTCDATETIME()
+            OUTPUT inserted.Action, inserted.DrillRunId;
             """, connection);
         command.Parameters.AddWithValue("@name", name);
         command.Parameters.AddWithValue("@key", operationKey);
@@ -89,6 +93,12 @@ public sealed partial class Failpoints
                 break;
             case "Throw":
                 throw new InvalidOperationException($"failpoint {name} fired for {operationKey}");
+            case var delay when delay.StartsWith("Delay:", StringComparison.Ordinal)
+                                && int.TryParse(delay.AsSpan(6), System.Globalization.CultureInfo.InvariantCulture, out var milliseconds):
+                // Holds the caller inside the window, e.g. past a lease expiry.
+                await reader.DisposeAsync();
+                await Task.Delay(milliseconds, ct);
+                break;
         }
     }
 

@@ -25,6 +25,10 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
 
     public DbSet<WorkflowStartRequest> WorkflowStartRequests => Set<WorkflowStartRequest>();
 
+    public DbSet<WorkflowStartAttempt> WorkflowStartAttempts => Set<WorkflowStartAttempt>();
+
+    public DbSet<ExecutionClaim> ExecutionClaims => Set<ExecutionClaim>();
+
     /// <summary>Applies the SQL Server options shared by the app, the migration job, and the design-time factory.</summary>
     public static void Configure(DbContextOptionsBuilder builder, string connectionString) =>
         builder.UseSqlServer(connectionString, sql => sql.MigrationsHistoryTable("__EFMigrationsHistory", Schema));
@@ -37,6 +41,8 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         ConfigureHistory(modelBuilder.Entity<OrderStatusHistory>());
         ConfigureKey(modelBuilder.Entity<IdempotencyKey>());
         ConfigureStartRequest(modelBuilder.Entity<WorkflowStartRequest>());
+        ConfigureStartAttempt(modelBuilder.Entity<WorkflowStartAttempt>());
+        ConfigureExecutionClaim(modelBuilder.Entity<ExecutionClaim>());
     }
 
     private static string InList<TEnum>(string column)
@@ -115,7 +121,8 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
                 + " OR ([State] = 'Started' AND [StartedAt] IS NOT NULL AND [ClosedAt] IS NULL)"
                 + " OR ([State] = 'Closed' AND [ClosedAt] IS NOT NULL)");
             t.HasCheckConstraint("CK_WorkflowStartRequest_Lease",
-                "([LeaseOwner] IS NULL AND [LeaseExpiresAt] IS NULL) OR ([LeaseOwner] IS NOT NULL AND [LeaseExpiresAt] IS NOT NULL)");
+                "([LeaseOwner] IS NULL AND [LeaseExpiresAt] IS NULL AND [LeaseToken] IS NULL)"
+                + " OR ([LeaseOwner] IS NOT NULL AND [LeaseExpiresAt] IS NOT NULL AND [LeaseToken] IS NOT NULL)");
         });
         request.HasKey(r => r.OrderId);
         request.Property(r => r.OrderId).ValueGeneratedNever();
@@ -124,6 +131,7 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         request.Property(r => r.NextAttemptAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
         request.Property(r => r.LeaseOwner).HasMaxLength(64).IsUnicode(false);
         request.Property(r => r.LeaseExpiresAt).HasColumnType("datetime2(3)");
+        request.Property(r => r.LeaseToken);
         request.Property(r => r.LastErrorCode).HasMaxLength(64).IsUnicode(false);
         request.Property(r => r.CreatedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
         request.Property(r => r.StartedAt).HasColumnType("datetime2(3)");
@@ -133,6 +141,42 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         request.HasIndex(r => r.NextAttemptAt).HasDatabaseName("IX_WorkflowStartRequest_Due")
             .HasFilter("[State] = 'Pending'").IncludeProperties(r => new { r.LeaseExpiresAt });
         request.HasOne<Order>().WithOne().HasForeignKey<WorkflowStartRequest>(r => r.OrderId).OnDelete(DeleteBehavior.Cascade);
+    }
+
+    private static void ConfigureStartAttempt(EntityTypeBuilder<WorkflowStartAttempt> attempt)
+    {
+        attempt.ToTable("WorkflowStartAttempt", t =>
+        {
+            t.HasCheckConstraint("CK_WorkflowStartAttempt_Result",
+                "[Result] IS NULL OR [Result] IN ('Started', 'AlreadyExists', 'Ambiguous', 'Rejected', 'LeaseLost')");
+        });
+        attempt.HasKey(a => a.Id);
+        attempt.Property(a => a.Id).UseIdentityColumn();
+        attempt.Property(a => a.DispatcherId).HasMaxLength(64).IsUnicode(false);
+        attempt.Property(a => a.InstanceId).HasMaxLength(64).IsUnicode(false);
+        attempt.Property(a => a.CalledAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+        attempt.Property(a => a.CompletedAt).HasColumnType("datetime2(3)");
+        attempt.Property(a => a.Result).HasMaxLength(16).IsUnicode(false);
+        attempt.Property(a => a.ReportedStatus).HasMaxLength(32).IsUnicode(false);
+        attempt.HasIndex(a => a.LeaseToken).IsUnique().HasDatabaseName("UX_WorkflowStartAttempt_LeaseToken");
+        attempt.HasIndex(a => new { a.OrderId, a.CalledAt }).HasDatabaseName("IX_WorkflowStartAttempt_Order");
+        attempt.HasOne<Order>().WithMany().HasForeignKey(a => a.OrderId).OnDelete(DeleteBehavior.Cascade);
+    }
+
+    private static void ConfigureExecutionClaim(EntityTypeBuilder<ExecutionClaim> claim)
+    {
+        claim.ToTable("ExecutionClaim", t =>
+        {
+            t.HasCheckConstraint("CK_ExecutionClaim_Outcome", "[Outcome] IN ('Proceed', 'AlreadyTerminal')");
+        });
+        claim.HasKey(c => c.Id);
+        claim.Property(c => c.Id).UseIdentityColumn();
+        claim.Property(c => c.InstanceId).HasMaxLength(64).IsUnicode(false);
+        claim.Property(c => c.Outcome).HasMaxLength(16).IsUnicode(false);
+        claim.Property(c => c.OrderStatus).HasMaxLength(32).IsUnicode(false);
+        claim.Property(c => c.ClaimedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+        claim.HasIndex(c => new { c.OrderId, c.ClaimedAt }).HasDatabaseName("IX_ExecutionClaim_Order");
+        claim.HasOne<Order>().WithMany().HasForeignKey(c => c.OrderId).OnDelete(DeleteBehavior.Cascade);
     }
 }
 

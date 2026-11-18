@@ -24,7 +24,12 @@ reaches the named boundary for that operation key, a conditional update sets
 `FiredAt` once and performs the action:
 
 - `FailFast`: the process ends at once (as abruptly as `SIGKILL`);
-- `Throw`: a transient error.
+- `Throw`: a transient error;
+- `Delay:<ms>`: the caller is held inside the window (for example past a
+  lease expiry).
+
+The operation key `*` matches any key; such a row still fires once, so a
+drill arms one row per hold it wants (with distinct run-id suffixes).
 
 `FiredAt` is the persisted proof that the window was reached. Arming is
 scoped to one drill run; unfired rows are removed by the drill's cleanup.
@@ -32,6 +37,7 @@ scoped to one drill run; unfired rows are removed by the drill's cleanup.
 | Boundary | Where |
 |---|---|
 | `AfterProbeEffectCommitBeforeActivityCompletion` | inventory service, after the probe effect transaction commits, before the activity returns |
+| `BeforeWorkflowStartCall` | order API start dispatcher, after the attempt is recorded, before the workflow host is called (key: order id, `N` format) |
 
 Further boundaries arrive with the functionality they test.
 

@@ -194,6 +194,8 @@ services:
       ConnectionStrings__OrderDb: "Server=sqlserver;Database=OrderDb;User Id=order_api;Password=${ORDER_DB_PASSWORD};TrustServerCertificate=true"
       ADMIN_API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in .env}
       CUSTOMER_API_KEY: ${CUSTOMER_API_KEY:?set CUSTOMER_API_KEY in .env}
+      # Start dispatcher lease (hh:mm:ss); S51 shortens it on a drill stack to force lease expiry.
+      StartDispatcher__Lease: ${START_DISPATCHER_LEASE:-00:00:30}
     ports:
       - "127.0.0.1:8080:8080"
   order-api-dapr:
@@ -227,6 +229,8 @@ services:
       ConnectionStrings__OrderDb: "Server=sqlserver;Database=OrderDb;User Id=order_api;Password=${ORDER_DB_PASSWORD};TrustServerCertificate=true"
       ADMIN_API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in .env}
       CUSTOMER_API_KEY: ${CUSTOMER_API_KEY:?set CUSTOMER_API_KEY in .env}
+      # Start dispatcher lease (hh:mm:ss); S51 shortens it on a drill stack to force lease expiry.
+      StartDispatcher__Lease: ${START_DISPATCHER_LEASE:-00:00:30}
     ports:
       - "127.0.0.1:8081:8080"
   order-api-2-dapr:

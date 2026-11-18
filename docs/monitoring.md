@@ -24,6 +24,14 @@ milestone.
 `service.version` the build version, `service.instance.id` the replica
 name. Health endpoints are excluded from tracing.
 
+## Application Metrics
+
+| Metric | Meaning |
+|---|---|
+| `workflow_start_attempts_total{result}` | start attempts by result: `Started`, `AlreadyExists`, `Ambiguous`, `Rejected`, `LeaseLost` |
+| `workflow_start_requests_closed_terminal_total` | start requests closed because the order was already terminal |
+| `fence_rejections_total` | execution claims rejected because the order was already terminal |
+
 ## Rules
 
 - Identifiers (order, workflow, operation, event ids) go into traces and

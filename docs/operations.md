@@ -30,6 +30,21 @@ sidecars. `docker compose up --wait` cannot be used alone because it fails
 as soon as a one-shot job exits, even with code 0; `stack-up.sh` waits for
 each job explicitly.
 
+## Workflow Starts
+
+Accepted orders are started by the order API's start dispatcher. While the
+workflow host is unreachable, start requests stay `Pending` and are retried
+with backoff; nothing is lost. To look at one order:
+
+```bash
+. ./.env
+curl -s http://127.0.0.1:8080/system/orders/<orderId>/execution -H "X-Api-Key: $ADMIN_API_KEY"
+```
+
+`LastErrorCode` on the start request names the last problem
+(`StartAmbiguous`, `StartRejected`, `OrderTerminal`); the attempts list shows
+every call with its dispatcher and result.
+
 ## Restarting a Replica
 
 A replica is an app container plus a sidecar that joins the app's network

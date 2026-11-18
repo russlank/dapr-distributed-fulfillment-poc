@@ -75,10 +75,10 @@ Business state and execution state are separate: the order's status is
 business truth; the start request only records how far starting its workflow
 has got, and `GET /orders/{id}` returns the business view only.
 
-Acceptance starts no workflow. The order is durable at commit; a start
-dispatcher (next step of the implementation) claims due `Pending` start
-requests and starts the instance through the workflow host's management
-API. A crash between commit and start therefore loses nothing.
+Acceptance starts no workflow. The order is durable at commit; the start
+dispatcher (next section) claims due `Pending` start requests and starts the
+instance through the workflow host's management API. A crash between commit
+and start therefore loses nothing.
 
 Idempotency:
 
@@ -110,6 +110,52 @@ never migrates at start: replicas starting together must not race on DDL. It
 checks that no migration is pending and refuses to start otherwise. The
 runtime probe's `diagnostics` schema is separate and not part of the
 migrations.
+
+## Starting Workflows
+
+Every order API replica runs a start dispatcher. Each poll (jittered around
+one second) claims due `Pending` start requests in one transaction with
+`UPDLOCK` and `READPAST`: concurrent dispatchers never claim the same row at
+the same time and never wait for each other. A claim sets the lease owner, an
+expiry, and a new **lease token**, and counts the attempt. In the same
+transaction, requests whose order is already terminal are closed
+(`OrderTerminal`) instead of started.
+
+For each claimed request the dispatcher appends a row to
+`WorkflowStartAttempt` (dispatcher, attempt, call time) and calls the
+workflow host's management API for `FulfillOrderWorkflow` with the instance
+id `fulfill-{orderId:N}`; it never uses its own sidecar's workflow API.
+
+| Answer | Start request |
+|---|---|
+| scheduled, or the instance already exists (any status) | `Started` |
+| no usable answer (transport errors or 5xx after the bounded retries) | stays `Pending`, released with exponential backoff (`StartAmbiguous`); the next attempt's state-first start reports an instance that the lost answer did create |
+| refused (4xx, e.g. the management policy) | stays `Pending`, released with a long backoff (`StartRejected`) |
+| the dispatcher dies | nothing is written; the lease expires and any replica claims the request again |
+
+Every change after the claim is conditional on the lease token. A dispatcher
+whose lease expired and was claimed by another (a hung call, a pause) changes
+nothing when it comes back: its attempt ends `LeaseLost`. A slow start never
+blocks the dispatcher: starts run concurrently, up to a bound, while it keeps
+polling.
+
+Two dispatchers can still both call the workflow host for one order (a lease
+that expired during a slow call), and the host's state-first check is not
+atomic. So the dispatcher is not what prevents duplicate execution; the
+**execution claim** is: the first activity of every run, `ClaimExecution`
+(on `order-api`), reads the order with an update lock, rejects the run when
+the order is terminal (counted in `FenceRejections` and
+`fence_rejections_total`), and otherwise counts the claim. Every claim is
+audited in `ExecutionClaim`. More than one claim for a non-terminal order is
+normal after a replay or a second start; effects are keyed, so they are not
+repeated.
+
+The fulfillment workflow is a minimal shell for now: it claims execution and
+ends (`ShellClaimed`), or ends at once when the claim is rejected
+(`AlreadyTerminal`). The fulfillment steps follow the claim.
+
+`GET /system/orders/{orderId}/execution` (admin key) shows the start
+request, its attempts, the claims, and the workflow's runtime state.
 
 ## Workflow Management Lives With the Workflow Host
 

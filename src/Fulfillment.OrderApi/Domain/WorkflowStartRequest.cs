@@ -41,6 +41,12 @@ public sealed class WorkflowStartRequest
 
     public DateTime? LeaseExpiresAt { get; private set; }
 
+    /// <summary>
+    /// Fencing token of the current claim, new on every claim. Every update after the claim matches
+    /// it, so a dispatcher whose lease expired and was claimed again cannot change the row.
+    /// </summary>
+    public Guid? LeaseToken { get; private set; }
+
     /// <summary>Closed code of the last failed attempt (never a message or payload).</summary>
     public string? LastErrorCode { get; private set; }
 
@@ -62,4 +68,65 @@ public sealed class WorkflowStartRequest
         InstanceId = FulfillmentWorkflow.InstanceId(orderId),
         State = WorkflowStartState.Pending,
     };
+}
+
+/// <summary>
+/// Append-only record of one start attempt: written before the call to the workflow host and
+/// completed with its result. Overlapping attempts for one order show concurrent starts; a
+/// <c>LeaseLost</c> result shows a stale dispatcher that was kept from changing the request.
+/// </summary>
+public sealed class WorkflowStartAttempt
+{
+    private WorkflowStartAttempt()
+    {
+        DispatcherId = null!;
+        InstanceId = null!;
+    }
+
+    public long Id { get; private set; }
+
+    public Guid OrderId { get; private set; }
+
+    public Guid LeaseToken { get; private set; }
+
+    public string DispatcherId { get; private set; }
+
+    public string InstanceId { get; private set; }
+
+    public int Attempt { get; private set; }
+
+    public DateTime CalledAt { get; private set; }
+
+    public DateTime? CompletedAt { get; private set; }
+
+    /// <summary>Started, AlreadyExists, Ambiguous, Rejected, or LeaseLost (closed code domain).</summary>
+    public string? Result { get; private set; }
+
+    /// <summary>Runtime status the workflow host reported, if any.</summary>
+    public string? ReportedStatus { get; private set; }
+}
+
+/// <summary>One row per execution claim made by a workflow run (audit of the execution fence).</summary>
+public sealed class ExecutionClaim
+{
+    private ExecutionClaim()
+    {
+        InstanceId = null!;
+        Outcome = null!;
+        OrderStatus = null!;
+    }
+
+    public long Id { get; private set; }
+
+    public Guid OrderId { get; private set; }
+
+    public string InstanceId { get; private set; }
+
+    /// <summary>Proceed or AlreadyTerminal.</summary>
+    public string Outcome { get; private set; }
+
+    /// <summary>Business status the claim saw.</summary>
+    public string OrderStatus { get; private set; }
+
+    public DateTime ClaimedAt { get; private set; }
 }

@@ -13,7 +13,7 @@ namespace Fulfillment.IntegrationTests.Infrastructure;
 /// DI containers, contexts, and connection pools sharing only SQL Server. The Dapr sidecar is absent;
 /// order acceptance does not use it.
 /// </summary>
-public sealed class OrderApiHost(string connectionString, Action<IServiceCollection>? configureServices = null)
+public sealed class OrderApiHost(string connectionString, Action<IServiceCollection>? configureServices = null, bool dispatcherEnabled = false)
     : WebApplicationFactory<Program>
 {
     public const string CustomerApiKey = "integration-customer-key";
@@ -41,6 +41,8 @@ public sealed class OrderApiHost(string connectionString, Action<IServiceCollect
         builder.UseSetting("Logging:LogLevel:Default", "Warning");
         builder.UseSetting("Logging:LogLevel:Dapr", "Error");
         builder.UseSetting("Logging:LogLevel:Grpc", "Error");
+        // The start dispatcher runs only in tests that enable it (it would act on every pending row).
+        builder.UseSetting("StartDispatcher:Enabled", dispatcherEnabled ? "true" : "false");
         if (configureServices is not null)
         {
             builder.ConfigureTestServices(configureServices);

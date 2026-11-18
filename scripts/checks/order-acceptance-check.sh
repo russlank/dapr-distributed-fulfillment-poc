@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # Durable order acceptance on the running stack, proven from OrderDb rows (not only HTTP codes):
-#   ACC-1 accept      a new order commits order, lines, first status row, key, and a Pending start
-#                     request with the derived instance id, all at once
+#   ACC-1 accept      a new order commits order, lines, first status row, key, and a start request
+#                     with the derived instance id, all at once (Pending, or already Started by the
+#                     start dispatcher)
 #   ACC-2 replay      the same key and payload (on the second replica when it runs) returns the
 #                     original order and writes nothing
 #   ACC-3 conflict    the same key with another payload returns 422 and writes nothing
 #   ACC-4 replicas    concurrent submissions with one key, alternating order-api and order-api-2,
 #                     create exactly one order (needs the replicas profile; UNVERIFIED otherwise)
 #   ACC-5 restart     after a cold restart of the order API the retry returns the same order
-#   ACC-6 no start    acceptance started no workflow: no state for the order's instance id in
-#                     DaprStateDb (starting is the start dispatcher's job)
+#   ACC-6 dispatched  the start dispatcher started the workflow through the workflow host: the start
+#                     request becomes Started, the instance ran (claim, shell outcome), and its state
+#                     belongs to workflow-host only, never to order-api's own sidecar
 # Usage: scripts/checks/order-acceptance-check.sh   (exit 0 only if no check failed)
 . "$(dirname "$0")/../lib.sh"
 
@@ -49,13 +51,13 @@ read -r status body <<< "$(submit "$ORDER_API" "$KEY" "$BODY")"
 echo "accept: $status $body" >> "$OUT_DIR/responses.txt"
 ORDER_ID="$(json_get "$body" orderId)"
 NORMALIZED="$(echo "$ORDER_ID" | tr -d '-')"
-row="$(sql OrderDb "SELECT CONCAT(o.Status, '|', r.State, '|', r.InstanceId, '|', r.Attempts, '|', r.ExecutionClaims, '|',
+row="$(sql OrderDb "SELECT CONCAT(o.Status, '|', CASE WHEN r.State IN ('Pending', 'Started') THEN 'Accepted' ELSE r.State END, '|', r.InstanceId, '|',
   (SELECT STRING_AGG(CONCAT(LineNumber, ':', Sku, ':', Quantity), ',') WITHIN GROUP (ORDER BY LineNumber) FROM orders.OrderLine WHERE OrderId = o.OrderId), '|',
   (SELECT CONCAT(Sequence, ':', ToStatus, ':', ReasonCode) FROM orders.OrderStatusHistory WHERE OrderId = o.OrderId))
   FROM orders.[Order] o JOIN orders.WorkflowStartRequest r ON r.OrderId = o.OrderId WHERE o.OrderId = '$ORDER_ID'")"
-expected_row="Submitted|Pending|fulfill-$NORMALIZED|0|0|1:SKU-1:2,2:SKU-2:1|1:Submitted:Accepted"
+expected_row="Submitted|Accepted|fulfill-$NORMALIZED|1:SKU-1:2,2:SKU-2:1|1:Submitted:Accepted"
 if [[ "$status" == 201 && "$row" == "$expected_row" && "$(counts)" == "1/2/1/1/1" ]]; then
-  check ACC-1 PASS "201; order, 2 lines, 1 status row, key, Pending start request" "order $ORDER_ID: $row; rows $(counts)"
+  check ACC-1 PASS "201; order, 2 lines, 1 status row, key, start request (Pending or Started)" "order $ORDER_ID: $row; rows $(counts)"
 else
   check ACC-1 FAIL "201 and $expected_row, rows 1/2/1/1/1" "status=$status row=$row rows=$(counts)"
 fi
@@ -115,13 +117,21 @@ else
   check ACC-5 FAIL "200 replayed $ORDER_ID" "status=$status body=$body rows=$(counts)"
 fi
 
-# ACC-6 no workflow was started by acceptance -------------------------------------------------------
-state_rows="$(sql DaprStateDb "SELECT COUNT(*) FROM dbo.state WHERE [Key] LIKE '%||fulfill-$NORMALIZED||%'")"
-start_state="$(sql OrderDb "SELECT State FROM orders.WorkflowStartRequest WHERE OrderId = '$ORDER_ID'")"
-if [[ "$state_rows" == 0 && "$start_state" == Pending ]]; then
-  check ACC-6 PASS "no workflow state for fulfill-<orderId>; start request still Pending" "DaprStateDb rows=0; start request $start_state"
+# ACC-6 started by the dispatcher through the workflow host ---------------------------------------
+started_state() { [[ "$(sql OrderDb "SELECT State FROM orders.WorkflowStartRequest WHERE OrderId = '$ORDER_ID'")" == Started ]]; }
+wait_until 60 "start request Started" started_state
+execution="$(admin_api GET "/system/orders/$ORDER_ID/execution")"
+echo "execution: $execution" >> "$OUT_DIR/responses.txt"
+workflow_host_rows="$(sql DaprStateDb "SELECT COUNT(*) FROM dbo.state WHERE [Key] LIKE 'workflow-host||%||fulfill-$NORMALIZED||%'")"
+order_api_rows="$(sql DaprStateDb "SELECT COUNT(*) FROM dbo.state WHERE [Key] LIKE 'order-api||%||fulfill-$NORMALIZED||%'")"
+start_state="$(json_get "$execution" startRequest.state)"
+wf_status="$(json_get "$execution" workflow.status)"
+wf_outcome="$(json_get "$execution" workflow.output.outcome)"
+claims="$(json_get "$execution" startRequest.executionClaims)"
+if [[ "$start_state" == Started && "$wf_status" == Completed && "$wf_outcome" == ShellClaimed && "${claims:-0}" -ge 1       && "${workflow_host_rows:-0}" -gt 0 && "$order_api_rows" == 0 ]]; then
+  check ACC-6 PASS "Started by the dispatcher; instance on workflow-host only; claim made"     "start request $start_state; workflow $wf_status/$wf_outcome; claims=$claims; state rows workflow-host=$workflow_host_rows order-api=$order_api_rows"
 else
-  check ACC-6 FAIL "0 workflow state rows, start request Pending" "DaprStateDb rows=$state_rows; start request $start_state"
+  check ACC-6 FAIL "Started, workflow Completed/ShellClaimed, claims>=1, state rows only under workflow-host"     "start=$start_state workflow=$wf_status/$wf_outcome claims=$claims rows workflow-host=$workflow_host_rows order-api=$order_api_rows"
 fi
 
 log "order acceptance check finished: $failures failed check(s); results in $RESULTS_FILE"

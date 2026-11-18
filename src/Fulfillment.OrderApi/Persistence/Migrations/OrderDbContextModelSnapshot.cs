@@ -23,6 +23,51 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.ExecutionClaim", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTime>("ClaimedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<string>("InstanceId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("OrderStatus")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(32)");
+
+                    b.Property<string>("Outcome")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrderId", "ClaimedAt")
+                        .HasDatabaseName("IX_ExecutionClaim_Order");
+
+                    b.ToTable("ExecutionClaim", "orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_ExecutionClaim_Outcome", "[Outcome] IN ('Proceed', 'AlreadyTerminal')");
+                        });
+                });
+
             modelBuilder.Entity("Fulfillment.OrderApi.Domain.IdempotencyKey", b =>
                 {
                     b.Property<string>("Key")
@@ -171,6 +216,68 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.WorkflowStartAttempt", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<int>("Attempt")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CalledAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("DispatcherId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<string>("InstanceId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<Guid>("LeaseToken")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ReportedStatus")
+                        .HasMaxLength(32)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(32)");
+
+                    b.Property<string>("Result")
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LeaseToken")
+                        .IsUnique()
+                        .HasDatabaseName("UX_WorkflowStartAttempt_LeaseToken");
+
+                    b.HasIndex("OrderId", "CalledAt")
+                        .HasDatabaseName("IX_WorkflowStartAttempt_Order");
+
+                    b.ToTable("WorkflowStartAttempt", "orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_WorkflowStartAttempt_Result", "[Result] IS NULL OR [Result] IN ('Started', 'AlreadyExists', 'Ambiguous', 'Rejected', 'LeaseLost')");
+                        });
+                });
+
             modelBuilder.Entity("Fulfillment.OrderApi.Domain.WorkflowStartRequest", b =>
                 {
                     b.Property<Guid>("OrderId")
@@ -212,6 +319,9 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                         .IsUnicode(false)
                         .HasColumnType("varchar(64)");
 
+                    b.Property<Guid?>("LeaseToken")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<DateTime>("NextAttemptAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("datetime2(3)")
@@ -242,12 +352,21 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                         {
                             t.HasCheckConstraint("CK_WorkflowStartRequest_Counters", "[Attempts] >= 0 AND [ExecutionClaims] >= 0 AND [FenceRejections] >= 0");
 
-                            t.HasCheckConstraint("CK_WorkflowStartRequest_Lease", "([LeaseOwner] IS NULL AND [LeaseExpiresAt] IS NULL) OR ([LeaseOwner] IS NOT NULL AND [LeaseExpiresAt] IS NOT NULL)");
+                            t.HasCheckConstraint("CK_WorkflowStartRequest_Lease", "([LeaseOwner] IS NULL AND [LeaseExpiresAt] IS NULL AND [LeaseToken] IS NULL) OR ([LeaseOwner] IS NOT NULL AND [LeaseExpiresAt] IS NOT NULL AND [LeaseToken] IS NOT NULL)");
 
                             t.HasCheckConstraint("CK_WorkflowStartRequest_Lifecycle", "([State] = 'Pending' AND [StartedAt] IS NULL AND [ClosedAt] IS NULL) OR ([State] = 'Started' AND [StartedAt] IS NOT NULL AND [ClosedAt] IS NULL) OR ([State] = 'Closed' AND [ClosedAt] IS NOT NULL)");
 
                             t.HasCheckConstraint("CK_WorkflowStartRequest_State", "[State] IN ('Pending', 'Started', 'Closed')");
                         });
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.ExecutionClaim", b =>
+                {
+                    b.HasOne("Fulfillment.OrderApi.Domain.Order", null)
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Fulfillment.OrderApi.Domain.IdempotencyKey", b =>
@@ -272,6 +391,15 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                 {
                     b.HasOne("Fulfillment.OrderApi.Domain.Order", null)
                         .WithMany("History")
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.WorkflowStartAttempt", b =>
+                {
+                    b.HasOne("Fulfillment.OrderApi.Domain.Order", null)
+                        .WithMany()
                         .HasForeignKey("OrderId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

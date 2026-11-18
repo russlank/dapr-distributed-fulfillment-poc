@@ -11,6 +11,13 @@ DRILL_ID=R00
 . "$(dirname "$0")/lib.sh"
 
 drill_preflight
+# R00 proves re-execution after the restart of the killed replica, so no other inventory replica may
+# exist: with the replicas profile, Dapr re-runs the activity on another replica at once (observed:
+# 2 attempts before the restart), which is valid but not what this self-test measures.
+if [[ "$(docker compose --profile replicas --profile scale ps --format '{{.Service}}' | grep -c '^inventory-service-[0-9]*$')" != 0 ]]; then
+  log "REFUSED: R00 needs the core profile (one inventory-service replica); start with scripts/stack-up.sh --drill"
+  exit 2
+fi
 PROBE="r00-$(date -u +%H%M%S)-$RANDOM"
 KEY="$PROBE:probe-effect:step1"
 FAILPOINT=AfterProbeEffectCommitBeforeActivityCompletion

@@ -39,7 +39,23 @@ public static class WorkflowManagementApi
                 return Results.Ok(new WorkflowStartResult(instanceId, Started: false, state.RuntimeStatus.ToString()));
             }
 
-            await client.ScheduleNewWorkflowAsync(workflowName, instanceId, input);
+            try
+            {
+                await client.ScheduleNewWorkflowAsync(workflowName, instanceId, input);
+            }
+            catch (Exception) when (!replace)
+            {
+                // A concurrent start may have created the instance between the check and the schedule
+                // call (the check is not atomic): report it like any existing instance; otherwise fail.
+                var raced = await client.GetWorkflowStateAsync(instanceId, getInputsAndOutputs: false, ct);
+                if (raced is not { Exists: true })
+                {
+                    throw;
+                }
+
+                return Results.Ok(new WorkflowStartResult(instanceId, Started: false, raced.RuntimeStatus.ToString()));
+            }
+
             return Results.Ok(new WorkflowStartResult(instanceId, Started: true, "Scheduled"));
         });
 

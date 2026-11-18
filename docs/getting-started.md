@@ -64,8 +64,10 @@ curl -s -X POST http://127.0.0.1:8080/orders -H "X-Api-Key: $CUSTOMER_API_KEY" \
   -d '{"customerId":"c-1","lines":[{"sku":"SKU-1","quantity":2}]}'
 ```
 
-The order stays `Submitted` with a pending start request until the start
-dispatcher exists.
+Within about a second the start dispatcher starts its workflow through the
+workflow host. The workflow is still a minimal shell (it claims execution and
+ends), so the order stays `Submitted`; the execution view shows the start:
+`curl -s http://127.0.0.1:8080/system/orders/<orderId>/execution -H "X-Api-Key: $ADMIN_API_KEY"`.
 
 ## Stop and Reset
 

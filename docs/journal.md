@@ -3,6 +3,52 @@
 What broke, what surprised us, and what we changed. Newest first. Each entry
 keeps the expectation that turned out wrong.
 
+## 2026-11-18: Workflow start dispatcher and execution claim
+
+### Every replica re-claimed its own expired leases
+
+- **Expected:** when a start attempt outlives its lease, either order API
+  replica claims the request again.
+- **Observed:** first S51 run: 15 orders had overlapping attempts and all 20
+  stale attempts ended `LeaseLost`, but every re-claim was made by the replica
+  that held the lease (S51-race `UNVERIFIED`).
+- **Cause:** each dispatcher polled at a fixed interval in phase with its own
+  claims, so it woke right after its own lease expired, ahead of the other
+  replica. A stuck replica would keep its own work.
+- **Fix:** jittered poll interval (0.5-1.5×). The next two S51 runs: 10 and
+  6 orders with overlapping attempts from both replicas; both `PASS`.
+
+### A slow start call stalled the dispatcher
+
+- **Expected:** a dispatcher keeps starting other orders while one call is
+  slow.
+- **Observed (review, before the first S51 run):** each poll awaited all of
+  its starts, so one hung call stopped the replica's dispatcher, and it could
+  never take over an expired lease while waiting.
+- **Fix:** starts run concurrently up to `MaxInFlight` while the loop keeps
+  polling; an integration test shows a second order started while the first
+  call is still in flight.
+
+### R00 measured something else on a stack with inventory replicas
+
+- **Expected:** R00 behaves the same on any drill stack.
+- **Observed:** on a drill stack with the replicas profile R00 failed:
+  2 committed attempts before the killed inventory replica was restarted.
+  The effect stayed single and the probe completed.
+- **Cause:** another inventory replica ran the activity again at once. R00
+  measures re-execution after the restart of the only replica.
+- **Fix:** R00 refuses stacks with additional inventory replicas; it passes
+  on the core drill stack.
+
+### Smaller problems
+
+- The first concurrent-dispatcher test passed its correctness assertions but
+  failed its own guard: one dispatcher claimed all 30 orders in one poll, so
+  no concurrency happened. Smaller batches make the dispatchers interleave.
+- Scheduling can fail when another start created the instance between the
+  management API's check and its schedule call; the API now reports the
+  existing instance instead of a 500.
+
 ## 2026-11-18: Durable order acceptance
 
 ### Woodpecker failed a green run because of the SQL Server service's exit

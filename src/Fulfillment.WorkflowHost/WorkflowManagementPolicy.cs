@@ -34,8 +34,11 @@ public sealed class WorkflowManagementPolicy
         this.workflowTypes = new HashSet<string>(workflowTypes, StringComparer.Ordinal);
     }
 
-    /// <summary>M0 policy: the order API manages the runtime probe. M1 adds the fulfillment workflow.</summary>
-    public static WorkflowManagementPolicy Default { get; } = new([AppIds.OrderApi], [RuntimeProbe.WorkflowName]);
+    /// <summary>
+    /// The order API (start dispatcher, probes) manages the runtime probe and the fulfillment
+    /// workflow. Each further workflow type is added here deliberately, with its callers.
+    /// </summary>
+    public static WorkflowManagementPolicy Default { get; } = new([AppIds.OrderApi], [RuntimeProbe.WorkflowName, FulfillmentWorkflow.Name]);
 
     public ManagementDecision CanStart(string? caller, string workflowName, string instanceId, bool replaceTerminal)
     {

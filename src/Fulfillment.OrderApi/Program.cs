@@ -2,9 +2,11 @@ using System.Text.RegularExpressions;
 using Dapr.Workflow;
 using Fulfillment.Contracts;
 using Fulfillment.Contracts.Diagnostics;
+using Fulfillment.Contracts.Workflows;
 using Fulfillment.Messaging;
 using Fulfillment.OrderApi;
 using Fulfillment.OrderApi.Diagnostics;
+using Fulfillment.OrderApi.Dispatch;
 using Fulfillment.OrderApi.Orders;
 using Fulfillment.OrderApi.Persistence;
 using Fulfillment.ServiceDefaults;
@@ -22,6 +24,13 @@ var orderDb = builder.Configuration.GetConnectionString("OrderDb")!;
 builder.Services.AddSingleton(new ProbeStore(orderDb));
 builder.Services.AddDbContext<OrderDbContext>(o => OrderDbContext.Configure(o, orderDb));
 builder.Services.AddScoped<OrderAcceptance>();
+builder.Services.AddSingleton(new ExecutionFence(orderDb));
+
+// Durable start dispatcher: starts fulfillment workflows through the workflow host's management API.
+builder.Services.Configure<StartDispatcherOptions>(builder.Configuration.GetSection(StartDispatcherOptions.Section));
+builder.Services.AddSingleton(new WorkflowStartStore(orderDb));
+builder.Services.AddTransient<IWorkflowStarter, WorkflowHostStarter>();
+builder.Services.AddHostedService<WorkflowStartDispatcher>();
 builder.Services.AddSidecarInvoker();
 builder.Services.AddTransient<WorkflowHostClient>();
 
@@ -30,13 +39,16 @@ builder.Services.AddDaprWorkflow(options =>
 {
     options.RegisterActivity<ClaimProbeExecutionActivity>(ActivityNames.Claim);
     options.RegisterActivity<CompleteProbeExecutionActivity>(ActivityNames.Complete);
+    options.RegisterActivity<ClaimFulfillmentExecutionActivity>(FulfillmentWorkflow.ClaimExecutionActivity);
 });
 
 var app = builder.Build();
 await OrderDbMigrations.EnsureCurrentAsync(app.Services);
 await app.Services.GetRequiredService<ProbeStore>().EnsureSchemaAsync();
+await app.Services.GetRequiredService<Failpoints>().EnsureStoreAsync();
 app.MapServiceDefaults();
 app.MapOrders();
+app.MapOrderExecutionDiagnostics();
 
 // Runtime probe (operational diagnostic, admin key): exercises execution claim, cross-app
 // activities, durable timer, and keyed effects end to end. Not business functionality.
