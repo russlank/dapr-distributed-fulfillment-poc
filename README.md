@@ -5,10 +5,14 @@ Workflow, Actors, and Pub/Sub on .NET 10, with SQL Server as the source of
 business truth, external client, carrier, and payment-provider simulators,
 and scripted failure drills. Synthetic data only; not production software.
 
-**Status:** foundation. Every role builds, runs with its own Dapr sidecar,
-reports its identity and health, and exports telemetry; a runtime probe
-proves workflow recovery, persistence, and the execution claim end to end.
-Fulfillment functionality is not built yet.
+**Status:** durable orders with a simulated fulfillment. Orders are accepted
+idempotently, started once in effect from any order API replica, validated,
+checked in parallel on the compute workers, and completed by simulated
+fulfillment steps, with every business effect keyed and stored once.
+Reservation, payment, shipping, human review, and event distribution are not
+built yet. Every role runs with its own Dapr sidecar, reports its identity
+and health, and exports telemetry; scenario and drill scripts prove the
+behavior from the databases.
 
 ## Quick Start
 
