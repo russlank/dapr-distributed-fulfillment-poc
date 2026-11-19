@@ -69,7 +69,7 @@ import json, os, sys
 d, drill, run, outcome, injected, observed, recovered, cleanup, duration, commit = sys.argv[1:11]
 assertions = [json.loads(l) for l in open(os.path.join(d, "assertions.jsonl"), encoding="utf-8")] if os.path.exists(os.path.join(d, "assertions.jsonl")) else []
 identity = open(os.path.join(d, "identity.txt"), encoding="utf-8").read().splitlines() if os.path.exists(os.path.join(d, "identity.txt")) else []
-result = {"drillId": drill, "runId": run, "gitCommit": commit, "environment": "drill", "versions": identity,
+result = {"drillId": drill, "runId": run, "gitCommit": commit, "treeState": os.environ.get("GIT_TREE_STATE"), "environment": "drill", "versions": identity,
           "injectedAtUtc": injected or None, "faultObserved": observed or None, "recoveredAtUtc": recovered or None,
           "assertions": assertions, "cleanupSucceeded": cleanup == "true", "outcome": outcome, "durationMs": int(duration)}
 json.dump(result, open(os.path.join(d, "result.json"), "w", encoding="utf-8"), indent=2)

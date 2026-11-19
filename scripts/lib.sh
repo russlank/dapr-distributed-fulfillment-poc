@@ -115,14 +115,17 @@ restart_pair() {
 
 # Results: one JSON line per check in $RESULTS_FILE, plus a PASS/FAIL line on stderr.
 RESULTS_FILE="${RESULTS_FILE:-}"
+# Each line also names the commit, tree state, and build flavor the scripts ran from, so a result
+# file stays attributable to its commit after it is copied or archived.
 record() { # record <id> <PASS|FAIL|UNVERIFIED> <expected> <observed>
   log "$2 $1: $4"
   if [[ -n "$RESULTS_FILE" ]]; then
     python -c "
 import json, sys, datetime
 print(json.dumps({'check': sys.argv[1], 'result': sys.argv[2], 'expected': sys.argv[3], 'observed': sys.argv[4],
-                  'at': datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')}))
-" "$1" "$2" "$3" "$4" >> "$RESULTS_FILE"
+                  'at': datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'),
+                  'gitCommit': sys.argv[5], 'treeState': sys.argv[6], 'buildFlavor': sys.argv[7]}))
+" "$1" "$2" "$3" "$4" "$GIT_COMMIT" "$GIT_TREE_STATE" "$BUILD_FLAVOR" >> "$RESULTS_FILE"
   fi
 }
 
