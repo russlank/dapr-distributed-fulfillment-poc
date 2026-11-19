@@ -42,6 +42,7 @@ Details: [docs/getting-started.md](docs/getting-started.md).
 | [docs/security.md](docs/security.md) | trust boundaries and secrets |
 | [docs/versions.md](docs/versions.md) | pinned versions and observed Dapr runtime behavior |
 | [docs/journal.md](docs/journal.md) | what broke and what changed because of it |
+| [docs/releases/v0.2.0.md](docs/releases/v0.2.0.md) | M1 release: capabilities, verified guarantees, limitations |
 | [spikes/dapr-compat/README.md](spikes/dapr-compat/README.md) | the Dapr compatibility spike |
 
 ## Versions
