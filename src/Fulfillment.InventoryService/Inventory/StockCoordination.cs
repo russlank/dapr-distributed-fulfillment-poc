@@ -89,7 +89,10 @@ public interface IStockActor : IActor
     Task<ReleaseResult> ReleaseAsync(ReleaseCommand command);
 }
 
-/// <summary>Failpoint names inside the stock actor's turn (drill builds only; key: the operation key).</summary>
+/// <summary>
+/// Failpoint names inside the stock actor's turn (drill builds only). The key is the actor id
+/// (warehouse|SKU), so a drill can make every reservation of one SKU fail without knowing order ids.
+/// </summary>
 public static class StockActorFailpoints
 {
     /// <summary>Inside the reserve turn, before the SQL: Throw makes the reservation fail, Delay holds the turn.</summary>
@@ -107,7 +110,7 @@ public sealed partial class StockActor(ActorHost host, InventoryOperations opera
     public async Task<ReserveResult> ReserveAsync(ReserveCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        await failpoints.HitAsync(StockActorFailpoints.BeforeStockReserve, command.OperationKey);
+        await failpoints.HitAsync(StockActorFailpoints.BeforeStockReserve, Id.GetId());
         return await operations.ReserveAsync(command);
     }
 
