@@ -474,6 +474,22 @@ services:
       toxiproxy:
         condition: service_started
 
+  # One-shot: InventoryDb schema (EF migrations), before any inventory replica starts.
+  inventory-db-migrate:
+    build:
+      context: ./src
+      args:
+        <<: *build-args
+        PROJECT: Fulfillment.InventoryService
+    image: fulfillment/inventory-service:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    restart: "no"
+    mem_limit: 256m
+    command: ["migrate"]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      ConnectionStrings__InventoryDb: "Server=sqlserver;Database=InventoryDb;User Id=inventory_service;Password=${INVENTORY_DB_PASSWORD};TrustServerCertificate=true"
   inventory-service:
     <<: *app
     build:
@@ -482,10 +498,15 @@ services:
         <<: *build-args
         PROJECT: Fulfillment.InventoryService
     image: fulfillment/inventory-service:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    depends_on:
+      inventory-db-migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app-env
       REPLICA_NAME: inventory-service
       ConnectionStrings__InventoryDb: "Server=sqlserver;Database=InventoryDb;User Id=inventory_service;Password=${INVENTORY_DB_PASSWORD};TrustServerCertificate=true"
+      Inventory__Coordination: ${INVENTORY_COORDINATION:-Actor}
+      INVENTORY_HOLD_TTL: ${INVENTORY_HOLD_TTL:-}
   inventory-service-dapr:
     <<: *daprd
     network_mode: "service:inventory-service"
@@ -508,10 +529,15 @@ services:
     <<: *app
     image: fulfillment/inventory-service:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
     profiles: [replicas]
+    depends_on:
+      inventory-db-migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app-env
       REPLICA_NAME: inventory-service-2
       ConnectionStrings__InventoryDb: "Server=sqlserver;Database=InventoryDb;User Id=inventory_service;Password=${INVENTORY_DB_PASSWORD};TrustServerCertificate=true"
+      Inventory__Coordination: ${INVENTORY_COORDINATION:-Actor}
+      INVENTORY_HOLD_TTL: ${INVENTORY_HOLD_TTL:-}
   inventory-service-2-dapr:
     <<: *daprd
     profiles: [replicas]
@@ -535,10 +561,15 @@ services:
     <<: *app
     image: fulfillment/inventory-service:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
     profiles: [replicas]
+    depends_on:
+      inventory-db-migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app-env
       REPLICA_NAME: inventory-service-3
       ConnectionStrings__InventoryDb: "Server=sqlserver;Database=InventoryDb;User Id=inventory_service;Password=${INVENTORY_DB_PASSWORD};TrustServerCertificate=true"
+      Inventory__Coordination: ${INVENTORY_COORDINATION:-Actor}
+      INVENTORY_HOLD_TTL: ${INVENTORY_HOLD_TTL:-}
   inventory-service-3-dapr:
     <<: *daprd
     profiles: [replicas]

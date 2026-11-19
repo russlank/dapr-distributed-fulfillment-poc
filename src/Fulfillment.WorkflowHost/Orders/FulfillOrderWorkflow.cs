@@ -5,10 +5,17 @@ using Fulfillment.Contracts.Workflows;
 namespace Fulfillment.WorkflowHost.Orders;
 
 /// <summary>
-/// Fulfillment of one order (M1 scope): execution claim → validation → independent compute checks
-/// in parallel → stored checks decide whether a review is required → durable review wait (if
-/// required) → simulated fulfillment steps → terminal transaction that completes the order and
-/// closes its start request.
+/// Fulfillment of one order: execution claim → validation → independent compute checks in
+/// parallel → stored checks decide whether a review is required → durable review wait (if
+/// required) → reservation of every line in the inventory (whole line, first warehouse by
+/// priority) → simulated payment and shipment steps → consumption of all holds at once → terminal
+/// transaction that completes the order and closes its start request.
+///
+/// Inventory outcomes are results, not exceptions: a line no warehouse can serve releases what was
+/// reserved and rejects the order (InsufficientStock); a hold that expired before consumption
+/// releases the rest and compensates the order (ReservationExpired); an inventory step that still
+/// fails after its retries releases and compensates (ReservationFailed). Releasing closes the order
+/// in the inventory first, so a reservation that commits late is refused there.
 ///
 /// All business state is in OrderDb and changed only by the order-api activities, each of which is
 /// conditional (expected status) or keyed (operation key), so a retried activity or a repeated run
@@ -21,8 +28,8 @@ namespace Fulfillment.WorkflowHost.Orders;
 /// and after every wake-up (signal or timer, in whatever order Dapr delivers them); only the expiry
 /// activity takes a review out of Pending by time, and only when SQL time reached the deadline.
 ///
-/// The simulated steps stand in for reservation, payment, and shipment, which do not exist yet:
-/// they call no other service and record "stub-" effects only.
+/// The simulated steps stand in for payment and shipment, which do not exist yet: they call no
+/// other service and record "stub-" effects only.
 /// </summary>
 public sealed partial class FulfillOrderWorkflow : Workflow<FulfillmentInput, FulfillmentResult>
 {
@@ -31,6 +38,7 @@ public sealed partial class FulfillOrderWorkflow : Workflow<FulfillmentInput, Fu
 
     private static readonly WorkflowTaskOptions OnOrderApi = new(Retry, AppIds.OrderApi);
     private static readonly WorkflowTaskOptions OnCompute = new(Retry, AppIds.ComputeWorker);
+    private static readonly WorkflowTaskOptions OnInventory = new(Retry, AppIds.InventoryService);
 
     public override async Task<FulfillmentResult> RunAsync(WorkflowContext context, FulfillmentInput input)
     {
@@ -93,6 +101,28 @@ public sealed partial class FulfillOrderWorkflow : Workflow<FulfillmentInput, Fu
             return Fenced(log, context, begun.OrderStatus, claim);
         }
 
+        // Lines in SKU order (one line per SKU), each reserved whole or not at all.
+        context.SetCustomStatus("reserving");
+        foreach (var line in validation.Lines.OrderBy(l => l.Sku, StringComparer.Ordinal))
+        {
+            ReserveLineResult reserved;
+            try
+            {
+                reserved = await context.CallActivityAsync<ReserveLineResult>(InventoryActivities.ReserveOrderLine,
+                    new ReserveLineRequest(orderId, line.LineNumber, line.Sku, line.Quantity), OnInventory);
+            }
+            catch (WorkflowTaskFailedException)
+            {
+                return await EndUnfulfilledAsync(context, log, orderId, claim, "Compensated", ReasonCodes.ReservationFailed);
+            }
+
+            if (reserved.Outcome != InventoryOutcomes.Reserved)
+            {
+                // InsufficientStock is the business outcome; OrderClosed means the inventory already closed this order.
+                return await EndUnfulfilledAsync(context, log, orderId, claim, "Rejected", ReasonCodes.InsufficientStock);
+            }
+        }
+
         context.SetCustomStatus("fulfilling");
         foreach (var line in validation.Lines.OrderBy(l => l.LineNumber))
         {
@@ -102,6 +132,22 @@ public sealed partial class FulfillOrderWorkflow : Workflow<FulfillmentInput, Fu
             {
                 return Fenced(log, context, step.OrderStatus, claim);
             }
+        }
+
+        ConsumeHoldsResult consumed;
+        try
+        {
+            consumed = await context.CallActivityAsync<ConsumeHoldsResult>(InventoryActivities.ConsumeOrderHolds,
+                new ConsumeHoldsRequest(orderId, validation.Lines.Count), OnInventory);
+        }
+        catch (WorkflowTaskFailedException)
+        {
+            return await EndUnfulfilledAsync(context, log, orderId, claim, "Compensated", ReasonCodes.ReservationFailed);
+        }
+
+        if (consumed.Outcome != InventoryOutcomes.Consumed)
+        {
+            return await EndUnfulfilledAsync(context, log, orderId, claim, "Compensated", ReasonCodes.ReservationExpired);
         }
 
         var completed = await context.CallActivityAsync<StepResult>(FulfillmentWorkflow.CompleteStubFulfillmentActivity,
@@ -195,6 +241,35 @@ public sealed partial class FulfillOrderWorkflow : Workflow<FulfillmentInput, Fu
 #pragma warning restore CA1849
         }
     }
+
+    /// <summary>
+    /// Releases every hold of the order (closing it in the inventory first), then ends the order
+    /// Rejected or Compensated in OrderDb. If the release itself keeps failing, the run fails and
+    /// the holds expire by the sweeper.
+    /// </summary>
+    private static async Task<FulfillmentResult> EndUnfulfilledAsync(WorkflowContext context, ILogger log, Guid orderId, ExecutionClaimResult claim, string status, string reason)
+    {
+        context.SetCustomStatus($"releasing:{reason}");
+        await context.CallActivityAsync<ReleaseHoldsResult>(InventoryActivities.ReleaseOrderHolds, new ReleaseHoldsRequest(orderId, reason), OnInventory);
+        var closed = await context.CallActivityAsync<StepResult>(FulfillmentWorkflow.CloseUnfulfilledOrderActivity,
+            new CloseUnfulfilledRequest(orderId, status, reason), OnOrderApi);
+        LogUnfulfilled(log, context.InstanceId, status, reason);
+        context.SetCustomStatus(status == "Rejected" ? "rejected" : "compensated");
+        return closed.Terminal && closed.OrderStatus != status
+            ? Fenced(log, context, closed.OrderStatus, claim)
+            : new FulfillmentResult(status == "Rejected" ? FulfillmentOutcomes.Rejected : FulfillmentOutcomes.Compensated, closed.OrderStatus, claim.ExecutionClaims);
+    }
+
+    /// <summary>Reason codes the workflow sets (the order API's closed code domain).</summary>
+    private static class ReasonCodes
+    {
+        public const string InsufficientStock = "InsufficientStock";
+        public const string ReservationExpired = "ReservationExpired";
+        public const string ReservationFailed = "ReservationFailed";
+    }
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "fulfillment {InstanceId}: ended {Status} ({Reason}); holds released")]
+    private static partial void LogUnfulfilled(ILogger logger, string instanceId, string status, string reason);
 
     private static FulfillmentResult Fenced(ILogger log, WorkflowContext context, string status, ExecutionClaimResult claim)
     {

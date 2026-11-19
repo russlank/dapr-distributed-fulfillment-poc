@@ -253,6 +253,47 @@ public sealed class FulfillmentSteps(string connectionString, string replica, St
         return new StepResult(StepOutcomes.Applied, key, nameof(OrderStatus.Completed));
     }
 
+    /// <summary>
+    /// The terminal transaction of an order whose fulfillment cannot finish after it began:
+    /// <c>Reserving</c> → <c>Rejected</c> (InsufficientStock) or <c>Compensated</c> (ReservationExpired,
+    /// ReservationFailed), with the start request closed in the same transaction. Repeating it, or
+    /// running it on an order that is already terminal, changes nothing. The inventory holds are
+    /// released by the workflow before this step.
+    /// </summary>
+    public async Task<StepResult> CloseUnfulfilledAsync(CloseUnfulfilledRequest request, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var target = request.Status switch
+        {
+            nameof(OrderStatus.Rejected) => OrderStatus.Rejected,
+            nameof(OrderStatus.Compensated) => OrderStatus.Compensated,
+            _ => throw new ArgumentException($"an unfulfilled order ends Rejected or Compensated, not {request.Status}", nameof(request)),
+        };
+        if (request.ReasonCode is not (OrderReasonCodes.InsufficientStock or OrderReasonCodes.ReservationExpired or OrderReasonCodes.ReservationFailed))
+        {
+            throw new ArgumentException($"unknown reason {request.ReasonCode}", nameof(request));
+        }
+
+        var key = OperationKey.For(request.OrderId, "close", target.ToString()).Value;
+        await using var connection = await OpenAsync(ct);
+        await using var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct);
+        var (status, _) = await LockOrThrowAsync(connection, tx, request.OrderId, ct);
+        if (OrderStatuses.IsTerminal(status))
+        {
+            await tx.CommitAsync(ct);
+            return new StepResult(status == target ? StepOutcomes.AlreadyApplied : StepOutcomes.AlreadyTerminal, key, status.ToString());
+        }
+
+        if (!await OrderTransitions.TryTransitionAsync(connection, tx, request.OrderId, OrderStatus.Reserving, target, request.ReasonCode, checkpoint, key, ct))
+        {
+            throw new InvalidOperationException($"closing an unfulfilled order in status {status}");
+        }
+
+        await OrderTransitions.CloseStartRequestAsync(connection, tx, request.OrderId, ct);
+        await tx.CommitAsync(ct);
+        return new StepResult(StepOutcomes.Applied, key, target.ToString());
+    }
+
     /// <summary>The stored (first committed) risk result of the order, or null before it is stored.</summary>
     internal static async Task<(bool ReviewRequired, int Score, string Version)?> StoredRiskAsync(SqlConnection connection, SqlTransaction tx, Guid orderId, CancellationToken ct)
     {

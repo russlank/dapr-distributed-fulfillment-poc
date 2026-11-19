@@ -60,6 +60,15 @@ public static class OrderReasonCodes
 
     /// <summary>AwaitingApproval → Rejected: the last review round expired without a decision.</summary>
     public const string ReviewExpired = "ReviewExpired";
+
+    /// <summary>Rejected after reservation began: no warehouse could serve a line whole; holds released.</summary>
+    public const string InsufficientStock = "InsufficientStock";
+
+    /// <summary>Compensated: a hold expired (by SQL time) before it was consumed; holds released.</summary>
+    public const string ReservationExpired = "ReservationExpired";
+
+    /// <summary>Compensated: a reservation or consume step failed after its retries; holds released.</summary>
+    public const string ReservationFailed = "ReservationFailed";
 }
 
 /// <summary>

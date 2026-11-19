@@ -14,5 +14,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Fulfillment.OrderApi\Fulfillment.OrderApi.csproj" />
     <ProjectReference Include="..\Fulfillment.ClientSimulator\Fulfillment.ClientSimulator.csproj" />
+    <ProjectReference Include="..\Fulfillment.InventoryService\Fulfillment.InventoryService.csproj" Aliases="inventory" />
+    <!-- Aliased: the inventory service has a public Program too (the order API host uses the global one). -->
   </ItemGroup>
 </Project>

@@ -3,6 +3,29 @@
 What broke, what surprised us, and what we changed. Newest first. Each entry
 keeps the expectation that turned out wrong.
 
+## 2026-11-19: Inventory (holds, stock actors, sweeper)
+
+### Range locks on missing keys deadlocked under contention
+
+- **Expected:** reading an operation key's stored result, the order's
+  closure, and the order's last outbox sequence with `UPDLOCK, HOLDLOCK`
+  serializes repeats of one key and keeps the outbox sequence gapless,
+  without affecting other orders.
+- **Observed (integration test, 60 concurrent reservations of one stock
+  row):** transactions deadlocked faster than three retries could absorb
+  (24 s, then a deadlock error). On a missing key, `HOLDLOCK` locks the gap
+  between existing keys, and different orders' missing keys share gaps: one
+  transaction held a gap lock and waited for the hot stock row, another held
+  the stock row and needed to insert into that gap.
+- **Fix:** every operation of one order takes an exclusive, transaction-scoped
+  application lock on the order first (`sp_getapplock`); under it, plain
+  reads see the latest committed rows, so no range locks are needed. The
+  sweeper finds a due hold without locking it, then takes the order's lock and
+  expires the hold only if it is still held and due. Afterwards: the
+  21 inventory tests passed in 8 of 8 repeated runs, including 60 concurrent
+  reservations, 20 racing repeats of one key, a release or a consume racing
+  the sweeper, and a close racing a late reservation.
+
 ## 2026-11-19: M1 drills R01, R02 A-D, R03, R06
 
 ### An invocation routed to a killed workflow host hung for 15 s

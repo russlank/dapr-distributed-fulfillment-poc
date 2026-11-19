@@ -30,3 +30,8 @@ public sealed class CompleteStubFulfillmentActivity(FulfillmentSteps steps) : Wo
 {
     public override Task<StepResult> RunAsync(WorkflowActivityContext context, CompleteFulfillmentRequest input) => steps.CompleteAsync(input);
 }
+
+public sealed class CloseUnfulfilledOrderActivity(FulfillmentSteps steps) : WorkflowActivity<CloseUnfulfilledRequest, StepResult>
+{
+    public override Task<StepResult> RunAsync(WorkflowActivityContext context, CloseUnfulfilledRequest input) => steps.CloseUnfulfilledAsync(input);
+}

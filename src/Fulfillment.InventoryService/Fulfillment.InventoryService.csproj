@@ -1,9 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
-  <!-- Dapr app inventory-service: owns InventoryDb; stock actors and reservation activities (from M2). -->
+  <!-- Dapr app inventory-service: owns InventoryDb; stock actors, reservation activities, and the hold-expiry sweeper. -->
   <ItemGroup>
     <ProjectReference Include="..\Fulfillment.ServiceDefaults\Fulfillment.ServiceDefaults.csproj" />
     <ProjectReference Include="..\Fulfillment.Contracts\Fulfillment.Contracts.csproj" />
     <PackageReference Include="Dapr.AspNetCore" />
+    <PackageReference Include="Dapr.Actors.AspNetCore" />
     <PackageReference Include="Dapr.Workflow" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
   </ItemGroup>
 </Project>

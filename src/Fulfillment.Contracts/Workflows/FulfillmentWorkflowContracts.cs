@@ -43,6 +43,9 @@ public static class FulfillmentWorkflow
     /// <summary>On order-api: the terminal transaction (stub completion effect, Completed, start request Closed).</summary>
     public const string CompleteStubFulfillmentActivity = "CompleteStubFulfillment";
 
+    /// <summary>On order-api: the terminal transaction of an order that cannot be fulfilled (Rejected or Compensated).</summary>
+    public const string CloseUnfulfilledOrderActivity = "CloseUnfulfilledOrder";
+
     public static string InstanceId(Guid orderId) => InstancePrefix + orderId.ToString("N");
 }
 
@@ -246,6 +249,16 @@ public static class FulfillmentOutcomes
 
     /// <summary>The simulated fulfillment completed the order.</summary>
     public const string Completed = "Completed";
+
+    /// <summary>The fulfillment could not finish after effects began (reservation failed or a hold expired): released and compensated.</summary>
+    public const string Compensated = "Compensated";
 }
+
+/// <summary>
+/// Ends an order that cannot be fulfilled after its reservations began: <c>Rejected</c> (a business
+/// outcome, e.g. InsufficientStock) or <c>Compensated</c> (a technical failure or an expired hold),
+/// with its reason code. The holds are released before.
+/// </summary>
+public sealed record CloseUnfulfilledRequest(Guid OrderId, string Status, string ReasonCode);
 
 public sealed record FulfillmentResult(string Outcome, string OrderStatus, int ExecutionClaims);

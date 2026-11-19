@@ -1,3 +1,4 @@
+using Dapr.Workflow;
 using Fulfillment.ComputeWorker.Checks;
 using Fulfillment.Contracts;
 using Fulfillment.Contracts.Workflows;
@@ -34,6 +35,10 @@ public class FulfillOrderWorkflowTests
             FulfillmentWorkflow.BeginFulfillmentActivity => new StepResult(StepOutcomes.Applied, "k", "Reserving"),
             FulfillmentWorkflow.ApplyStubStepActivity => new StepResult(StepOutcomes.Applied, "k", "Reserving"),
             FulfillmentWorkflow.CompleteStubFulfillmentActivity => new StepResult(StepOutcomes.Applied, "k", "Completed"),
+            FulfillmentWorkflow.CloseUnfulfilledOrderActivity => new StepResult(StepOutcomes.Applied, "k", ((CloseUnfulfilledRequest)input!).Status),
+            InventoryActivities.ReserveOrderLine => new ReserveLineResult(InventoryOutcomes.Reserved, Guid.NewGuid(), "W1", null, ["W1:Reserved"], "inventory-1"),
+            InventoryActivities.ConsumeOrderHolds => new ConsumeHoldsResult(InventoryOutcomes.Consumed, 2, "inventory-1"),
+            InventoryActivities.ReleaseOrderHolds => new ReleaseHoldsResult(1, 0, "inventory-1"),
             _ => throw new InvalidOperationException(name),
         };
 
@@ -67,8 +72,11 @@ public class FulfillOrderWorkflowTests
                 (FulfillmentWorkflow.AssessOrderRiskActivity, AppIds.ComputeWorker),
                 (FulfillmentWorkflow.RecordChecksActivity, AppIds.OrderApi),
                 (FulfillmentWorkflow.BeginFulfillmentActivity, AppIds.OrderApi),
+                (InventoryActivities.ReserveOrderLine, AppIds.InventoryService),
+                (InventoryActivities.ReserveOrderLine, AppIds.InventoryService),
                 (FulfillmentWorkflow.ApplyStubStepActivity, AppIds.OrderApi),
                 (FulfillmentWorkflow.ApplyStubStepActivity, AppIds.OrderApi),
+                (InventoryActivities.ConsumeOrderHolds, AppIds.InventoryService),
                 (FulfillmentWorkflow.CompleteStubFulfillmentActivity, AppIds.OrderApi),
             ],
             context.ActivityCalls.Select(c => (c.Name, c.TargetAppId!)).ToArray());
@@ -137,8 +145,8 @@ public class FulfillOrderWorkflowTests
     [InlineData(FulfillmentWorkflow.ValidateOrderActivity, 2)]
     [InlineData(FulfillmentWorkflow.RecordChecksActivity, 5)]
     [InlineData(FulfillmentWorkflow.BeginFulfillmentActivity, 6)]
-    [InlineData(FulfillmentWorkflow.ApplyStubStepActivity, 7)]
-    [InlineData(FulfillmentWorkflow.CompleteStubFulfillmentActivity, 9)]
+    [InlineData(FulfillmentWorkflow.ApplyStubStepActivity, 9)]
+    [InlineData(FulfillmentWorkflow.CompleteStubFulfillmentActivity, 12)]
     public async Task Run_StepFindsTheOrderTerminal_EndsThereWithoutFurtherSteps(string step, int calls)
     {
         var context = new FakeWorkflowContext(Instance)
@@ -204,7 +212,9 @@ public class FulfillOrderWorkflowTests
                 FulfillmentWorkflow.ClaimExecutionActivity, FulfillmentWorkflow.ValidateOrderActivity, FulfillmentWorkflow.PriceOrderActivity,
                 FulfillmentWorkflow.AssessOrderRiskActivity, FulfillmentWorkflow.RecordChecksActivity, FulfillmentWorkflow.CreateReviewTaskActivity,
                 FulfillmentWorkflow.ResolveReviewActivity, FulfillmentWorkflow.ResolveReviewActivity, FulfillmentWorkflow.BeginFulfillmentActivity,
-                FulfillmentWorkflow.ApplyStubStepActivity, FulfillmentWorkflow.ApplyStubStepActivity, FulfillmentWorkflow.CompleteStubFulfillmentActivity,
+                InventoryActivities.ReserveOrderLine, InventoryActivities.ReserveOrderLine,
+                FulfillmentWorkflow.ApplyStubStepActivity, FulfillmentWorkflow.ApplyStubStepActivity,
+                InventoryActivities.ConsumeOrderHolds, FulfillmentWorkflow.CompleteStubFulfillmentActivity,
             ],
             Names(context));
         Assert.Equal([ReviewWakes.Initial, ReviewWakes.Signal], Wakes(context));
@@ -331,6 +341,85 @@ public class FulfillOrderWorkflowTests
 
         Assert.Equal(new FulfillmentResult(FulfillmentOutcomes.Rejected, "Rejected", 1), result);
         Assert.DoesNotContain(FulfillmentWorkflow.BeginFulfillmentActivity, Names(context));
+    }
+
+    [Fact]
+    public async Task Run_Reservation_LinesInSkuOrderWithTheirQuantities()
+    {
+        ValidatedLine[] lines = [new(1, "SKU-9", 2), new(2, "SKU-10", 3)];
+        var context = new FakeWorkflowContext(Instance)
+        {
+            ActivityResult = Results((name, _) => name == FulfillmentWorkflow.ValidateOrderActivity
+                ? new OrderValidationResult(StepOutcomes.Valid, "Validating", null, "c-1", lines) : null),
+        };
+
+        await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        // Ordinal SKU order: "SKU-10" before "SKU-9"; consumption expects both lines.
+        Assert.Equal([new ReserveLineRequest(OrderId, 2, "SKU-10", 3), new ReserveLineRequest(OrderId, 1, "SKU-9", 2)],
+            context.ActivityCalls.Select(c => c.Input).OfType<ReserveLineRequest>().ToArray());
+        Assert.Equal(new ConsumeHoldsRequest(OrderId, 2), context.ActivityCalls.Select(c => c.Input).OfType<ConsumeHoldsRequest>().Single());
+    }
+
+    [Fact]
+    public async Task Run_LineWithoutStock_ReleasesWhatWasReservedAndRejects()
+    {
+        var reserves = 0;
+        var context = new FakeWorkflowContext(Instance)
+        {
+            ActivityResult = Results((name, _) => name == InventoryActivities.ReserveOrderLine && ++reserves == 2
+                ? new ReserveLineResult(InventoryOutcomes.InsufficientStock, null, null, null, ["W1:InsufficientStock", "W2:InsufficientStock"], "inventory-1") : null),
+        };
+
+        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.Equal(
+            [
+                FulfillmentWorkflow.BeginFulfillmentActivity, InventoryActivities.ReserveOrderLine, InventoryActivities.ReserveOrderLine,
+                InventoryActivities.ReleaseOrderHolds, FulfillmentWorkflow.CloseUnfulfilledOrderActivity,
+            ],
+            Names(context)[5..]);
+        Assert.Equal(new CloseUnfulfilledRequest(OrderId, "Rejected", "InsufficientStock"), context.ActivityCalls[^1].Input);
+        Assert.Equal(new ReleaseHoldsRequest(OrderId, "InsufficientStock"), context.ActivityCalls[^2].Input);
+        Assert.Equal(new FulfillmentResult(FulfillmentOutcomes.Rejected, "Rejected", 1), result);
+    }
+
+    [Fact]
+    public async Task Run_ReservationStillFailingAfterRetries_ReleasesAndCompensates()
+    {
+        var context = new FakeWorkflowContext(Instance)
+        {
+            ActivityResult = Results((name, _) => name == InventoryActivities.ReserveOrderLine
+                ? throw new WorkflowTaskFailedException("failed", new WorkflowTaskFailureDetails("InvalidOperationException", "inventory unavailable", null))
+                : null),
+        };
+
+        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.Equal([InventoryActivities.ReserveOrderLine, InventoryActivities.ReleaseOrderHolds, FulfillmentWorkflow.CloseUnfulfilledOrderActivity], Names(context)[6..]);
+        Assert.Equal(new CloseUnfulfilledRequest(OrderId, "Compensated", "ReservationFailed"), context.ActivityCalls[^1].Input);
+        Assert.Equal(new FulfillmentResult(FulfillmentOutcomes.Compensated, "Compensated", 1), result);
+    }
+
+    [Theory]
+    [InlineData(InventoryOutcomes.HoldExpired, "ReservationExpired")]
+    [InlineData(InventoryOutcomes.Incomplete, "ReservationExpired")]
+    [InlineData(null, "ReservationFailed")]
+    public async Task Run_ConsumptionImpossible_ReleasesAndCompensatesWithoutCompleting(string? outcome, string reason)
+    {
+        var context = new FakeWorkflowContext(Instance)
+        {
+            ActivityResult = Results((name, _) => name != InventoryActivities.ConsumeOrderHolds ? null
+                : outcome is null ? throw new WorkflowTaskFailedException("failed", new WorkflowTaskFailureDetails("SqlException", "timeout", null))
+                : new ConsumeHoldsResult(outcome, 0, "inventory-1")),
+        };
+
+        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.Equal([InventoryActivities.ConsumeOrderHolds, InventoryActivities.ReleaseOrderHolds, FulfillmentWorkflow.CloseUnfulfilledOrderActivity], Names(context)[^3..]);
+        Assert.DoesNotContain(FulfillmentWorkflow.CompleteStubFulfillmentActivity, Names(context));
+        Assert.Equal(new CloseUnfulfilledRequest(OrderId, "Compensated", reason), context.ActivityCalls[^1].Input);
+        Assert.Equal(new FulfillmentResult(FulfillmentOutcomes.Compensated, "Compensated", 1), result);
     }
 
     [Fact]

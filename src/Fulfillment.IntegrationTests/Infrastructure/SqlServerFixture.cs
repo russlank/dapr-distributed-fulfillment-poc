@@ -1,3 +1,5 @@
+extern alias inventory;
+
 using Fulfillment.IntegrationTests.Infrastructure;
 using Fulfillment.OrderApi.Persistence;
 using Microsoft.Data.SqlClient;
@@ -69,6 +71,17 @@ public sealed class SqlServerFixture : IAsyncLifetime
     {
         var connectionString = await CreateDatabaseAsync(prefix);
         await MigrateAsync(connectionString);
+        return connectionString;
+    }
+
+    /// <summary>Creates a database and applies the InventoryDb migrations, as the inventory migration job does.</summary>
+    public async Task<string> CreateInventoryDbAsync(string prefix)
+    {
+        var connectionString = await CreateDatabaseAsync(prefix);
+        var options = new DbContextOptionsBuilder<inventory::Fulfillment.InventoryService.Persistence.InventoryDbContext>();
+        inventory::Fulfillment.InventoryService.Persistence.InventoryDbContext.Configure(options, connectionString);
+        await using var db = new inventory::Fulfillment.InventoryService.Persistence.InventoryDbContext(options.Options);
+        await db.Database.MigrateAsync();
         return connectionString;
     }
 

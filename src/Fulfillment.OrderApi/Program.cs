@@ -64,6 +64,7 @@ builder.Services.AddDaprWorkflow(options =>
     options.RegisterActivity<RecordFulfillmentChecksActivity>(FulfillmentWorkflow.RecordChecksActivity);
     options.RegisterActivity<ApplyStubFulfillmentStepActivity>(FulfillmentWorkflow.ApplyStubStepActivity);
     options.RegisterActivity<CompleteStubFulfillmentActivity>(FulfillmentWorkflow.CompleteStubFulfillmentActivity);
+    options.RegisterActivity<CloseUnfulfilledOrderActivity>(FulfillmentWorkflow.CloseUnfulfilledOrderActivity);
     options.RegisterActivity<BeginStubFulfillmentActivity>(FulfillmentWorkflow.BeginFulfillmentActivity);
     options.RegisterActivity<CreateReviewTaskActivity>(FulfillmentWorkflow.CreateReviewTaskActivity);
     options.RegisterActivity<ResolveReviewActivity>(FulfillmentWorkflow.ResolveReviewActivity);
