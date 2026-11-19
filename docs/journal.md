@@ -64,11 +64,28 @@ keeps the expectation that turned out wrong.
   dispatcher's exponential backoff had grown during the outage (4 failed
   attempts, then 8 to 11 s until the next one). The earlier 15 s gap of the
   execution view was not reproduced.
+- **Run of record:** the attempts during the outage recorded the sidecar's
+  answer (`ERR_DIRECT_INVOKE`, "connection reset by peer" and "dial tcp" to
+  the dead containers' addresses); the first attempt after readiness
+  succeeded, 2.5 s after the hosts were ready, and woke the run by its signal.
 - **Consequence:** correctness does not depend on it (the decision is in
-  SQL; in these runs the workflow's own timer applied the approval first and
-  the signal ended `Discarded`). Expectation recorded: delivery within 60 s of
-  readiness; the root cause of the short post-readiness window is not
-  established.
+  SQL; in two earlier runs the workflow's own timer applied the approval first
+  and the signal ended `Discarded`). Expectation recorded: delivery within
+  60 s of readiness, bounded in practice by the dispatcher's backoff (at most
+  30 s between attempts); the root cause of the short post-readiness window
+  is not established.
+
+### The integration-test fixture failed because the container reaper vanished
+
+- **Observed (first integration run of the run of record):** all 123 tests
+  failed in 0 ms: the SQL Server fixture threw `Could not find resource
+  'DockerContainer'`. The stack trace shows the container that disappeared:
+  Testcontainers' resource reaper (`ResourceReaper.GetAndStartNewAsync`,
+  waiting for its log message), not SQL Server. The next run passed.
+- **Cause:** not determined (the reaper container is started with automatic
+  removal; it ended before its readiness message was read). This is the
+  first failure of this kind with a stack trace; the earlier "container
+  disappeared at fixture start" failures had none.
 
 ## 2026-11-18: Fulfillment steps, terminal transaction, execution fence on completed orders
 
