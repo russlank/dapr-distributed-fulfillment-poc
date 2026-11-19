@@ -94,7 +94,8 @@ public static class AttemptClasses
     public static bool IsAmbiguous(int status) => status is 408 or 425 or 429 or >= 500;
 }
 
-public sealed record AttemptRecord(int Attempt, string Endpoint, int? HttpStatus, string Class, string? Code, long ElapsedMs, string? Error);
+/// <param name="ServedBy">The replica that answered, as the server reports it (X-Served-By), when an answer arrived.</param>
+public sealed record AttemptRecord(int Attempt, string Endpoint, int? HttpStatus, string Class, string? Code, long ElapsedMs, string? Error, string? ServedBy = null);
 
 /// <summary>The final answer of a logical call (the last attempt) with every attempt made.</summary>
 public sealed record CallResult(int? Status, string? Body, string? Code, IReadOnlyList<AttemptRecord> Attempts)
@@ -105,6 +106,9 @@ public sealed record CallResult(int? Status, string? Body, string? Code, IReadOn
     public bool AnyAmbiguous => Attempts.Any(a => a.Class == AttemptClasses.Ambiguous);
 
     public string FinalEndpoint => Attempts.Count > 0 ? Attempts[^1].Endpoint : "";
+
+    /// <summary>The replica that gave the final answer, as reported by the server.</summary>
+    public string? ServedBy => Attempts.Count > 0 ? Attempts[^1].ServedBy : null;
 }
 
 /// <summary>
@@ -160,8 +164,9 @@ public sealed class ApiClient(IReadOnlyList<ApiEndpoint> endpoints, Credentials 
                 body = await response.Content.ReadAsStringAsync(timeout.Token);
                 code = ProblemCode(body);
                 var ambiguous = AttemptClasses.IsAmbiguous(status.Value);
+                var servedBy = response.Headers.TryGetValues(OrderRoutes.ServedByHeader, out var values) ? values.FirstOrDefault() : null;
                 attempts.Add(new AttemptRecord(attempt, endpoint.Name, status, ambiguous ? AttemptClasses.Ambiguous : AttemptClasses.Answered, code,
-                    watch.ElapsedMilliseconds, null));
+                    watch.ElapsedMilliseconds, null, servedBy));
                 if (!ambiguous)
                 {
                     return new CallResult(status, body, code, attempts);

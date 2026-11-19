@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using Dapr.Workflow;
 using Fulfillment.Contracts;
 using Fulfillment.Contracts.Diagnostics;
+using Fulfillment.Contracts.Orders;
 using Fulfillment.Contracts.Workflows;
 using Fulfillment.Messaging;
 using Fulfillment.OrderApi;
@@ -74,6 +75,14 @@ await OrderDbMigrations.EnsureCurrentAsync(app.Services);
 await app.Services.GetRequiredService<ProbeStore>().EnsureSchemaAsync();
 await app.Services.GetRequiredService<Failpoints>().EnsureStoreAsync();
 app.MapServiceDefaults();
+// Every answer names the replica that produced it, so clients and scenarios can prove which
+// replica served a request instead of inferring it from the URL they used.
+var servedBy = app.Services.GetRequiredService<RuntimeIdentity>().Replica;
+app.Use((context, next) =>
+{
+    context.Response.Headers[OrderRoutes.ServedByHeader] = servedBy;
+    return next(context);
+});
 app.MapOrders();
 app.MapReviews();
 app.MapOrderExecutionDiagnostics();

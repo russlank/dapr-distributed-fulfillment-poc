@@ -4,5 +4,17 @@
     "listen": "0.0.0.0:21433",
     "upstream": "sqlserver:1433",
     "enabled": true
+  },
+  {
+    "name": "order-api-client",
+    "listen": "0.0.0.0:18080",
+    "upstream": "order-api:8080",
+    "enabled": true
+  },
+  {
+    "name": "order-api-2-client",
+    "listen": "0.0.0.0:18081",
+    "upstream": "order-api-2:8080",
+    "enabled": true
   }
 ]

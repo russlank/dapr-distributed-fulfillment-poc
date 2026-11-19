@@ -10,6 +10,7 @@
 | `scripts/reset.sh --yes` | stops the stack and deletes all data volumes |
 | `scripts/scenarios/S00-runtime-smoke.sh` | runtime smoke checks (see [testing.md](testing.md)) |
 | `scripts/scenarios/S02-parallel-checks.sh` | the compute checks of an order run concurrently |
+| `scripts/scenarios/S04-duplicate-submission.sh`, `S24-client-timeout-retry.sh`, `S43-idempotency-conflicts.sh` | replica scenarios (`--replicas`): concurrent duplicates, client timeouts with retries (Toxiproxy client path), idempotency conflicts |
 | `scripts/scenarios/S23-deterministic-client-replay.sh` | the client simulator's seeded run, replay, and operator commands (see [client-simulator.md](client-simulator.md)) |
 | `scripts/scenarios/S49-execution-fence.sh`, `S51-concurrent-start.sh` | execution fence and concurrent starts (drill stack) |
 | `scripts/checks/*.sh` | order acceptance, observability, fulfillment recovery (drill stack) |

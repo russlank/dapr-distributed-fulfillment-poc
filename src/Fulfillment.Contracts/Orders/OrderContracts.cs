@@ -6,6 +6,9 @@ public static class OrderRoutes
     public const string Orders = "/orders";
     public const string IdempotencyKeyHeader = "Idempotency-Key";
     public const string ApiKeyHeader = "X-Api-Key";
+
+    /// <summary>Response header naming the order API replica that answered (diagnostic; no secret).</summary>
+    public const string ServedByHeader = "X-Served-By";
 }
 
 /// <summary>Contract bounds checked at the API; business rules belong to the workflow's validation.</summary>

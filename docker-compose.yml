@@ -96,6 +96,8 @@ services:
       retries: 30
 
   # Sidecars reach DaprStateDb through this proxy, so drills can cut only the state-store path.
+  # It also offers a client path to each order API replica (18080 -> order-api, 18081 ->
+  # order-api-2) for scenarios that delay or drop client traffic; the direct ports stay as they are.
   toxiproxy:
     image: ghcr.io/shopify/toxiproxy:2.13.0
     command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
@@ -103,6 +105,8 @@ services:
       - ./deploy/compose/toxiproxy.json:/config/toxiproxy.json:ro
     ports:
       - "127.0.0.1:8474:8474"
+      - "127.0.0.1:18080:18080"
+      - "127.0.0.1:18081:18081"
     mem_limit: 64m
 
   placement:

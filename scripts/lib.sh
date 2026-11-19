@@ -153,6 +153,50 @@ client_sim() {
   dotnet "$CLIENT_SIM_DIR/Fulfillment.ClientSimulator.dll" "$@"
 }
 
+# Client path through Toxiproxy (deploy/compose/toxiproxy.json): order-api via 18080, order-api-2 via 18081.
+TOXIPROXY="${TOXIPROXY:-http://127.0.0.1:8474}"
+ORDER_API_PROXY="${ORDER_API_PROXY:-http://127.0.0.1:18080}"
+ORDER_API_2_PROXY="${ORDER_API_2_PROXY:-http://127.0.0.1:18081}"
+# toxic_add <proxy> <name> <type> <upstream|downstream> '<attributes json>'
+toxic_add() {
+  curl -s -m 10 -o /dev/null -w '%{http_code}' -X POST "$TOXIPROXY/proxies/$1/toxics" -H 'content-type: application/json' \
+    -d '{"name":"'"$2"'","type":"'"$3"'","stream":"'"$4"'","toxicity":1.0,"attributes":'"$5"'}'
+}
+# toxic_clear <proxy>...: removes every toxic of the proxies (cleanup; safe to repeat).
+toxic_clear() {
+  local proxy name
+  for proxy in "$@"; do
+    for name in $(curl -s -m 10 "$TOXIPROXY/proxies/$proxy/toxics" | python -c "import json,sys; print(' '.join(t['name'] for t in json.load(sys.stdin)))" 2>/dev/null); do
+      curl -s -m 10 -o /dev/null -X DELETE "$TOXIPROXY/proxies/$proxy/toxics/$name"
+    done
+  done
+}
+
+# server_outcomes <since RFC3339> <order ids file> [services...]: what each order API replica's own log
+# says about the orders since then, as JSON {service: {orderId: {accepted, replayed, concurrent, reused}}}.
+# The acceptance log lines name the order id; the container names the replica.
+server_outcomes() {
+  local since=$1 ids=$2; shift 2
+  local services=("$@")
+  [[ ${#services[@]} -eq 0 ]] && services=(order-api order-api-2)
+  local tmp; tmp="$(mktemp -d)"
+  for s in "${services[@]}"; do
+    docker compose --profile replicas logs --no-log-prefix --since "$since" "$s" > "$tmp/$s.log" 2>/dev/null
+  done
+  python - "$tmp" "$ids" "${services[@]}" <<'PY'
+import json, re, sys, os
+tmp, ids_file, services = sys.argv[1], sys.argv[2], sys.argv[3:]
+ids = [l.strip().lower() for l in open(ids_file) if l.strip()]
+kinds = {"accepted": "accepted with", "replayed": "repeated submission (replay)", "concurrent": "concurrent submission", "reused": "reused with a different payload"}
+out = {}
+for s in services:
+    text = open(os.path.join(tmp, s + ".log"), encoding="utf-8", errors="replace").read().lower().splitlines()
+    out[s] = {i: {k: sum(1 for line in text if i in line and marker in line) for k, marker in kinds.items()} for i in ids}
+print(json.dumps(out))
+PY
+  rm -rf "$tmp"
+}
+
 # decide <base url> <review id> <approve|reject> [decision id] [operator] -> "<status> <body>"
 decide() {
   local id=${4:-$(python -c 'import uuid; print(uuid.uuid4())')} op=${5:-operator-1} out

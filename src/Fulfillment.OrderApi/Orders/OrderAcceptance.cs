@@ -41,6 +41,11 @@ public sealed partial class OrderAcceptance(OrderDbContext db, ILogger<OrderAcce
         var existing = await FindAsync(idempotencyKey, hash, ct);
         if (existing is not null)
         {
+            if (existing.Outcome == AcceptanceOutcome.Replayed)
+            {
+                Log.Replayed(logger, existing.OrderId);
+            }
+
             return existing;
         }
 
@@ -96,6 +101,9 @@ public sealed partial class OrderAcceptance(OrderDbContext db, ILogger<OrderAcce
     {
         [LoggerMessage(Level = LogLevel.Information, Message = "order {OrderId} accepted with {LineCount} lines; start request pending")]
         public static partial void Accepted(ILogger logger, Guid orderId, int lineCount);
+
+        [LoggerMessage(Level = LogLevel.Information, Message = "order {OrderId} returned for a repeated submission (replay); nothing written")]
+        public static partial void Replayed(ILogger logger, Guid? orderId);
 
         [LoggerMessage(Level = LogLevel.Information, Message = "idempotency key reused with a different payload (order {OrderId}); rejected")]
         public static partial void KeyReused(ILogger logger, Guid orderId);

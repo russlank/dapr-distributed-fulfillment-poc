@@ -3,6 +3,41 @@
 What broke, what surprised us, and what we changed. Newest first. Each entry
 keeps the expectation that turned out wrong.
 
+## 2026-11-19: Replica scenarios S04, S24, S43
+
+### Nothing on the server said which replica answered, and replays left no trace
+
+- **Expected:** the replica scenarios can prove from server-side evidence
+  that both replicas took part.
+- **Observed:** the client knew only which URL it used, and a replay (the
+  most common answer to a duplicate) wrote nothing and logged nothing; only
+  acceptances, refusals, and lost insert races were logged.
+- **Fix:** every order API answer carries `X-Served-By` (the replica name,
+  already public at `/system/component-identity`), recorded per attempt by
+  the client simulator; the replay path logs the order id. The scenarios
+  read each replica's container log by order id.
+
+### Simultaneous duplicates all race into the insert
+
+- **Observed (S04):** with 8 identical copies sent at once, all 7 losers per
+  key ran the full insert (order, lines, key, start request) and lost to the
+  key's primary key (42 of 42 copies), instead of finding the committed key
+  on the fast path. Correctness holds (one order per key, the losers' rows
+  rolled back, verified in SQL); the cost is one rolled-back insert per
+  simultaneous duplicate.
+
+### A delayed request is dropped when its client gives up
+
+- **Expected:** a request delayed on its way to a replica (Toxiproxy latency)
+  arrives after the client's retry on the other replica, as a late duplicate.
+- **Observed:** when the client timed out and closed the connection, the
+  proxy discarded the buffered request with it; the late arrival never
+  happened (the check reported `UNVERIFIED`).
+- **Fix (scenario):** the delayed case is a hedged retry: the original keeps
+  waiting behind a 4 s delay while the same request goes to the other
+  replica after 1 s and creates the order; the original then arrives and is
+  answered as a replay of that order.
+
 ## 2026-11-19: Client simulator (seeded runs, replay, operator commands)
 
 ### A replay after the run's own lost answer is not a reused run id

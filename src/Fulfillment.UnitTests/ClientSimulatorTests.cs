@@ -267,6 +267,58 @@ public class ClientSimulatorPolicyTests
     }
 
     [Fact]
+    public void ConflictVariants_AreDistinctValidBodiesUnderOneKey()
+    {
+        foreach (var intent in WorkloadGenerator.Generate(new WorkloadSpec("variant-run", 4, 30, ReviewRate: 0.3)))
+        {
+            var variants = Enumerable.Range(0, 8).Select(v => ConflictsRun.Variant(intent, v).Intent).ToList();
+
+            Assert.Equal(intent.Body, variants[0].Body);
+            Assert.Equal(8, variants.Select(v => v.PayloadSha256).Distinct().Count());
+            Assert.All(variants, v =>
+            {
+                Assert.Equal(intent.IdempotencyKey, v.IdempotencyKey);
+                Assert.Empty(OrderRequests.Validate(OrderRequests.TryParse(Encoding.UTF8.GetBytes(v.Body), out _)!));
+            });
+            // The server hashes the parsed request: every variant must also differ there.
+            Assert.Equal(8, variants.Select(v => Convert.ToHexString(OrderRequests.Hash(OrderRequests.TryParse(Encoding.UTF8.GetBytes(v.Body), out _)!))).Distinct().Count());
+        }
+    }
+
+    private static ConflictVariant Variant(int v, string race, string? repeat, Guid? orderId) =>
+        new(v, "x", "h", Intent.Lines, Intent.CustomerId, Record(race, race is Acceptances.Created or Acceptances.Replayed ? orderId : null),
+            repeat is null ? null : Record(repeat, repeat == Acceptances.Replayed ? orderId : null));
+
+    [Fact]
+    public void ConflictsJudge_OneWinnerRestRefused_Holds()
+    {
+        var id = Guid.NewGuid();
+        var verdict = ConflictsRun.Judge(Intent, [Variant(0, Acceptances.Conflict, Acceptances.Conflict, id), Variant(1, Acceptances.Created, Acceptances.Replayed, id), Variant(2, Acceptances.Conflict, Acceptances.Conflict, id)]);
+
+        Assert.Equal((ExitCodes.Ok, 1, id), (verdict.ExitCode, verdict.WinnerVariant!.Value, verdict.OrderId!.Value));
+    }
+
+    [Theory]
+    [InlineData(Acceptances.Created, Acceptances.Created)]
+    [InlineData(Acceptances.Conflict, Acceptances.Conflict)]
+    [InlineData(Acceptances.Created, Acceptances.Replayed)]
+    public void ConflictsJudge_NotExactlyOneAcceptedBody_Fails(string first, string second)
+    {
+        var verdict = ConflictsRun.Judge(Intent, [Variant(0, first, null, Guid.NewGuid()), Variant(1, second, null, Guid.NewGuid())]);
+
+        Assert.Equal(ExitCodes.ExpectationFailed, verdict.ExitCode);
+    }
+
+    [Fact]
+    public void ConflictsJudge_RefusedBodyAcceptedOnRepeat_Fails()
+    {
+        var id = Guid.NewGuid();
+        var verdict = ConflictsRun.Judge(Intent, [Variant(0, Acceptances.Created, Acceptances.Replayed, id), Variant(1, Acceptances.Conflict, Acceptances.Replayed, id)]);
+
+        Assert.Equal(ExitCodes.ExpectationFailed, verdict.ExitCode);
+    }
+
+    [Fact]
     public void ParseLines_AcceptsSkuQuantityAndReportsTheRest()
     {
         var problems = new List<string>();
@@ -398,7 +450,7 @@ public class ApiClientTests
     {
         var names = Cli.Build().Subcommands.Select(c => c.Name).ToList();
 
-        Assert.Equal(["single", "duplicates", "load", "approve", "inspect", "identity", "probe"], names);
+        Assert.Equal(["single", "duplicates", "conflicts", "load", "approve", "inspect", "identity", "probe"], names);
     }
 
     private static ApiClient Client(ScriptedHandler handler, int replicas, RetryPolicy policy)

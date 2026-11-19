@@ -46,6 +46,7 @@ All bound to `127.0.0.1`.
 | URL | What |
 |---|---|
 | http://127.0.0.1:8080 | order API (`/orders`, `/health/live`, `/health/ready`, `/system/component-identity`, probes); with `--replicas` also :8081 |
+| http://127.0.0.1:18080, :18081 | the order API replicas through Toxiproxy (client path for network faults; :8474 controls it) |
 | http://127.0.0.1:8090, :8091 | carrier and payment provider simulators |
 | http://127.0.0.1:16686 | Jaeger (traces) |
 | http://127.0.0.1:9095 | Prometheus |

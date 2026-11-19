@@ -342,7 +342,7 @@ how the stack is checked end to end; it is not business functionality. See
 |---|---|---|
 | SQL Server 2022 | business databases and `DaprStateDb` | one login per owning service; created by the `db-init` job |
 | `state.sqlserver` **v2** | workflow history and actor state | v1 stores values as text and corrupts binary history; v2 stores binary values in `varbinary` |
-| Toxiproxy | path from the sidecars to `DaprStateDb` | lets failure drills cut only the state-store path |
+| Toxiproxy | path from the sidecars to `DaprStateDb`; a client path to each order API replica (`127.0.0.1:18080` → `order-api`, `:18081` → `order-api-2`) | drills cut only the state-store path; the replica scenarios delay or drop client traffic on the client path (the direct ports are unaffected) |
 | Dapr Placement | actor placement | |
 | Dapr Scheduler | durable timers and reminders | persistent volume; reset together with SQL data (lost timers are lost, see [journal.md](journal.md)) |
 | RabbitMQ | pub/sub for business events | used from the event-distribution milestone |

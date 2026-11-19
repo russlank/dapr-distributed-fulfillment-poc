@@ -79,6 +79,9 @@ public sealed record SubmissionRecord(
 
     public FollowRecord? Follow { get; init; }
 
+    /// <summary>The replica that gave the final answer (server-reported), if any.</summary>
+    public string? ServedBy => Attempts.Count > 0 ? Attempts[^1].ServedBy : null;
+
     public bool ResolvedAfterAmbiguous => Attempts.Count > 1 && Acceptance is Acceptances.Created or Acceptances.Replayed
         && Attempts.Any(a => a.Class == AttemptClasses.Ambiguous);
 }

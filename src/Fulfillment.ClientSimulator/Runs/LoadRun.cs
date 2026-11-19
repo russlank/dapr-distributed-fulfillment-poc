@@ -145,6 +145,8 @@ public static class LoadRun
             requiringReview = records.Count(r => r.RequiresReview),
             ambiguousAttempts = records.Sum(r => r.Attempts.Count(a => a.Class == AttemptClasses.Ambiguous)),
             resolvedAfterAmbiguous = records.Count(r => r.ResolvedAfterAmbiguous),
+            byServer = records.Where(r => r.ServedBy is not null).GroupBy(r => r.ServedBy!)
+                .OrderBy(g => g.Key, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count()),
             byEndpoint = records.GroupBy(r => r.Attempts.Count > 0 ? r.Attempts[^1].Endpoint : r.FirstEndpoint)
                 .OrderBy(g => g.Key, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count()),
             followed = followed.Count,

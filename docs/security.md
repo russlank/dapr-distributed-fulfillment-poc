@@ -17,6 +17,10 @@ boundaries explicit; they are not production hardening.
 Dapr mTLS and access-control policies need the Sentry service and are not
 used in Compose.
 
+Every order API answer carries `X-Served-By` with the replica name (for
+scenarios that prove which replica answered). The name is not a secret: it is
+already public at `/system/component-identity`.
+
 ## Secrets
 
 Secrets live only in `.env` (git-ignored, generated with random values).

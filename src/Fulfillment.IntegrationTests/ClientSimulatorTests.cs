@@ -126,6 +126,33 @@ public sealed class ClientSimulatorTests(SqlServerFixture sql) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Conflicts_RacedBodiesOnBothReplicas_OneAcceptedTheRestRefusedOneOrderWithTheWinnersLines()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var spec = new WorkloadSpec(RunId("conf"), 6, 3);
+
+        var result = await ConflictsRun.RunAsync(Api(), new ConflictsOptions(spec, Variants: 5), ct);
+
+        var cases = Assert.IsType<List<ConflictCase>>(result.Items);
+        Assert.Equal(ExitCodes.Ok, result.ExitCode);
+        foreach (var c in cases)
+        {
+            var winner = c.Variants[c.WinnerVariant!.Value];
+            Assert.Equal(4, c.Variants.Count(v => v.Race.Acceptance == Acceptances.Conflict && v.Repeat!.Acceptance == Acceptances.Conflict));
+            Assert.Equal((Acceptances.Replayed, c.OrderId), (winner.Repeat!.Acceptance, winner.Repeat.OrderId));
+            // Every answer names its replica (X-Served-By); in-process hosts share one machine name.
+            Assert.All(c.Variants, v => Assert.False(string.IsNullOrEmpty(v.Race.ServedBy)));
+            // The order holds the winner's body: its customer and lines.
+            var lines = await Db.RowsAsync(db, "SELECT Sku, Quantity FROM orders.OrderLine WHERE OrderId = @o ORDER BY LineNumber", ("@o", c.OrderId!.Value));
+            Assert.Equal(winner.Lines.Select(l => (l.Sku, l.Quantity)), lines.Select(r => ((string)r["Sku"]!, (int)r["Quantity"]!)));
+            Assert.Equal(winner.CustomerId, await Db.ScalarAsync<string>(db, "SELECT CustomerId FROM orders.[Order] WHERE OrderId = @o", ("@o", c.OrderId!.Value)));
+        }
+
+        Assert.Equal(3, await Db.ScalarAsync<int>(db, "SELECT COUNT(*) FROM orders.IdempotencyKey WHERE [Key] LIKE @p", ("@p", spec.RunId + "-%")));
+        Assert.Equal(3, await Db.ScalarAsync<int>(db, "SELECT COUNT(*) FROM orders.[Order] WHERE CustomerId LIKE @p", ("@p", spec.RunId + "-%")));
+    }
+
+    [Fact]
     public async Task Approve_PendingReview_DecidesOnceARerunIsAReplayAndAnotherDecisionIsRefused()
     {
         var ct = TestContext.Current.CancellationToken;

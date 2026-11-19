@@ -20,7 +20,8 @@ Scripts use the same build through `client_sim` in `scripts/lib.sh`.
 | Command | Does | Expectation (exit 0 when it holds) |
 |---|---|---|
 | `single` | one order (`--line SKU:QTY`, `--customer`, `--key`, or generated from `--run-id`/`--seed`; `--review` for an order from 1,000.00); `--follow` polls it until terminal | `--expect new`: created; `--expect replay`: an earlier order returned; `any` (default) |
-| `duplicates` | each key sent `--copies` times at once across the replicas, then once with the same key and another body | one order per key (at most one `201`, every other copy `200` with the same order id); the other body `422 idempotency-key-reused` |
+| `duplicates` | each key sent `--copies` times at once across the replicas, then once with the same key and another body; `--follow` follows each order | one order per key (at most one `201`, every other copy `200` with the same order id); the other body `422 idempotency-key-reused` |
+| `conflicts` | per key, distinct bodies (other customer, quantity, extra line, line order, ...) sent at once across the replicas, then each once more on another replica | exactly one body accepted per key, every other `422 idempotency-key-reused` twice; the accepted body replayed with the same order |
 | `load` | a seeded workload (`--orders`, `--clients`, `--max-lines`, `--review-rate`) with `--concurrency` requests in flight and an optional `--rate` | new run: every order created; replay: every order returned as before |
 | `approve` | decides the pending review of `--order` ids, `--review` ids, or every order of a result file (`--from`); `--outcome approve\|reject`, `--operator`, `--wait` | accepted, or replayed (same decision again) |
 | `inspect` | business view (customer key), reviews (operator key), execution diagnostics (admin key) of `--order` ids or a result file | the order exists; a section whose key is not set is `skipped` |
@@ -74,7 +75,8 @@ and another decision gets `409 review-already-decided`).
 Each command prints one JSON document on stdout (and writes it to
 `--output`) and one summary line on stderr. Per request it records the key,
 payload hash, first replica, every attempt (replica, HTTP status, class
-`answered`/`ambiguous`/`not-sent`, problem code, duration), the acceptance
+`answered`/`ambiguous`/`not-sent`, problem code, duration, and the replica
+that answered as the server reports it in `X-Served-By`), the acceptance
 (`created`, `replayed`, `conflict`, `refused`, `unresolved`, `not-sent`),
 the order id, and, with `--follow`, the final status and history. The
 summary separates acceptance (`accepted`, `created`, `replayed`) from

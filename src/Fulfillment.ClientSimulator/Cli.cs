@@ -25,6 +25,7 @@ public static class Cli
         {
             Single(output, errors),
             Duplicates(output, errors),
+            Conflicts(output, errors),
             Load(output, errors),
             Approve(output, errors),
             Inspect(output, errors),
@@ -219,6 +220,8 @@ public static class Cli
         var noConflict = new Option<bool>("--no-conflict") { Description = "Skip the submission with the same key and a different body" };
         var command = new Command("duplicates", "Send identical submissions concurrently (one order per key) and a conflicting one (422)") { runId, seed, orders, copies, noConflict };
         common.AddTo(command);
+        var follow = new FollowOptionSet();
+        follow.AddTo(command);
         command.SetAction(async (parse, ct) =>
         {
             var spec = new WorkloadSpec(parse.GetValue(runId) ?? RunIds.New(DateTimeOffset.UtcNow), parse.GetValue(seed) ?? 1, parse.GetValue(orders));
@@ -235,7 +238,48 @@ public static class Cli
                 return await UsageAsync(stderr, problems);
             }
 
-            var result = await DuplicatesRun.RunAsync(api, new DuplicatesOptions(spec, parse.GetValue(copies), !parse.GetValue(noConflict), parse.GetValue(common.Replica)), ct);
+            var result = await DuplicatesRun.RunAsync(api, new DuplicatesOptions(spec, parse.GetValue(copies), !parse.GetValue(noConflict), parse.GetValue(common.Replica), follow.Read(parse)), ct);
+            await ResultJson.WriteAsync(result, api.Credentials.Redactor, parse.GetValue(common.Output), stdout, stderr, ct);
+            return result.ExitCode;
+        });
+        return command;
+    }
+
+    private static Command Conflicts(TextWriter stdout, TextWriter stderr)
+    {
+        var common = new Common();
+        var follow = new FollowOptionSet();
+        var runId = RunIdOption("Logical run (default: a new run id)");
+        var seed = SeedOption();
+        var orders = new Option<int>("--orders") { Description = "Keys to exercise", DefaultValueFactory = _ => 3 };
+        var variants = new Option<int>("--variants")
+        {
+            Description = "Distinct bodies per key (customer, quantity, extra line, line order, ...), sent at once across the replicas",
+            DefaultValueFactory = _ => 4,
+        };
+        var command = new Command("conflicts", "Race distinct bodies under one key across the replicas (one accepted, the rest 422), then repeat each on another replica")
+        {
+            runId, seed, orders, variants,
+        };
+        common.AddTo(command);
+        follow.AddTo(command);
+        command.SetAction(async (parse, ct) =>
+        {
+            var spec = new WorkloadSpec(parse.GetValue(runId) ?? RunIds.New(DateTimeOffset.UtcNow), parse.GetValue(seed) ?? 1, parse.GetValue(orders));
+            var problems = new List<string>(spec.Problems());
+            if (parse.GetValue(variants) is < 2 or > 16)
+            {
+                problems.Add("--variants: 2-16");
+            }
+
+            var (api, apiProblems) = common.Create(parse, parse.GetValue(variants));
+            problems.AddRange(apiProblems);
+            if (problems.Count > 0 || api is null)
+            {
+                return await UsageAsync(stderr, problems);
+            }
+
+            var result = await ConflictsRun.RunAsync(api, new ConflictsOptions(spec, parse.GetValue(variants), parse.GetValue(common.Replica), follow.Read(parse)), ct);
             await ResultJson.WriteAsync(result, api.Credentials.Redactor, parse.GetValue(common.Output), stdout, stderr, ct);
             return result.ExitCode;
         });

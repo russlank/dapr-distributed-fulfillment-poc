@@ -46,7 +46,7 @@ public static class SingleRun
     }
 }
 
-public sealed record DuplicatesOptions(WorkloadSpec Spec, int Copies = 4, bool Conflict = true, int? PinnedReplica = null);
+public sealed record DuplicatesOptions(WorkloadSpec Spec, int Copies = 4, bool Conflict = true, int? PinnedReplica = null, FollowOptions? Follow = null);
 
 public sealed record DuplicateCase(
     int Index,
@@ -56,7 +56,13 @@ public sealed record DuplicateCase(
     IReadOnlyList<Guid> DistinctOrderIds,
     int Created,
     string? Problem,
-    int ExitCode);
+    int ExitCode)
+{
+    /// <summary>The replicas that answered the copies, as the servers report them.</summary>
+    public IReadOnlyList<string> ServedBy => [.. Copies.Where(c => c.ServedBy is not null).Select(c => c.ServedBy!).Distinct().Order(StringComparer.Ordinal)];
+
+    public FollowRecord? Follow { get; init; }
+}
 
 /// <summary>
 /// The duplicates command: each intent is sent several times at once, spread over the replicas, then
@@ -85,7 +91,19 @@ public static class DuplicatesRun
                 conflicting = await OrderOperations.SubmitAsync(api, changed, pinned ? options.PinnedReplica!.Value - 1 : intent.Index, pinned, ct);
             }
 
-            cases.Add(Judge(intent, copies, conflicting));
+            var verdict = Judge(intent, copies, conflicting);
+            if (options.Follow is { } follow && verdict.DistinctOrderIds.Count == 1)
+            {
+                var followed = await OrderOperations.FollowAsync(api, verdict.DistinctOrderIds[0], intent.Index - 1, follow, ct);
+                verdict = verdict with
+                {
+                    Follow = followed,
+                    Problem = verdict.Problem ?? (followed.Reached ? null : followed.Error),
+                    ExitCode = ExitCodes.Combine([verdict.ExitCode, followed.Reached ? ExitCodes.Ok : ExitCodes.ExpectationFailed]),
+                };
+            }
+
+            cases.Add(verdict);
         }
 
         var problems = cases.Where(c => c.Problem is not null).Select(c => $"#{c.Index} {c.IdempotencyKey}: {c.Problem}").ToList();
@@ -98,6 +116,10 @@ public static class DuplicatesRun
             replayed = cases.Sum(c => c.Copies.Count(r => r.Acceptance == Acceptances.Replayed)),
             conflictsRefused = cases.Count(c => c.ConflictingRequest?.Acceptance == Acceptances.Conflict),
             ambiguousAttempts = cases.Sum(c => c.Copies.Sum(r => r.Attempts.Count(a => a.Class == AttemptClasses.Ambiguous))),
+            keysAnsweredByTwoOrMoreReplicas = cases.Count(c => c.ServedBy.Count >= 2),
+            byServer = cases.SelectMany(c => c.Copies).Where(r => r.ServedBy is not null).GroupBy(r => r.ServedBy!)
+                .OrderBy(g => g.Key, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count()),
+            completed = cases.Count(c => c.Follow?.FinalStatus == "Completed"),
             elapsedSeconds = Math.Round(watch.Elapsed.TotalSeconds, 3),
         };
         return new RunResult("duplicates", RunModes.New, options.Spec.RunId, options.Spec, WorkloadGenerator.Digest(intents),
