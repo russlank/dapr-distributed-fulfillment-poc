@@ -173,7 +173,7 @@ order API replica, and approved through the other. Evidence:
 | Check | Condition | PASS when |
 |---|---|---|
 | S52-A | the run is held right after its review round committed; the approval is committed and delivered meanwhile | no wake row before release; the first resolution reads `Approved`; completed once without waiting |
-| S52-B | the replica that raised the signal ends before marking it (`FailFast`) | a second attempt by another replica after the lease (two raise calls received by the workflow host); one `Signal:Approved` wake; completed once |
+| S52-B | the replica that raised the signal ends before marking it (`FailFast`) | a second attempt by another replica after the lease (two raise calls received by the workflow host); one resolution after the signal (`Signal:Approved`; a wake row repeats only when the crash also lost that resolution activity's answer and Dapr ran it again); completed once |
 | S52-B2 | the review event is raised directly from both order API replicas before any decision | two wake-ups read `Pending` and change nothing; the approval afterwards completes the order once |
 | S52-C | the approval is committed shortly before the deadline and its delivery held past it | the timer path reads `Approved` (decided in time) and completes; the late raise finds the instance terminal: `Discarded` (`WorkflowTerminal`) |
 | S52-C2 | a decision exactly at the last round's deadline | either committed and the order completes, or `409 review-expired` and the order is `Rejected` (`ReviewExpired`); never both; no signal without a decision |

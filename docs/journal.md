@@ -26,6 +26,34 @@ keeps the expectation that turned out wrong.
   reservations, 20 racing repeats of one key, a release or a consume racing
   the sweeper, and a close racing a late reservation.
 
+### S52-B: the crash also hit the resolution activity
+
+- **Expected:** after the dispatcher's replica dies right after raising the
+  review signal, the review is resolved once: wake rows `Initial:Pending`,
+  `Signal:Approved`.
+- **Observed (run on the inventory commit, drill replicas):** three rows,
+  `Signal:Approved` twice; decision and completion once; the workflow host
+  logged one resolution. Timeline: raise 17.460, the resolution activity on
+  the same replica committed its wake row 17.501, the failpoint ended that
+  process 17.506, the sidecar reported the activity's reminder aborted 18.33,
+  the activity ran again on the other replica 18.8. Both order API replicas
+  host the workflow's activities; earlier runs passed because the resolution
+  happened to run on the surviving replica.
+- **Fix:** the check counts resolutions from the workflow's replay-safe log
+  (exactly one after the signal) and accepts repeated `Signal:Approved` wake
+  rows only together with that single resolution. A wake row records an
+  activity execution, not a wake-up; nothing is decided from it.
+
+### The laptop slept during a run
+
+- **Observed:** R06 (compute) on the core drill stack restored the pool at
+  15:18:31Z; the 240 s wait for completion ended after 43 minutes, and the
+  queued check activities ran at 16:01:29Z. Windows had entered Modern
+  Standby (15:13Z) and suspended the Docker VM from about 15:18:33Z until it
+  left standby at 16:01:22Z.
+- **Fix:** none in the code. Long runs hold a keep-awake request for their
+  duration; a run interrupted by standby is repeated, not counted.
+
 ### A refused drill reported PASS
 
 - **Expected:** a drill that refuses (exit 2), for example because the

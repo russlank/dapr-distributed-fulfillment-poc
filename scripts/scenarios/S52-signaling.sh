@@ -13,7 +13,10 @@
 #   S52-B  duplicate delivery after a dispatcher crash: the replica that raised the signal ends before
 #          marking it (failpoint AfterSignalRaiseBeforeMarkForwarded, FailFast); after the lease the
 #          signal is raised again by another replica (two attempts, two raise calls in the workflow
-#          host's log); the decision is applied once (one Signal wake that saw Approved, one completion)
+#          host's log); the decision is applied once (one resolution after the signal, logged by the
+#          workflow, that saw Approved; one completion). If the crash also lost the answer of that
+#          resolution's activity (it can run on the dying replica), Dapr runs it again and its wake
+#          row repeats as Signal:Approved
 #   S52-B2 duplicate and early wake-ups: before any decision the review event is raised directly
 #          from both order API replicas; the run wakes, reads Pending, waits again, changes nothing;
 #          the approval afterwards completes it once
@@ -100,11 +103,20 @@ start_pair "$dead"
 evidence B "$B"
 raises="$(docker compose --profile replicas logs --since 10m workflow-host workflow-host-2 2>/dev/null | grep -c "Request starting HTTP/1.1 POST .*/events/$(event_of "$(review_of "$B")") ")"
 row="$(signal_row "$B")"; IFS='|' read -r b_state b_code b_attempts b_log <<< "$row"
-observed="signal $row; raise calls received by the workflow host: $raises; wakes $(wakes "$B"); history $(history "$B")"
-if [[ "$b_attempts" -ge 2 && "$b_log" == unfinished@* && "${raises:-0}" -ge 2 && "$(wakes "$B")" == "Initial:Pending,Signal:Approved" && "$(history "$B")" == "$COMPLETE_HISTORY" ]]; then
+# One logical wake-up: the workflow's replay-safe log names one resolution after the signal. The
+# crash can also hit the replica that runs that resolution (both order API replicas host the
+# activities): its wake row is committed, the answer lost, and Dapr runs the activity again, which
+# adds an identical row. Extra rows are accepted only as such re-executions: Signal:Approved again,
+# with one logged resolution.
+resolutions="$(docker compose --profile replicas logs --since 10m workflow-host workflow-host-2 2>/dev/null | grep -c "fulfill-${B//-/}: review round 1 resolved after Signal: Approved")"
+b_wakes="$(wakes "$B")"
+one_wake=false
+[[ "$b_wakes" =~ ^Initial:Pending(,Signal:Approved)+$ && "$resolutions" == 1 ]] && one_wake=true
+observed="signal $row; raise calls received by the workflow host: $raises; wakes $b_wakes (resolutions logged by the workflow: $resolutions); history $(history "$B")"
+if [[ "$b_attempts" -ge 2 && "$b_log" == unfinished@* && "${raises:-0}" -ge 2 && "$one_wake" == true && "$(history "$B")" == "$COMPLETE_HISTORY" ]]; then
   assert S52-B PASS "raised again after the crash (>= 2 attempts, the first unfinished); decision applied once" "$observed"
 else
-  assert S52-B FAIL ">= 2 attempts, first unfinished; wakes Initial:Pending,Signal:Approved; completed once" "$observed"
+  assert S52-B FAIL ">= 2 attempts, first unfinished; one resolution after the signal (wake rows Initial:Pending,Signal:Approved, repeated only by a re-executed activity); completed once" "$observed"
 fi
 
 # S52-B2 duplicate and early wake-ups from both replicas -------------------------------------------
