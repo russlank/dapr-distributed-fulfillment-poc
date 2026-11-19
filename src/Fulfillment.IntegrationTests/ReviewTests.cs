@@ -98,7 +98,7 @@ public sealed class ReviewTests(SqlServerFixture sql) : IAsyncLifetime
         Assert.Equal("3:Validating>AwaitingApproval:ReviewRequired", s.History[^1]);
         Assert.Equal(3, s.History.Count);
         // The deadline is SQL time plus the configured duration.
-        Assert.InRange((first.DeadlineAtUtc - await ServerNowAsync()).TotalSeconds, 250, 301);
+        Assert.InRange((first.DeadlineAtUtc - await ServerNowAsync()).TotalSeconds, 300 - SqlClock.MarginSeconds, 300 + SqlClock.MarginSeconds);
     }
 
     [Fact]
@@ -189,8 +189,9 @@ public sealed class ReviewTests(SqlServerFixture sql) : IAsyncLifetime
     public async Task Decision_AtOrAfterTheSqlDeadline_IsRefusedWithoutWriting()
     {
         var (orderId, review) = await ReviewOrderAsync();
-        // The deadline is exactly SQL "now": the decision's own comparison (SQL time < deadline) refuses it.
-        await Db.ExecuteAsync(db, $"UPDATE orders.ReviewTask SET DeadlineAt = SYSUTCDATETIME() WHERE ReviewId = '{review.ReviewId}'");
+        // The deadline has passed by SQL time: the decision's own comparison (SQL time < deadline) refuses
+        // it. (Not "exactly now": the server clock steps back, see SqlClock.)
+        await Reviewing.ExpireDeadlineAsync(db, review.ReviewId);
 
         using var late = await Reviewing.DecideAsync(operators, review.ReviewId, Reviewing.Decision(), TestContext.Current.CancellationToken);
 
@@ -204,7 +205,7 @@ public sealed class ReviewTests(SqlServerFixture sql) : IAsyncLifetime
     public async Task Decision_JustBeforeTheSqlDeadline_IsAccepted()
     {
         var (_, review) = await ReviewOrderAsync();
-        await Db.ExecuteAsync(db, $"UPDATE orders.ReviewTask SET DeadlineAt = DATEADD(second, 3, SYSUTCDATETIME()) WHERE ReviewId = '{review.ReviewId}'");
+        await Db.ExecuteAsync(db, $"UPDATE orders.ReviewTask SET DeadlineAt = DATEADD(second, {SqlClock.MarginSeconds}, SYSUTCDATETIME()) WHERE ReviewId = '{review.ReviewId}'");
 
         using var inTime = await Reviewing.DecideAsync(operators, review.ReviewId, Reviewing.Decision(), TestContext.Current.CancellationToken);
 

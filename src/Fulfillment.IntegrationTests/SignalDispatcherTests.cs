@@ -172,6 +172,8 @@ public sealed class SignalDispatcherTests(SqlServerFixture sql) : IAsyncLifetime
 
         using var decided = await Reviewing.DecideAsync(operators, review.ReviewId, Reviewing.Decision());
         Assert.Equal(HttpStatusCode.OK, decided.StatusCode);
+        // Due "now" by a server clock that steps back: not by the timestamp it just wrote.
+        await Reviewing.MakeSignalsDueAsync(db);
         var signal = Assert.Single(await Reviewing.SignalsAsync(db, orderId));
         return (orderId, (Guid)signal["SignalId"]!, (string)signal["EventName"]!);
     }

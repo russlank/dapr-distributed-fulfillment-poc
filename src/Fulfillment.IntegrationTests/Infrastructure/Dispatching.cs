@@ -113,9 +113,12 @@ public static class Dispatching
         }
     }
 
-    /// <summary>Makes every Pending start request of the database due now (skips the backoff wait).</summary>
+    /// <summary>
+    /// Makes every Pending start request of the database due (skips the backoff wait). The margin is
+    /// far beyond the server clock's backward steps (<see cref="SqlClock"/>).
+    /// </summary>
     public static Task MakeDueAsync(string connectionString) =>
-        Db.ExecuteAsync(connectionString, "UPDATE orders.WorkflowStartRequest SET NextAttemptAt = DATEADD(second, -1, SYSUTCDATETIME()) WHERE State = 'Pending'");
+        Db.ExecuteAsync(connectionString, $"UPDATE orders.WorkflowStartRequest SET NextAttemptAt = DATEADD(second, -{SqlClock.MarginSeconds}, SYSUTCDATETIME()) WHERE State = 'Pending'");
 }
 
 /// <summary>Keeps the dispatcher's log entries (with exceptions) for failure messages.</summary>

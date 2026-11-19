@@ -393,7 +393,10 @@ public sealed class StartDispatcherTests(SqlServerFixture sql) : IAsyncLifetime
     private async Task<Guid> AcceptAsync()
     {
         using var response = await Orders.SubmitAsync(client, Orders.NewKey(), Orders.Body(Orders.NewCustomer("dispatch"), ("SKU-1", 1)));
-        return (await Orders.AcceptedAsync(response)).OrderId;
+        var orderId = (await Orders.AcceptedAsync(response)).OrderId;
+        // Due "now" by a server clock that steps back: not by the timestamp it just wrote.
+        await Dispatching.MakeDueAsync(db);
+        return orderId;
     }
 
     private async Task<Dictionary<string, object?>> RequestAsync(Guid orderId) =>

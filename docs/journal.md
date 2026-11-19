@@ -5,6 +5,30 @@ keeps the expectation that turned out wrong.
 
 ## 2026-11-19: Reviews, decisions, signals, and the review wait
 
+### The SQL Server clock steps back regularly, not only under load
+
+- **Expected:** a row whose due time is the server's own `SYSUTCDATETIME()`
+  at insert is due for a dispatcher that polls right afterwards.
+- **Observed:** 2 of 15 full integration runs failed in the signal-dispatcher
+  tests: signals stayed `Pending` without any attempt. With the dispatcher's
+  log in the test output and a dump of the rows, the unclaimed rows had been
+  created at 11.883 to 12.287 s, while the server's clock, read afterwards,
+  said 11.827 s. A probe in the Docker Desktop VM (WSL2) measured the wall
+  clock running fast and being stepped back by about 0.6 s every 32 s (five
+  steps in 150 s), independent of load. The earlier lease failure (about
+  1.8 s back under load) was the same mechanism.
+- **Consequence for the design:** none for correctness. Due times,
+  deadlines, and leases all use the database clock; a backward step only
+  delays a delivery, an expiry, or a takeover by its size.
+- **Fix (tests):** tests no longer rely on a timestamp the server just wrote,
+  or on an exact boundary, being in the past: freshly written start requests
+  and signals are made due explicitly, and moved times use a 30 s margin.
+  The "decision exactly at the deadline" test became "after the deadline";
+  the boundary itself is the `<` in the conditional update. Afterwards 20
+  full runs had no such failure (one run failed entirely at fixture start
+  because the resource reaper container vanished, the other open
+  intermittent failure).
+
 ### Awaiting CancelAsync in workflow code broke the review wait
 
 - **Expected:** a review signal raised to a waiting run wakes it; otherwise

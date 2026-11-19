@@ -49,7 +49,7 @@ public static class Reviewing
 
     /// <summary>Moves a review's deadline into the past (by SQL time).</summary>
     public static Task ExpireDeadlineAsync(string connectionString, Guid reviewId) =>
-        Db.ExecuteAsync(connectionString, $"UPDATE orders.ReviewTask SET DeadlineAt = DATEADD(second, -1, SYSUTCDATETIME()) WHERE ReviewId = '{reviewId}'");
+        Db.ExecuteAsync(connectionString, $"UPDATE orders.ReviewTask SET DeadlineAt = DATEADD(second, -{SqlClock.MarginSeconds}, SYSUTCDATETIME()) WHERE ReviewId = '{reviewId}'");
 
     public static async Task<Dictionary<string, object?>> ReviewAsync(string connectionString, Guid reviewId) =>
         (await Db.RowsAsync(connectionString, "SELECT Status, Round, DecisionId, DecidedAt, ExpiredAt FROM orders.ReviewTask WHERE ReviewId = @r", ("@r", reviewId))).Single();
@@ -73,11 +73,11 @@ public static class Reviewing
         });
         var identity = new RuntimeIdentity("order-api", replica, "test", null, null, null, null, "release", "absent", "test");
         return new SignalDispatcher(services.GetRequiredService<IServiceScopeFactory>(), new SignalStore(connectionString),
-            new Failpoints(null, NullLogger<Failpoints>.Instance), options, identity, NullLogger<SignalDispatcher>.Instance);
+            new Failpoints(null, NullLogger<Failpoints>.Instance), options, identity, new TestOutputLogger<SignalDispatcher>());
     }
 
     public static Task MakeSignalsDueAsync(string connectionString) =>
-        Db.ExecuteAsync(connectionString, "UPDATE orders.PendingSignal SET NextAttemptAt = DATEADD(second, -1, SYSUTCDATETIME()) WHERE State = 'Pending'");
+        Db.ExecuteAsync(connectionString, $"UPDATE orders.PendingSignal SET NextAttemptAt = DATEADD(second, -{SqlClock.MarginSeconds}, SYSUTCDATETIME()) WHERE State = 'Pending'");
 }
 
 /// <summary>Stand-in for the workflow host's event route: scripted answers per call, every call recorded.</summary>
