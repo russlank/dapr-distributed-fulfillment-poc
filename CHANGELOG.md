@@ -4,6 +4,10 @@ Releases of the PoC; each tag `v<version>` marks a verified milestone.
 Details of a release: `docs/releases/`. What broke on the way:
 [docs/journal.md](docs/journal.md).
 
+## Unreleased (0.3.0-alpha)
+
+- Development towards M2 (inventory contention and idempotent activities).
+
 ## v0.2.0: Durable order acceptance, execution fence, cross-replica work (M1)
 
 - Idempotent order acceptance on any order API replica; one start request
