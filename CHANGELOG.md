@@ -4,6 +4,11 @@ Releases of the PoC; each tag `v<version>` marks a verified milestone.
 Details of a release: `docs/releases/`. What broke on the way:
 [docs/journal.md](docs/journal.md).
 
+## Unreleased (0.4.0-dev)
+
+- Development towards M3 (payment, shipping, compensation, cancellation,
+  interventions). Entries are added as functionality is verified.
+
 ## v0.3.0: Inventory contention and idempotent activities (M2)
 
 - Inventory (M2): `InventoryDb` with its own migrations; stock rows guarded
