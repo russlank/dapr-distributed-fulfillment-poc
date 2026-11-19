@@ -35,7 +35,7 @@ v = eval(sys.argv[2])
 print(json.dumps(v, sort_keys=True) if isinstance(v, (dict, list)) else v)" "$OUT_DIR/$1.json" "$2"; }
 
 # order_ids <name> '<python expression yielding order ids>' > file
-order_ids_of() { jq_py "$1" "$2" | python -c "import json,sys; print('\n'.join(json.load(sys.stdin)))"; }
+order_ids_of() { jq_py "$1" "$2" | python -c "import json,sys; print('\n'.join(json.load(sys.stdin)))" | tr -d '\r'; }
 
 # sql_orders_report <customer prefix>: per order of the run, the authoritative rows as JSON lines:
 # status, key rows, start requests (state, claims, fence rejections), history, lines, effects, replays.

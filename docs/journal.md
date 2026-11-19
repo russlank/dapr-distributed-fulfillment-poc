@@ -3,6 +3,57 @@
 What broke, what surprised us, and what we changed. Newest first. Each entry
 keeps the expectation that turned out wrong.
 
+## 2026-11-19: M1 drills R01, R02 A-D, R03, R06
+
+### An invocation routed to a killed workflow host hung for 15 s
+
+- **Expected:** with one of two workflow-host replicas killed, service
+  invocation from an order API replica reaches the surviving one.
+- **Observed (first R01 run):** the execution view's call to the workflow
+  host hung until the invoker's client timeout of 15 s and ended as an
+  unhandled `500`, about 2 to 17 s after the kill, while the other replica
+  was healthy. The invoker retried only `5xx` and transport errors; a
+  timeout escaped it. (The signal raised in the same window was delivered:
+  its first call failed fast, the second succeeded.)
+- **Cause:** the sidecar still routed some calls to the dead replica's
+  address, where the TCP connect hangs instead of being refused (not
+  confirmed in Dapr's code; consistent with the short invocation window after a workflow-host restart, recorded earlier).
+- **Fix:** each invoker attempt has its own timeout (5 s); a timed-out
+  attempt counts as a transport failure and is retried with the same
+  idempotency key, which every caller already relies on. The next R01 run:
+  the view answered after 5 s (one timed-out attempt, then the other
+  replica).
+
+### The workflow waits at the compute call while the pool is down
+
+- **Observed (R06):** with every compute worker stopped for 45 s, the four
+  orders stayed `Validating` with no check results; their workflows stayed
+  `Running`, custom status `validating` and last update at validation: the
+  episode that schedules the two checks was not persisted while no
+  compute-worker instance existed, and nothing failed. After the pool was
+  back the orders completed within 9 s, each check run once (no replays).
+
+### A crashed order API replica's sidecar did not stop the work
+
+- **Observed (R02 A, B):** `FailFast` ends only the app container (exit code
+  139 on Linux); its sidecar keeps running. Starts, activities, and
+  invocations still reached the surviving replica; the orders completed
+  within seconds, and restarting the crashed replica (with a fresh sidecar)
+  changed nothing.
+
+### Drill harness pitfalls
+
+- `wait_until ... bash -c "...sql..."` always timed out: the child shell does
+  not have the script's functions. In R01 the 30 s wasted wait outlasted the
+  20 s review deadline, so the run reached round 2 before the kill. Waits use
+  functions now.
+- Windows Python writes CRLF; `mapfile` kept the CR in order ids, so R06's
+  status queries went to wrong URLs and returned nothing (the check passed
+  without its evidence). Id lists strip the CR now.
+- The commit-before-loss proof in R03 does not compare SQL timestamps (the
+  SQL clock steps back, see the clock entries): it uses the rows that exist although the
+  replica never answered, and the replica's acceptance log line.
+
 ## 2026-11-19: Replica scenarios S04, S24, S43
 
 ### Nothing on the server said which replica answered, and replays left no trace

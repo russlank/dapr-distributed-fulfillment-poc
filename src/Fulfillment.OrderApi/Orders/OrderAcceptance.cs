@@ -1,6 +1,7 @@
 using Fulfillment.Contracts.Orders;
 using Fulfillment.OrderApi.Domain;
 using Fulfillment.OrderApi.Persistence;
+using Fulfillment.ServiceDefaults;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 
@@ -20,6 +21,13 @@ public enum AcceptanceOutcome
 
 public sealed record AcceptanceResult(AcceptanceOutcome Outcome, Guid? OrderId, OrderStatus? Status);
 
+/// <summary>Failpoint names of the order acceptance (drill builds only; key: the idempotency key).</summary>
+public static class AcceptanceFailpoints
+{
+    /// <summary>After the acceptance transaction committed, before the answer is sent.</summary>
+    public const string AfterOrderAcceptanceCommit = "AfterOrderAcceptanceCommit";
+}
+
 /// <summary>
 /// Durable order acceptance. One transaction writes the order, its lines, the first status-history
 /// row, the idempotency key with the request hash, and the workflow start request; either all of
@@ -30,7 +38,7 @@ public sealed record AcceptanceResult(AcceptanceOutcome Outcome, Guid? OrderId, 
 /// first commit wins; a concurrent insert waits for it and then fails with a unique violation, after
 /// which the stored key is read and compared like a sequential retry.
 /// </summary>
-public sealed partial class OrderAcceptance(OrderDbContext db, ILogger<OrderAcceptance> logger)
+public sealed partial class OrderAcceptance(OrderDbContext db, Failpoints failpoints, ILogger<OrderAcceptance> logger)
 {
     public async Task<AcceptanceResult> AcceptAsync(string idempotencyKey, SubmitOrderRequest request, CancellationToken ct)
     {
@@ -69,6 +77,8 @@ public sealed partial class OrderAcceptance(OrderDbContext db, ILogger<OrderAcce
         }
 
         Log.Accepted(logger, orderId, order.Lines.Count);
+        // Drills: the acceptance is committed; the process may end here, or the answer be lost.
+        await failpoints.HitAsync(AcceptanceFailpoints.AfterOrderAcceptanceCommit, idempotencyKey, ct);
         return new AcceptanceResult(AcceptanceOutcome.Accepted, orderId, order.Status);
     }
 

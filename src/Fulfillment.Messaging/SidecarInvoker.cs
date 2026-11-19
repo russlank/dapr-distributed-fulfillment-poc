@@ -4,9 +4,16 @@ using System.Net.Http.Json;
 namespace Fulfillment.Messaging;
 
 /// <summary>Retry policy for one invocation; attempts include the first call.</summary>
-public sealed record InvocationRetryPolicy(int MaxAttempts, TimeSpan FirstDelay, TimeSpan MaxDelay)
+/// <param name="AttemptTimeout">
+/// Per attempt (default 5 s). A call routed to a replica that just died can hang until the TCP
+/// connect gives up (observed in R01: 15 s, the client timeout, while another replica was healthy);
+/// a timed-out attempt is a transport failure and is retried.
+/// </param>
+public sealed record InvocationRetryPolicy(int MaxAttempts, TimeSpan FirstDelay, TimeSpan MaxDelay, TimeSpan? AttemptTimeout = null)
 {
-    public static InvocationRetryPolicy Default { get; } = new(4, TimeSpan.FromMilliseconds(200), TimeSpan.FromSeconds(2));
+    public static InvocationRetryPolicy Default { get; } = new(4, TimeSpan.FromMilliseconds(200), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5));
+
+    public TimeSpan EffectiveAttemptTimeout => AttemptTimeout ?? TimeSpan.FromSeconds(5);
 
     public TimeSpan DelayBefore(int attempt)
     {
@@ -26,7 +33,7 @@ public sealed record InvocationResult(HttpStatusCode? Status, string Body, int A
 /// Dapr service invocation through the sidecar HTTP API with caller-side bounded retries.
 /// The Dapr 1.19 compatibility check showed that a resiliency policy does not retry
 /// application 5xx responses, so callers retry themselves. Only 5xx and transport failures
-/// are retried; 4xx is a definitive answer. Every attempt carries the same idempotency key,
+/// (including an attempt that times out) are retried; 4xx is a definitive answer. Every attempt carries the same idempotency key,
 /// so the receiver must treat repeats as duplicates.
 /// </summary>
 public sealed class SidecarInvoker(HttpClient http, InvocationRetryPolicy? policy = null, Func<TimeSpan, CancellationToken, Task>? delay = null)
@@ -66,10 +73,12 @@ public sealed class SidecarInvoker(HttpClient http, InvocationRetryPolicy? polic
             }
 
             using var request = newRequest();
+            using var attemptTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            attemptTimeout.CancelAfter(policy.EffectiveAttemptTimeout);
             try
             {
-                using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
-                var text = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                using var response = await http.SendAsync(request, attemptTimeout.Token).ConfigureAwait(false);
+                var text = await response.Content.ReadAsStringAsync(attemptTimeout.Token).ConfigureAwait(false);
                 last = new InvocationResult(response.StatusCode, text, attempt, null);
                 if ((int)response.StatusCode < 500)
                 {
@@ -79,6 +88,11 @@ public sealed class SidecarInvoker(HttpClient http, InvocationRetryPolicy? polic
             catch (HttpRequestException exception)
             {
                 last = new InvocationResult(null, string.Empty, attempt, exception.Message);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // The attempt's own timeout (or the client's): no answer, like a transport failure.
+                last = new InvocationResult(null, string.Empty, attempt, $"no answer within {policy.EffectiveAttemptTimeout.TotalSeconds:0.#} s");
             }
         }
 

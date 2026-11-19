@@ -83,6 +83,20 @@ app.Use((context, next) =>
     context.Response.Headers[OrderRoutes.ServedByHeader] = servedBy;
     return next(context);
 });
+
+// Drill builds: the AbortConnection failpoint action resets the client's connection instead of
+// answering (the work done before it stays committed). Never raised in release builds.
+app.Use(async (context, next) =>
+{
+    try
+    {
+        await next(context);
+    }
+    catch (FailpointAbortException)
+    {
+        context.Abort();
+    }
+});
 app.MapOrders();
 app.MapReviews();
 app.MapOrderExecutionDiagnostics();

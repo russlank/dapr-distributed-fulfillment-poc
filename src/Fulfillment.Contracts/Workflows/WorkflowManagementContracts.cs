@@ -30,4 +30,5 @@ public sealed record WorkflowStateView(
     DateTimeOffset? CreatedAt,
     DateTimeOffset? LastUpdatedAt,
     JsonElement? Output,
-    string? Failure);
+    string? Failure,
+    string? CustomStatus = null);

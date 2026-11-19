@@ -248,6 +248,10 @@ see [resilience-drills.md](resilience-drills.md).
 | Drill | Question | PASS when |
 |---|---|---|
 | R00 failpoint self-test | when the inventory process dies right after its effect commits and before Dapr gets the activity result, does the activity run again, and does the effect stay single? | the failpoint fired (persisted `FiredAt`) and the process exited; after restart, 2 committed attempts and 1 effect; probe `Completed`; execution claimed once |
+| R01 waiting host loss (S06) | does a waiting workflow survive the loss of the host running it, and does an approval through the other replica reach it? | see [resilience-drills.md](resilience-drills.md#run) |
+| R02 start exactly-once in effect (A-D) | crash after acceptance, crash after claiming the start, reset start request, direct schedule of a completed instance | one order, one `Closed` start request, one effect set in every variant |
+| R03 lost answer after commit (S24) | does a lost answer after the acceptance commit duplicate the order? | the retry on the other replica returns the committed order; one of everything |
+| R06 compute pool outage (S08) | does work stay pending while every compute replica is down, and complete once afterwards? | no checks or completions during the outage; all complete once afterwards |
 
 ## Build Gates
 

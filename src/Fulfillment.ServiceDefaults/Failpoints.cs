@@ -56,7 +56,11 @@ public sealed partial class Failpoints
         await command.ExecuteNonQueryAsync(ct);
     }
 
-    /// <summary>Fires an armed failpoint once: FailFast ends the process, Throw raises a transient error, Delay:&lt;ms&gt; waits.</summary>
+    /// <summary>
+    /// Fires an armed failpoint once: FailFast ends the process, Throw raises a transient error,
+    /// AbortConnection raises <see cref="FailpointAbortException"/> (an HTTP host resets the client's
+    /// connection: the work done so far stays, the answer is lost), Delay:&lt;ms&gt; waits.
+    /// </summary>
     public async Task HitAsync(string name, string operationKey, CancellationToken ct = default)
     {
         if (!Active || connectionString is null)
@@ -93,6 +97,8 @@ public sealed partial class Failpoints
                 break;
             case "Throw":
                 throw new InvalidOperationException($"failpoint {name} fired for {operationKey}");
+            case "AbortConnection":
+                throw new FailpointAbortException($"failpoint {name} fired for {operationKey}");
             case var delay when delay.StartsWith("Delay:", StringComparison.Ordinal)
                                 && int.TryParse(delay.AsSpan(6), System.Globalization.CultureInfo.InvariantCulture, out var milliseconds):
                 // Holds the caller inside the window, e.g. past a lease expiry.
@@ -115,4 +121,25 @@ public sealed partial class Failpoints
 #endif
 
     public static string Describe() => Compiled ? (Active ? "compiled, active" : "compiled, inactive") : "absent";
+}
+
+/// <summary>
+/// Raised by the AbortConnection failpoint action (drill builds only): the HTTP host aborts the
+/// connection instead of answering, so the client sees a transport error after the server's work.
+/// </summary>
+public sealed class FailpointAbortException : Exception
+{
+    public FailpointAbortException()
+    {
+    }
+
+    public FailpointAbortException(string message)
+        : base(message)
+    {
+    }
+
+    public FailpointAbortException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
 }

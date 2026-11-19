@@ -81,7 +81,8 @@ public static class WorkflowManagementApi
                 state.CreatedAt,
                 state.LastUpdatedAt,
                 output,
-                state.FailureDetails is null ? null : $"{state.FailureDetails.ErrorType}: {state.FailureDetails.ErrorMessage}"));
+                state.FailureDetails is null ? null : $"{state.FailureDetails.ErrorType}: {state.FailureDetails.ErrorMessage}",
+                CustomStatus(state)));
         });
 
         api.MapPost("/{instanceId}/events/{eventName}", async (string instanceId, string eventName, JsonElement payload,
@@ -115,4 +116,17 @@ public static class WorkflowManagementApi
         ManagementDecision.WorkflowTypeNotSupported => Results.Problem(statusCode: 400, title: "workflow type not supported by the management API"),
         _ => Results.Problem(statusCode: 403, title: "replacing an existing instance is not allowed for this workflow"),
     };
+
+    /// <summary>The workflow's custom status as text (diagnostic only, e.g. awaiting-review:1), or null.</summary>
+    private static string? CustomStatus(WorkflowState state)
+    {
+        try
+        {
+            return state.ReadCustomStatusAs<string>();
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
 }

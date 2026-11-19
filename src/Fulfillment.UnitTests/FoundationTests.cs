@@ -171,6 +171,52 @@ public class SidecarInvokerTests
     }
 
     [Fact]
+    public async Task PostAsync_AttemptWithoutAnswer_TimesOutAndIsRetriedWithTheSameKey()
+    {
+        // The first call hangs (a route to a replica that just died); the attempt timeout ends it.
+        var calls = 0;
+        var keys = new List<string?>();
+        using var handler = new DelegateHandler(async (request, ct) =>
+        {
+            keys.Add(request.Headers.TryGetValues(SidecarInvoker.IdempotencyHeader, out var v) ? v.Single() : null);
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                await Task.Delay(Timeout.Infinite, ct);
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") };
+        });
+        var policy = InvocationRetryPolicy.Default with { AttemptTimeout = TimeSpan.FromMilliseconds(100) };
+        var invoker = new SidecarInvoker(new HttpClient(handler) { BaseAddress = new Uri("http://127.0.0.1:3500/") }, policy, (_, _) => Task.CompletedTask);
+
+        var result = await invoker.PostAsync("workflow-host", "internal/workflows/x/events/e", new { }, "signal:1", TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, result.Attempts);
+        Assert.Equal(["signal:1", "signal:1"], keys);
+    }
+
+    [Fact]
+    public async Task PostAsync_CallerCancellation_IsNotRetried()
+    {
+        using var cts = new CancellationTokenSource();
+        using var handler = new DelegateHandler(async (_, ct) =>
+        {
+            await cts.CancelAsync();
+            await Task.Delay(Timeout.Infinite, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+        var invoker = new SidecarInvoker(new HttpClient(handler) { BaseAddress = new Uri("http://127.0.0.1:3500/") }, delay: (_, _) => Task.CompletedTask);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => invoker.PostAsync("app", "m", new { }, "k", cts.Token));
+    }
+
+    private sealed class DelegateHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => send(request, cancellationToken);
+    }
+
+    [Fact]
     public void DelayBefore_DoublesAndCaps()
     {
         var policy = new InvocationRetryPolicy(6, TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(350));
