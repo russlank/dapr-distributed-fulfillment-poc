@@ -4,7 +4,7 @@ Releases of the PoC; each tag `v<version>` marks a verified milestone.
 Details of a release: `docs/releases/`. What broke on the way:
 [docs/journal.md](docs/journal.md).
 
-## Unreleased (0.3.0-alpha)
+## v0.3.0: Inventory contention and idempotent activities (M2)
 
 - Inventory (M2): `InventoryDb` with its own migrations; stock rows guarded
   by check constraints, holds that leave `Held` once, a stored result per
@@ -22,6 +22,7 @@ Details of a release: `docs/releases/`. What broke on the way:
 - Client simulator `contention` command; scenarios S03, S20; drills R04,
   R05, R06 (inventory), R08.
 - Drill results: a drill that refuses or stops early is never `PASS`.
+- Limitations and deferred work: [docs/releases/v0.3.0.md](docs/releases/v0.3.0.md).
 
 ## v0.2.0: Durable order acceptance, execution fence, cross-replica work (M1)
 

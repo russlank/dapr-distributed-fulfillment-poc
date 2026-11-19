@@ -78,6 +78,33 @@ workflow also reads it when its timer fires. After every workflow-host
 replica restarted, service invocation failed for a few seconds after
 readiness (measured: up to about 4 s); delivery then waits for the next retry.
 
+## Inventory
+
+Stock, holds, and the inventory's stored results are in `InventoryDb`; the
+order's execution view does not show them yet. Inspect them with SQL, for
+example with the `sql` helper of `scripts/lib.sh`:
+
+```bash
+. scripts/lib.sh
+sql InventoryDb "SELECT WarehouseId, Sku, OnHand, Reserved FROM inventory.StockItem WHERE Sku = 'SKU-1'"
+sql InventoryDb "SELECT LineNumber, WarehouseId, Sku, Quantity, State, ExpiresAt, ClosedBy FROM inventory.Hold WHERE OrderId = '<orderId>'"
+sql InventoryDb "SELECT OperationKey, Outcome, ProcessedBy, Replays FROM inventory.ProcessedOperation WHERE OrderId = '<orderId>'"
+```
+
+- `Reserved` always equals the units of the row's `Held` holds; a hold leaves
+  `Held` once (`Released`, `Expired`, `Consumed`) with one outbox event.
+- The hold sweeper runs on every inventory replica; one at a time holds the
+  SQL lease (`inventory.SweeperLease`). It expires holds by SQL time without
+  the Dapr Scheduler or Placement; `ClosedBy` names `sweeper:<replica>`.
+- An order `Compensated` with `ReservationExpired` waited longer than the hold
+  lifetime (`INVENTORY_HOLD_TTL`, default 30 minutes) between reservation
+  and consumption, for example while the inventory was down.
+- `INVENTORY_COORDINATION=SqlOnly` (recreate the inventory replicas) runs the
+  same guarded SQL without stock actors, for comparison; the guarantees are
+  the same.
+- Each stock actor logs `stock actor <warehouse>|<sku> activated on <replica>`
+  where it runs; after a replica loss it activates on another one.
+
 ## Restarting a Replica
 
 A replica is an app container plus a sidecar that joins the app's network
