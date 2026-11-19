@@ -3,8 +3,8 @@
 # (core or replicas): bash scripts/stack-up.sh --drill --replicas
 # Every compute-worker replica (app and sidecar) is stopped; orders accepted meanwhile must stay
 # pending (validated, no check results, no completion) and their workflows must not fail; after the
-# pool is back, every order completes once. The M2 inventory variant (holds expiring during an
-# outage, compensation) is not part of this script.
+# pool is back, every order completes once. The inventory variant (holds expiring during an
+# inventory outage, compensation) is R06-inventory-outage.sh.
 #   R06-outage     no compute-worker replica runs; orders accepted during the outage stay without
 #                  check results and without completion for the whole outage; workflows Running
 #   R06-recovered  after the pool is restored every order completes, with two check results each
