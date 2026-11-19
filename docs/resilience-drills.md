@@ -39,6 +39,9 @@ scoped to one drill run; unfired rows are removed by the drill's cleanup.
 | Boundary | Where |
 |---|---|
 | `AfterProbeEffectCommitBeforeActivityCompletion` | inventory service, after the probe effect transaction commits, before the activity returns |
+| `AfterBusinessCommitBeforeActivityCompletion` | inventory service, after a line's reservation committed, before `ReserveOrderLine` returns (key `{orderId:N}:reserve:line-N`) |
+| `AfterConsumeCommitBeforeActivityCompletion` | inventory service, after the consumption committed, before `ConsumeOrderHolds` returns |
+| `BeforeStockReserve` | inventory service, inside the reserve turn before its SQL (key: the stock actor id `{warehouse}\|{sku}`); `Throw` fails that SKU's reservations only |
 | `AfterOrderAcceptanceCommit` | order API, after the acceptance transaction committed, before the answer (key: the idempotency key) |
 | `BeforeWorkflowStartCall` | order API start dispatcher, after the attempt is recorded, before the workflow host is called (key: order id, `N` format) |
 | `BeforeStubFulfillmentStep` | order API, before a simulated step's transaction (key: the step's operation key) |
@@ -58,6 +61,7 @@ Further boundaries arrive with the functionality they test.
 |---|---|
 | `scripts/drills/sql/reset-start-request.sql` (`drill_reset_start_request` in `scripts/drills/lib.sh`) | puts the start request of **one terminal order** back to `Pending` (an operator error or a bug), due after a given delay so the drill can observe it first; refuses unless the database has the drill schema, the order is terminal, and the request is `Closed`; keeps the original row in `drill.StartRequestBackup` |
 | `scripts/drills/sql/restore-start-request.sql` (`drill_restore_start_request`) | puts the saved row back |
+| `scripts/drills/sql/insert-orphan-hold.sql` | creates a `Held` hold (with its reserved units and `HoldCreated` event) that no workflow owns, as a run that died after its reservation leaves behind; refuses outside a drill database |
 | `raise_via_sidecar <order-api replica> <instance> <event>` | raises a workflow event through that replica's sidecar and the management API, as the signal dispatcher does (duplicate and early wake-ups) |
 | `POST /internal/drill/fulfillment/{orderId}/schedule` on the workflow host (`drill_schedule_fulfillment`) | schedules `fulfill-{orderId:N}` directly through the Dapr workflow API, without the management API's existence check; returns Dapr's answer. Compiled only into drill builds, mapped only in the drill environment, app token required |
 
@@ -71,7 +75,9 @@ Further boundaries arrive with the functionality they test.
 5. Assert against the databases.
 6. Write `artifacts/drills/<run>/result.json` (drill id, run id, commit,
    identities, injection time, hit proof, recovery time, assertions, cleanup
-   result, outcome, duration). A failed cleanup fails the drill.
+   result, script exit status, outcome, duration). A failed cleanup fails
+   the drill. A script that refuses (exit 2) is `REFUSED`; one that exits
+   with another error or records no assertion is `FAIL`, never `PASS`.
 
 ## Run
 
@@ -86,6 +92,11 @@ bash scripts/drills/R01-waiting-workflow-host-loss.sh
 bash scripts/drills/R02-start-exactly-once.sh       # runs S49 for variants C and D
 bash scripts/drills/R03-lost-response-after-commit.sh
 bash scripts/drills/R06-compute-pool-outage.sh      # also on the core profile
+bash scripts/drills/R04-crash-after-inventory-commit.sh
+bash scripts/drills/R05-actor-relocation-under-contention.sh
+bash scripts/drills/R06-inventory-outage.sh         # sets a 20 s hold lifetime itself
+bash scripts/drills/R08-partial-reservation.sh
+bash scripts/scenarios/S20-hot-sku-isolation.sh     # needs failpoints
 ```
 
 | Drill | Fault | Proof that it happened | PASS when |
@@ -96,9 +107,14 @@ bash scripts/drills/R06-compute-pool-outage.sh      # also on the core profile
 | R02 C, D | the drill-only start-request reset and direct schedule (through S49) | reset row `Pending`; Dapr accepted the schedule | terminal guard closes the request without a start; the fence rejects the instance (`AlreadyTerminal`, metric +1); fingerprint unchanged |
 | R03 (S24) | `AfterOrderAcceptanceCommit` `AbortConnection` on `order-api` | `FiredAt`; `order-api` logged the failpoint and the acceptance | the client's transport error is followed by `200` replayed from `order-api-2` with the committed order; one order, one start, one effect set |
 | R06 (S08, compute) | every compute-worker replica and sidecar stopped for 45 s | no compute container running | no check result and no completion during the outage, workflows `Running` (not failed); afterwards every order completes with its two checks, once |
+| R04 (S05) | `AfterBusinessCommitBeforeActivityCompletion` `FailFast`: the inventory process ends right after the reservation committed | `FiredAt`; one inventory replica exited | the retry on a live replica reads the stored reservation (replay count +1); one hold, one `HoldCreated` and one `HoldConsumed`, stock moved once, order `Completed` once; nothing changes after the restart |
+| R05 (S07, S03) | `SIGKILL` of the replica hosting the hot SKU's stock actor (from its activation log) while 200 one-unit orders compete for 150 units | exit 137; reservations committed by that replica before the kill | the actor activates on another replica and goes on reserving there; 150 `Completed`, 50 `Rejected` (`InsufficientStock`), stock `0/0`, invariants clean |
+| R06 (S08, inventory) | every inventory replica and sidecar stopped for 50 s while two orders hold units (20 s lifetime) and wait in a delayed step | no inventory container running; the holds' expiry passes during the outage | nothing changes during the outage, no workflow fails; afterwards the holding orders are `Compensated` (`ReservationExpired`, holds expired by the sweeper), orders accepted during the outage `Completed`; stock `8/0`, invariants clean |
+| R08 A (S45) | an order whose second line has no stock | the line's `InsufficientStock` | the first line's hold released once, none for the second; `Rejected` (`InsufficientStock`) |
+| R08 B | `BeforeStockReserve` `Throw` x5 on the second line's stock actor | 5 `FiredAt` | the first line's hold released once; `Compensated` (`ReservationFailed`) |
+| R08 C (S15) | an orphan hold with Placement and the Scheduler stopped | both stopped while the hold expires | the sweeper expires it by SQL time (`ClosedBy sweeper:<replica>`), units free again, one `HoldExpired` |
 
 R02's guarantee is about business effects: one order, one start request
 that ends `Closed` when the order completes, one set of effect rows; not one
 physical workflow execution (D runs a second execution, which the fence
-stops). The inventory variant of R06 (holds that expire during an outage)
-belongs to M2.
+stops).

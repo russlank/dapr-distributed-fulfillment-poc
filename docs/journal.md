@@ -26,6 +26,37 @@ keeps the expectation that turned out wrong.
   reservations, 20 racing repeats of one key, a release or a consume racing
   the sweeper, and a close racing a late reservation.
 
+### A refused drill reported PASS
+
+- **Expected:** a drill that refuses (exit 2), for example because the
+  stack lacks a setting it needs, reports that it did not run.
+- **Observed (first R06 inventory run):** the refusal came after the exit
+  trap was installed; `drill_finish` saw no failed assertion and wrote
+  `outcome: PASS`, and the script exited 0. The verdict line said `R06 PASS`
+  although nothing had been tested.
+- **Fix:** `drill_finish` reads the script's exit status on entry. A refusal
+  is `REFUSED` (exit 2); any other non-zero exit, or a run that recorded no
+  assertion, is `FAIL`; `result.json` records `scriptExit`. Checked with a
+  refusing, an empty, and a passing synthetic drill. All 83 recorded drill
+  results were scanned afterwards: only this run had `PASS` without an
+  assertion, so no earlier evidence was affected.
+- **Lesson:** "no failure seen" is not a pass; a verdict needs positive
+  evidence that the checks ran.
+
+### Two clocks in one comparison
+
+- **Expected (R05):** after the stock actor's host is killed, every
+  reservation of the hot SKU is written by another replica.
+- **Observed:** reservations stamped by SQL (`ProcessedAt`) after the kill
+  time taken from the host clock were still attributed to the killed
+  replica (10 of about 100). SQL Server's clock in the Docker VM differs
+  from the host's, and `docker compose kill` takes about a second to deliver
+  `SIGKILL`, during which the old host goes on committing.
+- **Fix:** the drill takes the kill instant from SQL itself and records the
+  old host's last write and its container's end time next to the counts; the
+  verdict rests on the new host's activation and its writes, not on a clean
+  cut-off.
+
 ## 2026-11-19: M1 drills R01, R02 A-D, R03, R06
 
 ### An invocation routed to a killed workflow host hung for 15 s

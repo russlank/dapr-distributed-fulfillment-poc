@@ -65,6 +65,21 @@ Generated migration files are excluded from analyzers (`src/.editorconfig`).
 | `ComputeChecks__SimulatedWorkMilliseconds` | `300` | simulated computation time of each check (the checks run concurrently; S02 measures it) |
 | `ComputeChecks__ReviewAmountThresholdMinor` | `100000` | order value (minor units, stub price list) from which a review is required: 1,000.00. Empty means no review is ever required |
 
+## Inventory
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `INVENTORY_COORDINATION` (`Inventory__Coordination`) | `Actor` | `Actor`: reserve and release go through the warehouse/SKU stock actor; `SqlOnly`: the activities call the guarded SQL directly (same guarantees; used to prove they hold without actors) |
+| `INVENTORY_HOLD_TTL` | empty | when set (a `TimeSpan`, for example `00:00:20`), the lifetime of new holds; otherwise `Inventory__HoldTtl` |
+| `Inventory__HoldTtl` | 30 min (`DAPR_POC_ENV=drill`: 60 s) | how long a hold stays valid, by SQL time |
+| `Inventory__SweepInterval`, `__SweepBatch` | 5 s, 50 (drill: 2 s) | hold sweeper cadence and holds expired per sweep (one transaction each) |
+| `Inventory__SweeperLease` | 15 s (drill: 6 s) | the sweeper's SQL lease; another replica's sweeper takes over after it |
+| `Inventory__SweeperEnabled` | `true` | turns the sweeper off (tests) |
+
+Stock is seeded by the migration: the catalog SKUs in `W1` with 1,000,000
+units each. Scenarios and drills create their own SKUs with test-only SQL
+(`set_stock` in `scripts/lib.sh`); there is no restock API.
+
 ## Reviews and Signals (order API)
 
 | Setting | Default | Meaning |

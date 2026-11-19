@@ -69,9 +69,38 @@ persisted rows with plain SQL, independent of the model under test.
 | signals | running instance: raised once, `Forwarded`; workflow not started: kept `Pending` without a raise, delivered after the start; terminal instance: `Discarded`, decision kept; missing instance: `Stuck`; an ambiguous or not-running answer: backoff, then `Forwarded`; a crash after the raise: raised again after the lease, the stale owner `LeaseLost`; three concurrent dispatchers raise each of 12 signals once |
 | client simulator | against two API hosts on one database: a seeded run creates 12 orders over both replicas; its replay from the recorded result (other replica assignment) returns the same order for each request; a new run under the used run id exits 3 and creates nothing (12 orders, keys, start requests); responses lost after commit: each retry is a replay, one order per key; requests left unresolved are reported (exit 4) and a replay resolves them; 6 concurrent copies per key on both replicas: one order, five replays, the other body `422`; 5 distinct bodies raced per key: one accepted, the rest `422` in the race and on repeat, the order holds the winner's customer and lines; approve decides the pending review once, a rerun (by order or by review) is a replay, a later reject is refused `409 review-already-decided` (one decision); inspect shows order and reviews and skips diagnostics without the admin key; results never contain a key |
 | fence | the claim counts every claim of a non-terminal order and audits it; terminal orders (all four statuses) are rejected, counted, and audited; 20 concurrent claims all count; an unknown order fails without writing |
+| inventory | against a migrated `InventoryDb` (the inventory's own operations, no actors): 60 concurrent one-unit reservations on a row of 20 succeed exactly 20 times (`Reserved` 20, never above `OnHand`); 20 racing repeats of one operation key make one hold and one stored result, the rest replays; `InsufficientStock` is stored and replayed; release racing the sweeper and consumption racing the sweeper close each hold once; consumption is all of the order's holds or none (one expired or missing hold consumes nothing); a closed order refuses late reservations; the outbox stays gapless per order with one creation and one closing event per hold; a second sweeper takes over only after the lease; whole-line allocation by warehouse priority; the schema's check constraints and unique indexes refuse invalid rows |
 | schema | migrations apply twice without change; the API refuses to start on an unmigrated database; the database rejects a second start request, a second order per key, duplicate instance ids or history sequences, out-of-range lines, unknown statuses, inconsistent start-request lifecycle or lease values, a second effect per operation key, a simulated step not named `stub-…`, a second result per check, unknown attempt results, a second review round with one number, an inconsistent review lifecycle, an unknown review purpose, a decision without review, and an unknown signal state |
 
 ## Scenarios
+
+### S03 Contention
+
+`bash scripts/scenarios/S03-contention.sh` on any stack with replicas: 500
+one-unit orders for a fresh SKU with 60 units in `W1` and 40 in `W2`, 32 in
+flight over both order API replicas. Evidence: `artifacts/scenarios/S03-<time>/`.
+With `INVENTORY_COORDINATION=SqlOnly` the last check becomes `S03-sqlonly`.
+
+| Check | PASS when |
+|---|---|
+| S03-orders | exactly 100 `Completed` and 400 `Rejected` (`InsufficientStock`), every order accepted once |
+| S03-stock | both rows `0/0`; 60 holds consumed from `W1`, 40 from `W2` |
+| S03-invariants | `Reserved` equals the held units per row; one creation and one closing event per hold; gapless outbox; one hold per completed order, none per rejected one |
+| S03-actors | each warehouse's reservations were written by one replica (its stock actor's host), activations logged |
+| S03-sqlonly | no stock actor activated, and each warehouse's reservations were written concurrently by several replicas: the guarantees held from SQL alone |
+
+### S20 Hot SKU Isolation
+
+`bash scripts/scenarios/S20-hot-sku-isolation.sh` on a drill stack with
+replicas (it arms failpoints). A hot SKU with 16 units; P1 asks for 5 plus a
+SKU nobody stocks; P2 asks for 1 plus a SKU whose stock actor fails every
+attempt; 10 ordinary one-unit orders are sent while P2 retries.
+
+| Check | PASS when |
+|---|---|
+| S20-normal | all 10 ordinary orders `Completed` while P2 still held its unit |
+| S20-failures | P1 `Rejected` (`InsufficientStock`), P2 `Compensated` (`ReservationFailed`), each hot-SKU hold released once; 5 failures fired |
+| S20-stock | hot SKU `6/0`: 10 consumed, 6 released; invariants clean |
 
 ### S00 Runtime Smoke
 
@@ -252,6 +281,10 @@ see [resilience-drills.md](resilience-drills.md).
 | R02 start exactly-once in effect (A-D) | crash after acceptance, crash after claiming the start, reset start request, direct schedule of a completed instance | one order, one `Closed` start request, one effect set in every variant |
 | R03 lost answer after commit (S24) | does a lost answer after the acceptance commit duplicate the order? | the retry on the other replica returns the committed order; one of everything |
 | R06 compute pool outage (S08) | does work stay pending while every compute replica is down, and complete once afterwards? | no checks or completions during the outage; all complete once afterwards |
+| R04 crash after the inventory commit (S05) | is a committed reservation applied once when Dapr never learns that the activity finished? | the retry replays the stored result; one hold and stock moved once |
+| R05 stock actor relocation (S07) | does a hot SKU stay correct when its stock actor's host dies under contention? | the actor moves to another replica; successes equal the stock |
+| R06 inventory outage (S08) | do holds expire correctly while the whole inventory is down? | nothing changes during the outage; expired holds compensate their orders, later orders complete |
+| R08 partial reservation (S45, S15) | are partial reservations compensated, and do holds expire without the Scheduler? | released once, `Rejected` or `Compensated`; the sweeper expires an orphan hold with Placement and Scheduler stopped |
 
 ## Build Gates
 

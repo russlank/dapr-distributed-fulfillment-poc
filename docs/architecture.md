@@ -166,9 +166,10 @@ request, its attempts, the claims, and the workflow's runtime state.
 ## Fulfillment Workflow
 
 `FulfillOrderWorkflow` runs on the workflow host; every step that touches
-business state is an activity on the service that owns the data. In this
-version the fulfillment itself is **simulated**: reservation, payment, and
-shipment do not exist yet, and nothing outside `OrderDb` is changed.
+business state is an activity on the service that owns the data. Stock
+reservation is real (see [Inventory](#inventory)); payment and shipment do
+not exist yet and are represented by **simulated** steps that change nothing
+outside `OrderDb`.
 
 | Step | Where | Does |
 |---|---|---|
@@ -178,8 +179,11 @@ shipment do not exist yet, and nothing outside `OrderDb` is changed.
 | `RecordFulfillmentChecks` | order API | stores both results once (`OrderCheck`) and returns the **stored** risk result: the first committed result decides whether a review is required, whatever a repeated computation returned |
 | review (if required) | order API, workflow | `CreateReviewTask`, `ResolveReview`, `ExpireOrEscalateReview` and the durable wait (see [Reviews and Signals](#reviews-and-signals)) |
 | `BeginStubFulfillment` | order API | → `Reserving`: from `Validating` only if the stored result requires no review, from `AwaitingApproval` only if the review is `Approved`; no path skips a required review |
+| `ReserveOrderLine` | inventory service | one per line, in ordinal SKU order: a hold for the whole line in the first warehouse (by priority) that can serve it; `InsufficientStock` when none can |
 | `ApplyStubFulfillmentStep` | order API | one simulated step per line, in line order (`stub-fulfil`, qualifier `line-N`) |
+| `ConsumeOrderHolds` | inventory service | turns all of the order's holds into consumed stock in one transaction, or none of them (`HoldExpired`, `Incomplete`) |
 | `CompleteStubFulfillment` | order API | the terminal transaction (below) |
+| `ReleaseOrderHolds`, `CloseUnfulfilledOrder` | inventory service, order API | only when the order cannot be fulfilled: close the order for reservations and release its holds, then `Reserving` → `Rejected` or `Compensated` (below) |
 
 Every order API step starts by locking the order row (`UPDLOCK`), so all
 steps of one order, from any replica, retry, or repeated run, are
@@ -219,7 +223,55 @@ backoff); every step tolerates it.
 | `AwaitingApproval` | round 1 of a required review |
 | `Reserving` | `BeginStubFulfillment` (no review required, or review approved); the simulated steps run here. The statuses between `Reserving` and `Completed` belong to the real steps and are not used yet |
 | `Completed` | the terminal transaction |
-| `Rejected` | validation, a rejected review, or the final expiry of a review |
+| `Rejected` | validation, a rejected review, the final expiry of a review, or a line no warehouse can serve (`InsufficientStock`) |
+| `Compensated` | the order's holds were released after a reservation failed for good (`ReservationFailed`: the activity's retries ran out) or a hold expired before it was consumed (`ReservationExpired`) |
+
+## Inventory
+
+The inventory service owns `InventoryDb` (schema `inventory`, its own
+migrations, applied by the one-shot `inventory-db-migrate` job; the service
+refuses to start on an older schema). Stock never leaves SQL: actors and
+workflows coordinate, SQL decides.
+
+| Table | Holds |
+|---|---|
+| `Warehouse` | `W1`, `W2`, `W3` with an allocation priority |
+| `StockItem` | per warehouse and SKU: `OnHand`, `Reserved`; check constraints `OnHand >= 0` and `0 <= Reserved <= OnHand`; `rowversion` |
+| `Hold` | one per order line: `Held` → `Released`, `Expired`, or `Consumed`, once (a check constraint ties the state to its closing columns); unique `(OrderId, LineNumber)`; `ExpiresAt` by SQL time |
+| `ProcessedOperation` | the stored result of every operation key (reserve per line and warehouse, release per hold, consume per order) and how often it was replayed |
+| `Outbox` | one event per hold transition (`HoldCreated`, `HoldReleased`, `HoldExpired`, `HoldConsumed`), sequence gapless per order; written in the same transaction, not yet published |
+| `OrderClosure` | an order closed for reservations (released or consumed); a late reservation for it returns `OrderClosed` |
+| `SweeperLease` | the single lease of the hold sweeper |
+
+**Every change is guarded SQL.** Each operation runs in one transaction
+that first takes an exclusive application lock for the order
+(`sp_getapplock`), then reads its operation key's stored result (a repeat
+returns it and counts a replay), and then changes stock with conditional
+updates: a reservation succeeds only where `OnHand - Reserved >= quantity`,
+a release or expiry only for a hold still `Held`, a consumption only when
+every hold of the order is `Held` and unexpired and their number matches the
+order's lines. Deadlocks are retried. The guarantees therefore do not depend
+on the actors: with `INVENTORY_COORDINATION=SqlOnly` the same activities call
+SQL directly from any replica, and S03 passes in both modes.
+
+**Stock actors** (`StockActor`, id `{warehouse}|{sku}`, one per stock row,
+non-reentrant, no actor state) serialize reservations and releases of one
+stock row, so contention on a hot SKU queues in the actor instead of in SQL
+lock waits. Dapr Placement assigns each actor to one inventory replica; when
+that replica dies, the actor activates on another one.
+
+**Allocation** is whole-line: a line is reserved in the first warehouse by
+priority that can serve all of it; lines are not split across warehouses. A
+line no warehouse can serve rejects the order (`InsufficientStock`) and the
+holds of its earlier lines are released.
+
+**Expiry is the inventory's own.** A hold lives `HoldTtl` (30 minutes;
+`INVENTORY_HOLD_TTL`) by SQL time. The hold sweeper on every inventory
+replica takes the SQL lease (one sweeper at a time), finds due holds, and
+expires each under the order's lock; it uses neither the Dapr Scheduler nor
+actor reminders, so holds expire while the Scheduler or Placement is down.
+Consumption checks the expiry in the same transaction, so a hold that
+expired is never consumed, whoever came first.
 
 ## Reviews and Signals
 

@@ -6,7 +6,22 @@ Details of a release: `docs/releases/`. What broke on the way:
 
 ## Unreleased (0.3.0-alpha)
 
-- Development towards M2 (inventory contention and idempotent activities).
+- Inventory (M2): `InventoryDb` with its own migrations; stock rows guarded
+  by check constraints, holds that leave `Held` once, a stored result per
+  operation key, a gapless per-order outbox (write side only). Reserve,
+  release, consume (all of an order's holds or none) and expire are guarded
+  SQL under a per-order application lock.
+- Stock actors per warehouse and SKU serialize a hot SKU; Placement moves an
+  actor when its host dies. `INVENTORY_COORDINATION=SqlOnly` bypasses them
+  with the same guarantees.
+- Whole-line allocation by warehouse priority; partial reservations are
+  released; new outcomes `Rejected` (`InsufficientStock`) and `Compensated`
+  (`ReservationFailed`, `ReservationExpired`).
+- Hold expiry by SQL time through a leased sweeper, independent of the Dapr
+  Scheduler and Placement.
+- Client simulator `contention` command; scenarios S03, S20; drills R04,
+  R05, R06 (inventory), R08.
+- Drill results: a drill that refuses or stops early is never `PASS`.
 
 ## v0.2.0: Durable order acceptance, execution fence, cross-replica work (M1)
 
