@@ -34,7 +34,7 @@ the caller-side invocation retries (5xx and transport errors retried with the
 same idempotency key, 4xx not retried, bounded attempts), the runtime probe
 workflow on a fake workflow context (execution claim rejection, step order,
 target apps, timer), host construction with and without an OTLP endpoint,
-that the external simulators reference no Dapr assembly, and that failure
+that the external simulators reference no Dapr assembly, the client simulator (the generator's reference values and a pinned workload digest, equal requests for equal run id and seed, other seeds and run ids, independence of the workload size, 500 generated orders valid for the order API with distinct SKUs, its stub price list equal to the compute worker's, run ids, which answers are ambiguous, retry delays, replica assignment, exit-code priority, decision ids, masking of keys in results, the new-run and replay judgements, and its HTTP layer on a scripted handler: an ambiguous answer resent byte for byte with the same key to the next replica, transport errors and timeouts ambiguous, refusals not retried, nothing sent without a key, CLI usage errors exit 2 without echoing credentials), and that failure
 injection exists only in drill builds. `ci/dotnet-gates.sh` runs them in the
 release flavor and again in the drill flavor; the flavor tests assert the
 opposite result in each.
@@ -67,6 +67,7 @@ persisted rows with plain SQL, independent of the model under test.
 | fulfillment steps | all steps: `Completed`, history `Submitted`/`Validating`/`Completed`, one effect per key, request `Closed`; repeated and 20 concurrent validations transition once; a duplicate SKU is `Rejected` with the request closed in the same transaction; a repeated simulated step is applied once and counted as a replay; a crash after its commit (before the result is returned) is retried on another replica and finds the effect; a fault after each statement of the terminal transaction (status, history, effect, request close) rolls all of them back and the retry completes; a crash after the terminal commit changes nothing on retry; 20 concurrent completions make one transition; simulated steps racing the completion never add an effect after it; steps on a terminal order change nothing; completion of an order that is not `Validating` fails without change; repeated check results keep the first |
 | reviews | no-review orders create no review; the stored risk result governs although a replay disagrees (both directions; a required review cannot be skipped); round 1 created once under 10 concurrent creations with one transition; the decision endpoint's contract (`200`, replay, `422` reuse, `409` already decided, `404`, `403` operator, `401` customer key, `400`); 20 concurrent conflicting decisions: one commits, one decision, one signal; a decision at the SQL deadline is refused without writing, one just before is accepted and cannot be expired afterwards; a fault after each statement of the decision transaction rolls back review, decision, and signal; a crash after the commit keeps the decision and its pending signal; decisions are immutable (update refused); approval → resolve → Reserving → Completed with history `Submitted, Validating, AwaitingApproval, Reserving, Completed`; rejection rejects the order and closes its start request; expiry only by SQL time, then round 2 (`409 review-superseded` for round 1), then final rejection (`409 review-expired`) |
 | signals | running instance: raised once, `Forwarded`; workflow not started: kept `Pending` without a raise, delivered after the start; terminal instance: `Discarded`, decision kept; missing instance: `Stuck`; an ambiguous or not-running answer: backoff, then `Forwarded`; a crash after the raise: raised again after the lease, the stale owner `LeaseLost`; three concurrent dispatchers raise each of 12 signals once |
+| client simulator | against two API hosts on one database: a seeded run creates 12 orders over both replicas; its replay from the recorded result (other replica assignment) returns the same order for each request; a new run under the used run id exits 3 and creates nothing (12 orders, keys, start requests); responses lost after commit: each retry is a replay, one order per key; requests left unresolved are reported (exit 4) and a replay resolves them; 6 concurrent copies per key on both replicas: one order, five replays, the other body `422`; approve decides the pending review once, a rerun (by order or by review) is a replay, a later reject is refused `409 review-already-decided` (one decision); inspect shows order and reviews and skips diagnostics without the admin key; results never contain a key |
 | fence | the claim counts every claim of a non-terminal order and audits it; terminal orders (all four statuses) are rejected, counted, and audited; 20 concurrent claims all count; an unknown order fails without writing |
 | schema | migrations apply twice without change; the API refuses to start on an unmigrated database; the database rejects a second start request, a second order per key, duplicate instance ids or history sequences, out-of-range lines, unknown statuses, inconsistent start-request lifecycle or lease values, a second effect per operation key, a simulated step not named `stub-…`, a second result per check, unknown attempt results, a second review round with one number, an inconsistent review lifecycle, an unknown review purpose, a decision without review, and an unknown signal state |
 
@@ -148,6 +149,21 @@ order API replica, and approved through the other. Evidence:
 | S52-C | the approval is committed shortly before the deadline and its delivery held past it | the timer path reads `Approved` (decided in time) and completes; the late raise finds the instance terminal: `Discarded` (`WorkflowTerminal`) |
 | S52-C2 | a decision exactly at the last round's deadline | either committed and the order completes, or `409 review-expired` and the order is `Rejected` (`ReviewExpired`); never both; no signal without a decision |
 | S52-signals | | no signal of the run left `Pending` |
+
+### S23 Deterministic Client Replay
+
+`bash scripts/scenarios/S23-deterministic-client-replay.sh` on a release or
+drill stack (both order API replicas when `--replicas` runs). Evidence: every
+simulator result in `artifacts/scenarios/S23-<time>/`.
+
+| Check | Proves |
+|---|---|
+| S23-plan | two dry runs of one run id and seed: equal workload digest, keys, payload hashes; another seed: same keys, other payloads |
+| S23-new | a new run of 12 orders: all created over the replicas and followed to `Completed`; accepted and completed reported separately |
+| S23-replay | the replay from the recorded result (seeded replica assignment): same digest, every request `200` replayed with its original order id |
+| S23-reused | a new run under the used run id: exit 3, nothing created |
+| S23-effects | per request one order, key, and `Closed` start request; history `Submitted, Validating, Reserving, Completed`; one effect per line plus completion; no effect row added by the replay |
+| S23-operator | review orders followed until they wait, approved through the operator API, the approval repeated (replayed, one decision each), replayed and `Completed`; inspect shows reviews and execution diagnostics; no key in any output file |
 
 ### S02 Parallel Independent Checks
 

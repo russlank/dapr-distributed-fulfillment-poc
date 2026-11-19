@@ -141,6 +141,18 @@ print(next(f'SKU-R{i}' for i in range(1, 1000) if price(f'SKU-R{i}') * 100 >= 10
 # review_order_body <customer id>: an order that requires a review (one line of 100 units of review_sku).
 review_order_body() { printf '{"customerId":"%s","lines":[{"sku":"%s","quantity":100}]}' "$1" "${REVIEW_SKU:=$(review_sku)}"; }
 
+# client_sim <command> [options]: the client simulator (external HTTP client; keys from the
+# environment, which .env provides). Built once per script into artifacts/tools (git-ignored).
+CLIENT_SIM_DIR="$REPO_ROOT/artifacts/tools/client-simulator"
+client_sim() {
+  if [[ -z "${CLIENT_SIM_BUILT:-}" ]]; then
+    dotnet build "$REPO_ROOT/src/Fulfillment.ClientSimulator/Fulfillment.ClientSimulator.csproj" -c Release -o "$CLIENT_SIM_DIR" \
+      --nologo -v q -p:SourceRevisionId="$GIT_COMMIT" >&2 || { log "client simulator build failed"; return 2; }
+    CLIENT_SIM_BUILT=1
+  fi
+  dotnet "$CLIENT_SIM_DIR/Fulfillment.ClientSimulator.dll" "$@"
+}
+
 # decide <base url> <review id> <approve|reject> [decision id] [operator] -> "<status> <body>"
 decide() {
   local id=${4:-$(python -c 'import uuid; print(uuid.uuid4())')} op=${5:-operator-1} out

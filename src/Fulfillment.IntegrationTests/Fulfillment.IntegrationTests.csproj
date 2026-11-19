@@ -13,5 +13,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Fulfillment.OrderApi\Fulfillment.OrderApi.csproj" />
+    <ProjectReference Include="..\Fulfillment.ClientSimulator\Fulfillment.ClientSimulator.csproj" />
   </ItemGroup>
 </Project>

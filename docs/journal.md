@@ -3,6 +3,39 @@
 What broke, what surprised us, and what we changed. Newest first. Each entry
 keeps the expectation that turned out wrong.
 
+## 2026-11-19: Client simulator (seeded runs, replay, operator commands)
+
+### A replay after the run's own lost answer is not a reused run id
+
+- **Expected:** in a new run, an answer `200 replayed` means the run id was
+  used before (a new run must create every order).
+- **Observed (integration test with responses dropped after the commit):**
+  every order of a fresh run was reported as "run id used before" (exit 3),
+  although the run created all of them: the first attempt committed, its
+  answer was lost, and the retry with the same key was answered as a replay.
+- **Fix:** a replay that follows an ambiguous attempt of the same request
+  counts as that request taking effect; only a replay without an earlier
+  ambiguous attempt is a run identity mismatch.
+
+### Repeating an approval by order found "no pending review"
+
+- **Expected:** repeating `approve --order` is a replay, like any retry with
+  the same decision id.
+- **Observed (first live S23):** the repeat looked only for a `Pending`
+  round; after the first approval there was none, and the command failed
+  with `no-pending-review` instead of reaching the server.
+- **Fix:** when the latest round is decided, the command sends its
+  deterministic decision to it; the server answers with a replay (same
+  decision) or `409 review-already-decided` (another one). An expired latest
+  round is still waited on, because the next round may be about to open.
+
+### Smaller findings before the first run
+
+- Generated run ids contained an upper-case `T` (time format) that the
+  simulator's own run-id rule refuses; found by a unit test.
+- A URL with user information was echoed in the usage error; the value is no
+  longer printed (a unit test checks that no credential appears).
+
 ## 2026-11-19: Reviews, decisions, signals, and the review wait
 
 ### The SQL Server clock steps back regularly, not only under load

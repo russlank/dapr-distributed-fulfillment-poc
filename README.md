@@ -10,7 +10,8 @@ idempotently, started once in effect from any order API replica, validated,
 checked in parallel on the compute workers, held for an operator's approval
 from 1,000.00 (decided in SQL, signaled to the waiting workflow), and
 completed by simulated fulfillment steps, with every business effect keyed
-and stored once. Reservation, payment, shipping, escalation and
+and stored once. An external client simulator submits seeded, replayable
+workloads, duplicates, and operator decisions over HTTP. Reservation, payment, shipping, escalation and
 cancellation, and event distribution are not built yet. Every role runs with
 its own Dapr sidecar, reports its identity and health, and exports
 telemetry; scenario and drill scripts prove the behavior from the databases.
@@ -34,6 +35,7 @@ Details: [docs/getting-started.md](docs/getting-started.md).
 | [docs/getting-started.md](docs/getting-started.md) | prerequisites, startup, endpoints |
 | [docs/configuration.md](docs/configuration.md) | secrets, settings, Dapr components, profiles, build flavors |
 | [docs/operations.md](docs/operations.md) | scripts, health, restarts, reset, troubleshooting |
+| [docs/client-simulator.md](docs/client-simulator.md) | the external client: commands, seeded runs and replay, retries, results |
 | [docs/testing.md](docs/testing.md) | unit tests, scenarios, drills, what each check proves |
 | [docs/resilience-drills.md](docs/resilience-drills.md) | failure injection and its safety |
 | [docs/monitoring.md](docs/monitoring.md) | traces, metrics, dashboards |

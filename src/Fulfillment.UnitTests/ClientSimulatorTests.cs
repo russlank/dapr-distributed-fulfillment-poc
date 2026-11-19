@@ -1,0 +1,439 @@
+using System.Net;
+using System.Text;
+using Fulfillment.ClientSimulator;
+using Fulfillment.ClientSimulator.Http;
+using Fulfillment.ClientSimulator.Runs;
+using Fulfillment.ClientSimulator.Workload;
+using Fulfillment.ComputeWorker.Checks;
+using Fulfillment.Contracts.Orders;
+using Fulfillment.OrderApi.Orders;
+using Xunit;
+
+namespace Fulfillment.UnitTests;
+
+/// <summary>S23 at unit level: the same run id and seed reproduce the same logical requests and keys.</summary>
+public class WorkloadGeneratorTests
+{
+    private static readonly WorkloadSpec Golden = new("golden-run", 23, 5, ReviewRate: 0.5);
+
+    [Fact]
+    public void DeterministicRandom_SeedZero_MatchesTheSplitMix64Reference()
+    {
+        Assert.Equal(0xE220A8397B1DCDAFUL, new DeterministicRandom(0).NextUInt64());
+    }
+
+    [Fact]
+    public void Generate_SameSpecTwice_YieldsIdenticalKeysBodiesAndDigest()
+    {
+        var first = WorkloadGenerator.Generate(Golden);
+        var second = WorkloadGenerator.Generate(Golden with { });
+
+        Assert.Equal(first.Select(i => (i.IdempotencyKey, i.Body, i.PayloadSha256)), second.Select(i => (i.IdempotencyKey, i.Body, i.PayloadSha256)));
+        Assert.Equal(WorkloadGenerator.Digest(first), WorkloadGenerator.Digest(second));
+    }
+
+    [Fact]
+    public void Generate_GoldenSpec_KeepsItsDigestAcrossBuilds()
+    {
+        // A change here means the same seed no longer reproduces earlier runs: replays of recorded
+        // results would be refused. Change the generator only deliberately, and say so in the journal.
+        Assert.Equal("b24b16a9ca2583670cce1641d07a9cde14c8f046ba403d4abfdcf6f4743666a6", WorkloadGenerator.Digest(WorkloadGenerator.Generate(Golden)));
+        Assert.Equal("golden-run-o00001", WorkloadGenerator.Generate(Golden)[0].IdempotencyKey);
+    }
+
+    [Fact]
+    public void Generate_OtherSeed_KeepsTheKeysAndChangesThePayloads()
+    {
+        var a = WorkloadGenerator.Generate(Golden with { ReviewRate = 0 });
+        var b = WorkloadGenerator.Generate(Golden with { ReviewRate = 0, Seed = 24 });
+
+        Assert.Equal(a.Select(i => i.IdempotencyKey), b.Select(i => i.IdempotencyKey));
+        Assert.NotEqual(a.Select(i => i.Body), b.Select(i => i.Body));
+    }
+
+    [Fact]
+    public void Generate_OtherRunId_GivesNewKeysAndCustomers()
+    {
+        var a = WorkloadGenerator.Generate(Golden);
+        var b = WorkloadGenerator.Generate(Golden with { RunId = "golden-run-2" });
+
+        Assert.Empty(a.Select(i => i.IdempotencyKey).Intersect(b.Select(i => i.IdempotencyKey)));
+        Assert.All(b, i => Assert.StartsWith("golden-run-2-c", i.CustomerId, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Intent_DoesNotDependOnTheWorkloadSize()
+    {
+        var small = WorkloadGenerator.Generate(Golden with { Orders = 7 });
+        var large = WorkloadGenerator.Generate(Golden with { Orders = 100 });
+
+        Assert.Equal(small.Select(i => i.Body), large.Take(7).Select(i => i.Body));
+    }
+
+    [Fact]
+    public void Generate_ManyOrders_AreAllValidForTheOrderApiAndUseDistinctSkus()
+    {
+        var intents = WorkloadGenerator.Generate(new WorkloadSpec("validity-run", 7, 500, ReviewRate: 0.2));
+
+        Assert.All(intents, intent =>
+        {
+            var request = OrderRequests.TryParse(Encoding.UTF8.GetBytes(intent.Body), out var errorPath);
+            Assert.True(request is not null, errorPath);
+            Assert.Empty(OrderRequests.Validate(request!));
+            Assert.True(OrderRequests.IsValidIdempotencyKey(intent.IdempotencyKey));
+            Assert.Equal(intent.Lines.Count, intent.Lines.Select(l => l.Sku).Distinct(StringComparer.Ordinal).Count());
+        });
+        Assert.InRange(intents.Count(i => i.RequiresReview), 60, 140);
+    }
+
+    [Fact]
+    public void StubPrices_EqualTheComputeWorkersPriceList()
+    {
+        foreach (var sku in Enumerable.Range(1, 300).SelectMany(n => new[] { $"SKU-{n}", $"SKU-R{n}" }))
+        {
+            Assert.Equal(StubPriceList.UnitPriceMinor(sku), StubPrices.UnitPriceMinor(sku));
+        }
+
+        var review = StubPrices.ReviewSku(StubPrices.DefaultReviewThresholdMinor);
+        Assert.True(StubRiskRule.ReviewRequired(StubPriceList.UnitPriceMinor(review) * StubPrices.ReviewQuantity, StubPrices.DefaultReviewThresholdMinor));
+    }
+
+    [Theory]
+    [InlineData("abc", true)]
+    [InlineData("s23-20261119-a1", true)]
+    [InlineData("ab", false)]
+    [InlineData("Upper-case", false)]
+    [InlineData("-leading", false)]
+    [InlineData("a-run-id-that-is-much-longer-than-forty-chars", false)]
+    public void RunIds_Validate(string runId, bool valid)
+    {
+        Assert.Equal(valid, RunIds.IsValid(runId));
+    }
+
+    [Fact]
+    public void RunIds_New_AreValidAndDistinct()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var ids = Enumerable.Range(0, 20).Select(_ => RunIds.New(now)).ToList();
+
+        Assert.All(ids, id => Assert.True(RunIds.IsValid(id), id));
+        Assert.True(ids.Distinct().Count() > 1);
+    }
+
+    [Fact]
+    public void Spec_OutOfRange_ReportsEveryProblem()
+    {
+        var problems = new WorkloadSpec("x", 1, 0, Clients: 0, MaxLines: 30, ReviewRate: 2).Problems();
+
+        Assert.Equal(5, problems.Count);
+    }
+}
+
+public class ClientSimulatorPolicyTests
+{
+    [Theory]
+    [InlineData(200, false)]
+    [InlineData(201, false)]
+    [InlineData(400, false)]
+    [InlineData(401, false)]
+    [InlineData(404, false)]
+    [InlineData(409, false)]
+    [InlineData(422, false)]
+    [InlineData(408, true)]
+    [InlineData(425, true)]
+    [InlineData(429, true)]
+    [InlineData(500, true)]
+    [InlineData(502, true)]
+    [InlineData(503, true)]
+    [InlineData(504, true)]
+    public void IsAmbiguous_OnlyForAnswersThatLeaveTheOutcomeOpen(int status, bool ambiguous)
+    {
+        Assert.Equal(ambiguous, AttemptClasses.IsAmbiguous(status));
+    }
+
+    [Fact]
+    public void RetryPolicy_DelayGrowsAndIsCapped()
+    {
+        var policy = RetryPolicy.Default;
+
+        Assert.Equal(TimeSpan.Zero, policy.DelayBefore(1));
+        Assert.Equal(TimeSpan.FromMilliseconds(250), policy.DelayBefore(2));
+        Assert.Equal(TimeSpan.FromMilliseconds(500), policy.DelayBefore(3));
+        Assert.Equal(TimeSpan.FromSeconds(2), policy.DelayBefore(30));
+    }
+
+    [Fact]
+    public void ReplicaPlan_RoundRobinPinnedAndSeeded()
+    {
+        Assert.Equal([0, 1, 0, 1], Enumerable.Range(1, 4).Select(i => ReplicaPlan.FirstEndpoint(Distribution.RoundRobin, 1, i, 2, null)));
+        Assert.All(Enumerable.Range(1, 4), i => Assert.Equal(1, ReplicaPlan.FirstEndpoint(Distribution.RoundRobin, 1, i, 2, 2)));
+        var seeded = Enumerable.Range(1, 200).Select(i => ReplicaPlan.FirstEndpoint(Distribution.Seeded, 9, i, 3, null)).ToList();
+        Assert.Equal(seeded, Enumerable.Range(1, 200).Select(i => ReplicaPlan.FirstEndpoint(Distribution.Seeded, 9, i, 3, null)));
+        Assert.Equal([0, 1, 2], seeded.Distinct().Order());
+    }
+
+    [Fact]
+    public void ExitCodes_Combine_ByPriority()
+    {
+        Assert.Equal(ExitCodes.Ok, ExitCodes.Combine([]));
+        Assert.Equal(ExitCodes.ExpectationFailed, ExitCodes.Combine([0, 1, 0]));
+        Assert.Equal(ExitCodes.Unresolved, ExitCodes.Combine([1, 4]));
+        Assert.Equal(ExitCodes.RunIdentityMismatch, ExitCodes.Combine([4, 3, 1]));
+        Assert.Equal(ExitCodes.Usage, ExitCodes.Combine([3, 2]));
+    }
+
+    [Fact]
+    public void DecisionId_IsStableVersion8AndDependsOnTheDecision()
+    {
+        var review = Guid.Parse("6a1c7c1e-55b9-4cf0-9f43-5a4c0f0b6d11");
+        var id = ApproveRun.DecisionId(review, "approve", "operator-1", "default");
+
+        Assert.Equal(id, ApproveRun.DecisionId(review, "approve", "operator-1", "default"));
+        Assert.Equal('8', id.ToString()[14]);
+        Assert.NotEqual(id, ApproveRun.DecisionId(review, "reject", "operator-1", "default"));
+        Assert.NotEqual(id, ApproveRun.DecisionId(review, "approve", "operator-2", "default"));
+        Assert.NotEqual(id, ApproveRun.DecisionId(review, "approve", "operator-1", "other"));
+    }
+
+    [Fact]
+    public void Redactor_MasksEverySecretInTheRenderedResult()
+    {
+        var credentials = new Credentials("customer-secret-1", "operator-secret-2", "admin-secret-3");
+        var result = new RunResult("load", RunModes.New, "run-1", null, null, [], DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+            new { note = "customer-secret-1 and admin-secret-3" }, Array.Empty<object>(), ["operator-secret-2 leaked"], 1);
+
+        var json = ResultJson.Render(result, credentials.Redactor);
+
+        Assert.DoesNotContain("secret", json, StringComparison.Ordinal);
+        Assert.Contains(Redactor.Mask, json, StringComparison.Ordinal);
+    }
+
+    private static readonly OrderIntent Intent = WorkloadGenerator.Generate(new WorkloadSpec("judge-run", 1, 1))[0];
+
+    private static SubmissionRecord Record(string acceptance, Guid? orderId = null) =>
+        new(1, Intent.IdempotencyKey, Intent.CustomerId, Intent.Lines, Intent.PayloadSha256, false, "replica-1", acceptance, orderId, 200, null,
+            [new AttemptRecord(1, "replica-1", 200, AttemptClasses.Answered, null, 1, null)]);
+
+    [Fact]
+    public void Judge_NewRun_RequiresCreation()
+    {
+        var spec = new WorkloadSpec("judge-run", 1, 1);
+
+        Assert.Equal(ExitCodes.Ok, LoadRun.Judge(Record(Acceptances.Created, Guid.NewGuid()), new LoadOptions(spec, RunModes.New)).ExitCode);
+        Assert.Equal(ExitCodes.RunIdentityMismatch, LoadRun.Judge(Record(Acceptances.Replayed, Guid.NewGuid()), new LoadOptions(spec, RunModes.New)).ExitCode);
+        Assert.Equal(ExitCodes.RunIdentityMismatch, LoadRun.Judge(Record(Acceptances.Conflict), new LoadOptions(spec, RunModes.New)).ExitCode);
+        Assert.Equal(ExitCodes.ExpectationFailed, LoadRun.Judge(Record(Acceptances.Refused), new LoadOptions(spec, RunModes.New)).ExitCode);
+        Assert.Equal(ExitCodes.Unresolved, LoadRun.Judge(Record(Acceptances.Unresolved), new LoadOptions(spec, RunModes.New)).ExitCode);
+    }
+
+    [Fact]
+    public void Judge_NewRun_ReplayAfterItsOwnAmbiguousAttempt_IsAccepted()
+    {
+        var spec = new WorkloadSpec("judge-run", 1, 1);
+        var record = Record(Acceptances.Replayed, Guid.NewGuid()) with
+        {
+            Attempts =
+            [
+                new AttemptRecord(1, "replica-1", null, AttemptClasses.Ambiguous, "transport", 1, "reset"),
+                new AttemptRecord(2, "replica-2", 200, AttemptClasses.Answered, null, 1, null),
+            ],
+        };
+
+        Assert.Equal(ExitCodes.Ok, LoadRun.Judge(record, new LoadOptions(spec, RunModes.New)).ExitCode);
+    }
+
+    [Fact]
+    public void Judge_Replay_RequiresTheRecordedOrder()
+    {
+        var spec = new WorkloadSpec("judge-run", 1, 1);
+        var recorded = Guid.NewGuid();
+        var original = new RecordedRun(spec, "digest", new Dictionary<int, Guid> { [1] = recorded });
+        var replay = new LoadOptions(spec, RunModes.Replay, original);
+
+        Assert.Equal(ExitCodes.Ok, LoadRun.Judge(Record(Acceptances.Replayed, recorded), replay).ExitCode);
+        Assert.Equal(ExitCodes.RunIdentityMismatch, LoadRun.Judge(Record(Acceptances.Replayed, Guid.NewGuid()), replay).ExitCode);
+        Assert.Equal(ExitCodes.RunIdentityMismatch, LoadRun.Judge(Record(Acceptances.Created, Guid.NewGuid()), replay).ExitCode);
+    }
+
+    [Fact]
+    public void DuplicatesJudge_TwoOrdersForOneKey_FailsTheExpectation()
+    {
+        var copies = new[] { Record(Acceptances.Created, Guid.NewGuid()), Record(Acceptances.Created, Guid.NewGuid()) };
+
+        var verdict = DuplicatesRun.Judge(Intent, copies, Record(Acceptances.Conflict));
+
+        Assert.Equal(ExitCodes.ExpectationFailed, verdict.ExitCode);
+        Assert.Equal(2, verdict.DistinctOrderIds.Count);
+    }
+
+    [Fact]
+    public void ParseLines_AcceptsSkuQuantityAndReportsTheRest()
+    {
+        var problems = new List<string>();
+
+        var lines = Cli.ParseLines(["SKU-1:2", "SKU-2:x", "nocolon"], problems);
+
+        Assert.Equal([new SubmitOrderLine("SKU-1", 2)], lines);
+        Assert.Equal(2, problems.Count);
+    }
+}
+
+/// <summary>The HTTP layer against a scripted handler: retries are byte-identical and keyed.</summary>
+public class ApiClientTests
+{
+    private static readonly RetryPolicy Fast = new(3, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(2));
+
+    [Fact]
+    public async Task Send_AmbiguousThenAnswered_ResendsTheSameKeyAndBodyToTheNextReplica()
+    {
+        using var handler = new ScriptedHandler(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable), _ => Created());
+        var api = Client(handler, 2, Fast);
+
+        var call = await api.SendAsync(ApiRole.Customer, HttpMethod.Post, "/orders", "{\"a\":1}", "key-1", 0, false, TestContext.Current.CancellationToken);
+
+        Assert.Equal(201, call.Status);
+        Assert.Equal(["replica-1", "replica-2"], call.Attempts.Select(a => a.Endpoint));
+        Assert.Equal([AttemptClasses.Ambiguous, AttemptClasses.Answered], call.Attempts.Select(a => a.Class));
+        Assert.All(handler.Requests, r => Assert.Equal(("key-1", "{\"a\":1}", "customer-key"), (r.Key, r.Body, r.ApiKey)));
+        Assert.Equal(["r1.test", "r2.test"], handler.Requests.Select(r => r.Host));
+    }
+
+    [Fact]
+    public async Task Send_TransportErrorThenAnswered_IsAmbiguousThenAnswered()
+    {
+        using var handler = new ScriptedHandler(_ => throw new HttpRequestException("connection reset"), _ => Created());
+        var api = Client(handler, 1, Fast);
+
+        var call = await api.SendAsync(ApiRole.Customer, HttpMethod.Post, "/orders", "{}", "key-2", 0, true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(201, call.Status);
+        Assert.Equal("transport", call.Attempts[0].Code);
+        Assert.False(call.Unresolved);
+    }
+
+    [Fact]
+    public async Task Send_Refusal_IsNotRetried()
+    {
+        using var handler = new ScriptedHandler(_ => Problem(HttpStatusCode.UnprocessableEntity, "idempotency-key-reused"), _ => Created());
+        var api = Client(handler, 2, Fast);
+
+        var call = await api.SendAsync(ApiRole.Customer, HttpMethod.Post, "/orders", "{}", "key-3", 0, false, TestContext.Current.CancellationToken);
+
+        Assert.Equal((422, "idempotency-key-reused"), (call.Status, call.Code));
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task Send_NoAnswerEver_IsUnresolvedAfterEveryAttempt()
+    {
+        using var handler = new ScriptedHandler(_ => new HttpResponseMessage(HttpStatusCode.GatewayTimeout));
+        var api = Client(handler, 2, Fast);
+
+        var call = await api.SendAsync(ApiRole.Customer, HttpMethod.Post, "/orders", "{}", "key-4", 0, false, TestContext.Current.CancellationToken);
+
+        Assert.True(call.Unresolved);
+        Assert.Equal(3, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task Send_Timeout_IsAmbiguous()
+    {
+        using var handler = new ScriptedHandler(async (_, ct) =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(30), ct);
+            return Created();
+        });
+        var api = Client(handler, 1, Fast with { MaxAttempts = 1, RequestTimeout = TimeSpan.FromMilliseconds(50) });
+
+        var call = await api.SendAsync(ApiRole.Customer, HttpMethod.Post, "/orders", "{}", "key-5", 0, true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(("timeout", true), (call.Code, call.Unresolved));
+    }
+
+    [Fact]
+    public async Task Send_KeyMissing_SendsNothing()
+    {
+        using var handler = new ScriptedHandler(_ => Created());
+        var api = new ApiClient([new ApiEndpoint("replica-1", new Uri("http://r1.test"), new HttpClient(handler, false))], new Credentials(null, null, null), Fast);
+
+        var call = await api.SendAsync(ApiRole.Customer, HttpMethod.Post, "/orders", "{}", "key-6", 0, true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(("credential-missing", AttemptClasses.NotSent), (call.Code, call.Attempts[0].Class));
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task Cli_LoadDryRun_PrintsTheWorkloadAndExitsZero()
+    {
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+
+        var exit = await Cli.Build(stdout, stderr).Parse(["load", "--run-id", "cli-run", "--seed", "23", "--orders", "3", "--dry-run"]).InvokeAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("\"workloadDigest\"", stdout.ToString(), StringComparison.Ordinal);
+        Assert.Contains("cli-run-o00003", stdout.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("load", "--orders", "0")]
+    [InlineData("load", "--replay-of", "missing.json", "--seed", "3")]
+    [InlineData("load", "--replay")]
+    [InlineData("approve")]
+    [InlineData("inspect")]
+    [InlineData("single", "--url", "http://user:pw@host")]
+    public async Task Cli_InvalidUse_ExitsTwo(params string[] args)
+    {
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+
+        var exit = await Cli.Build(stdout, stderr).Parse(args).InvokeAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.Usage, exit);
+        Assert.DoesNotContain("pw", stderr.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Cli_Help_ListsTheM1Commands()
+    {
+        var names = Cli.Build().Subcommands.Select(c => c.Name).ToList();
+
+        Assert.Equal(["single", "duplicates", "load", "approve", "inspect", "identity", "probe"], names);
+    }
+
+    private static ApiClient Client(ScriptedHandler handler, int replicas, RetryPolicy policy)
+    {
+        var http = new HttpClient(handler, false);
+        var endpoints = Enumerable.Range(1, replicas).Select(i => new ApiEndpoint($"replica-{i}", new Uri($"http://r{i}.test"), http)).ToList();
+        return new ApiClient(endpoints, new Credentials("customer-key", "operator-key", "admin-key"), policy);
+    }
+
+    private static HttpResponseMessage Created() =>
+        new(HttpStatusCode.Created) { Content = new StringContent($"{{\"orderId\":\"{Guid.NewGuid()}\",\"status\":\"Submitted\",\"replayed\":false}}", Encoding.UTF8, "application/json") };
+
+    private static HttpResponseMessage Problem(HttpStatusCode status, string code) =>
+        new(status) { Content = new StringContent($"{{\"title\":\"x\",\"code\":\"{code}\"}}", Encoding.UTF8, "application/problem+json") };
+
+    private sealed record SeenRequest(string Host, string? Key, string? ApiKey, string? Body);
+
+    private sealed class ScriptedHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>[] script;
+
+        public ScriptedHandler(params Func<HttpRequestMessage, HttpResponseMessage>[] script) =>
+            this.script = [.. script.Select(s => (Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>)((r, _) => Task.FromResult(s(r))))];
+
+        public ScriptedHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> step) => script = [step];
+
+        public List<SeenRequest> Requests { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var body = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
+            Requests.Add(new SeenRequest(request.RequestUri!.Host,
+                request.Headers.TryGetValues(OrderRoutes.IdempotencyKeyHeader, out var key) ? key.Single() : null,
+                request.Headers.TryGetValues(OrderRoutes.ApiKeyHeader, out var apiKey) ? apiKey.Single() : null, body));
+            return await script[Math.Min(Requests.Count, script.Length) - 1](request, cancellationToken);
+        }
+    }
+}

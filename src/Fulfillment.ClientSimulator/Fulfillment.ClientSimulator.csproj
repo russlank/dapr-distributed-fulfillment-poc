@@ -1,9 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- External customer/operator CLI: ordinary HTTP to the public API only. No Dapr packages. -->
+  <!-- External customer/operator CLI: ordinary HTTP to the public API only. No Dapr packages
+       (Fulfillment.Contracts is Dapr-free: routes, records, codes; checked by a unit test). -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Fulfillment.Contracts\Fulfillment.Contracts.csproj" />
   </ItemGroup>
 </Project>

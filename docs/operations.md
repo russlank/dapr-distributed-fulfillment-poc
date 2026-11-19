@@ -10,6 +10,7 @@
 | `scripts/reset.sh --yes` | stops the stack and deletes all data volumes |
 | `scripts/scenarios/S00-runtime-smoke.sh` | runtime smoke checks (see [testing.md](testing.md)) |
 | `scripts/scenarios/S02-parallel-checks.sh` | the compute checks of an order run concurrently |
+| `scripts/scenarios/S23-deterministic-client-replay.sh` | the client simulator's seeded run, replay, and operator commands (see [client-simulator.md](client-simulator.md)) |
 | `scripts/scenarios/S49-execution-fence.sh`, `S51-concurrent-start.sh` | execution fence and concurrent starts (drill stack) |
 | `scripts/checks/*.sh` | order acceptance, observability, fulfillment recovery (drill stack) |
 | `scripts/drills/*.sh` | resilience drills, drill stack only |
@@ -62,6 +63,9 @@ curl -s "http://127.0.0.1:8080/reviews?status=Pending" -H "X-Api-Key: $OPERATOR_
 curl -s -X POST http://127.0.0.1:8080/reviews/<reviewId>/decision -H "X-Api-Key: $OPERATOR_API_KEY" \
   -H 'content-type: application/json' -d '{"decisionId":"<new GUID>","operatorId":"operator-1","outcome":"approve"}'
 ```
+
+Or with the client simulator: `approve --order <orderId>` (or `--from <result.json>`), see
+[client-simulator.md](client-simulator.md).
 
 Retry a decision with the same `decisionId` and payload; a new `decisionId`
 for a decided review gets `409`. The execution view shows the review rounds,
