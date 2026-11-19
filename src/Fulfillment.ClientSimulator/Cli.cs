@@ -26,6 +26,7 @@ public static class Cli
             Single(output, errors),
             Duplicates(output, errors),
             Conflicts(output, errors),
+            Contention(output, errors),
             Load(output, errors),
             Approve(output, errors),
             Inspect(output, errors),
@@ -280,6 +281,54 @@ public static class Cli
             }
 
             var result = await ConflictsRun.RunAsync(api, new ConflictsOptions(spec, parse.GetValue(variants), parse.GetValue(common.Replica), follow.Read(parse)), ct);
+            await ResultJson.WriteAsync(result, api.Credentials.Redactor, parse.GetValue(common.Output), stdout, stderr, ct);
+            return result.ExitCode;
+        });
+        return command;
+    }
+
+    private static Command Contention(TextWriter stdout, TextWriter stderr)
+    {
+        var common = new Common();
+        var follow = new FollowOptionSet();
+        var runId = RunIdOption("Logical run (default: a new run id)");
+        var seed = SeedOption();
+        var sku = new Option<string>("--sku") { Description = "The one SKU every order asks for", Required = true };
+        var orders = new Option<int>("--orders") { Description = "Orders, one line each", DefaultValueFactory = _ => 100 };
+        var quantity = new Option<int>("--quantity") { Description = "Units per order", DefaultValueFactory = _ => 1 };
+        var concurrency = new Option<int>("--concurrency") { Description = "Requests in flight at most", DefaultValueFactory = _ => 16 };
+        var rate = new Option<double?>("--rate") { Description = "Started orders per second at most (default: no limit)" };
+        var command = new Command("contention", "Many orders for one SKU at once across the replicas; with --follow, how many completed and how many were rejected")
+        {
+            runId, seed, sku, orders, quantity, concurrency, rate,
+        };
+        common.AddTo(command);
+        follow.AddTo(command);
+        command.SetAction(async (parse, ct) =>
+        {
+            var spec = new WorkloadSpec(parse.GetValue(runId) ?? RunIds.New(DateTimeOffset.UtcNow), parse.GetValue(seed) ?? 1, parse.GetValue(orders),
+                FixedSku: parse.GetValue(sku), FixedQuantity: parse.GetValue(quantity));
+            var problems = new List<string>(spec.Problems());
+            if (parse.GetValue(concurrency) is < 1 or > 64)
+            {
+                problems.Add("--concurrency: 1-64");
+            }
+
+            if (parse.GetValue(rate) is { } r && (r <= 0 || r > 10_000 || double.IsNaN(r)))
+            {
+                problems.Add("--rate: more than 0, at most 10000");
+            }
+
+            var (api, apiProblems) = common.Create(parse, parse.GetValue(concurrency));
+            problems.AddRange(apiProblems);
+            if (problems.Count > 0 || api is null)
+            {
+                return await UsageAsync(stderr, problems);
+            }
+
+            var options = new LoadOptions(spec, RunModes.New, null, parse.GetValue(concurrency), parse.GetValue(rate), Distribution.RoundRobin,
+                parse.GetValue(common.Replica), follow.Read(parse));
+            var result = await LoadRun.RunAsync(api, options, ct) with { Command = "contention" };
             await ResultJson.WriteAsync(result, api.Credentials.Redactor, parse.GetValue(common.Output), stdout, stderr, ct);
             return result.ExitCode;
         });

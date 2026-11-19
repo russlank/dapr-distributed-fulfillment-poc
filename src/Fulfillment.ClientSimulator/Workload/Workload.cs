@@ -38,7 +38,9 @@ public static partial class RunIds
 /// <param name="ReviewRate">Share of orders that need an operator review (0 to 1).</param>
 /// <param name="CatalogSize">Ordinary SKUs SKU-1 .. SKU-n.</param>
 /// <param name="ReviewThresholdMinor">Order value from which the server requires a review (stub price list).</param>
-public sealed record WorkloadSpec(
+/// <param name="FixedSku">Contention workloads: every order has one line of this SKU (the review draw and line generation are skipped).</param>
+/// <param name="FixedQuantity">Units per order of <paramref name="FixedSku"/>.</param>
+public sealed partial record WorkloadSpec(
     string RunId,
     ulong Seed,
     int Orders,
@@ -46,7 +48,9 @@ public sealed record WorkloadSpec(
     int MaxLines = 3,
     double ReviewRate = 0,
     int CatalogSize = 20,
-    long ReviewThresholdMinor = StubPrices.DefaultReviewThresholdMinor)
+    long ReviewThresholdMinor = StubPrices.DefaultReviewThresholdMinor,
+    string? FixedSku = null,
+    int FixedQuantity = 1)
 {
     public const int MaxOrders = 10_000;
 
@@ -89,6 +93,16 @@ public sealed record WorkloadSpec(
             problems.Add("review threshold: positive minor units");
         }
 
+        if (FixedSku is not null && !SkuPattern().IsMatch(FixedSku))
+        {
+            problems.Add($"sku '{FixedSku}': 1-{OrderLimits.MaxSkuLength} upper-case letters, digits or '-', starting with a letter or digit");
+        }
+
+        if (FixedQuantity < OrderLimits.MinQuantity || FixedQuantity > OrderLimits.MaxQuantity)
+        {
+            problems.Add($"quantity: {OrderLimits.MinQuantity}-{OrderLimits.MaxQuantity}");
+        }
+
         return problems;
     }
 }
@@ -123,6 +137,12 @@ public static class WorkloadGenerator
         ArgumentNullException.ThrowIfNull(spec);
         var random = DeterministicRandom.ForItem(spec.Seed, index);
         var customer = RunIds.Customer(spec.RunId, 1 + random.Next(spec.Clients));
+        if (spec.FixedSku is { } sku)
+        {
+            IReadOnlyList<SubmitOrderLine> one = [new SubmitOrderLine(sku, spec.FixedQuantity)];
+            return Create(index, RunIds.IdempotencyKey(spec.RunId, index), customer, one, StubPrices.TotalMinor(one) >= spec.ReviewThresholdMinor);
+        }
+
         var review = random.NextDouble() < spec.ReviewRate;
         IReadOnlyList<SubmitOrderLine> lines;
         if (review)
@@ -232,4 +252,10 @@ public static class StubPrices
 
         throw new ArgumentOutOfRangeException(nameof(thresholdMinor), "no review SKU reaches the threshold");
     }
+}
+
+public sealed partial record WorkloadSpec
+{
+    [GeneratedRegex("^[A-Z0-9][A-Z0-9-]{0,31}$")]
+    private static partial Regex SkuPattern();
 }

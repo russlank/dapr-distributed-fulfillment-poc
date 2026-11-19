@@ -62,6 +62,20 @@ public class WorkloadGeneratorTests
     }
 
     [Fact]
+    public void Generate_FixedSku_EveryOrderOneLineOfItAndValid()
+    {
+        var intents = WorkloadGenerator.Generate(new WorkloadSpec("contention-run", 3, 50, FixedSku: "SKU-C1", FixedQuantity: 2));
+
+        Assert.All(intents, i =>
+        {
+            Assert.Equal([new SubmitOrderLine("SKU-C1", 2)], i.Lines);
+            Assert.Empty(OrderRequests.Validate(OrderRequests.TryParse(Encoding.UTF8.GetBytes(i.Body), out _)!));
+        });
+        Assert.Equal(50, intents.Select(i => i.IdempotencyKey).Distinct().Count());
+        Assert.Contains("sku", Assert.Single(new WorkloadSpec("contention-run", 3, 5, FixedSku: "bad sku").Problems()), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Intent_DoesNotDependOnTheWorkloadSize()
     {
         var small = WorkloadGenerator.Generate(Golden with { Orders = 7 });
@@ -450,7 +464,7 @@ public class ApiClientTests
     {
         var names = Cli.Build().Subcommands.Select(c => c.Name).ToList();
 
-        Assert.Equal(["single", "duplicates", "conflicts", "load", "approve", "inspect", "identity", "probe"], names);
+        Assert.Equal(["single", "duplicates", "conflicts", "contention", "load", "approve", "inspect", "identity", "probe"], names);
     }
 
     private static ApiClient Client(ScriptedHandler handler, int replicas, RetryPolicy policy)
