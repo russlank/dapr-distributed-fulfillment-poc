@@ -59,23 +59,30 @@ arm_failpoint() {
 
 failpoint_fired_at() { sql "$1" "SELECT CONVERT(varchar(23), FiredAt, 126) FROM drill.Failpoint WHERE DrillRunId = '$DRILL_RUN_ID' AND Name = '$2' AND FiredAt IS NOT NULL"; }
 
+# Called first in the EXIT trap, so $? on entry is the script's own exit status. A script that
+# stopped early (a refusal exits 2) or recorded no assertion never counts as PASS.
 drill_finish() {
+  local script_rc=$?
   run_cleanup
-  local outcome=PASS
-  (( DRILL_FAILURES == 0 )) && $CLEANUP_OK || outcome=FAIL
+  local outcome=PASS asserted=0
+  [[ -s "$RESULTS_FILE" ]] && asserted=$(wc -l < "$RESULTS_FILE")
+  (( DRILL_FAILURES == 0 && script_rc == 0 && asserted > 0 )) && $CLEANUP_OK || outcome=FAIL
+  (( script_rc == 2 )) && outcome=REFUSED
   python - "$DRILL_DIR" "$DRILL_ID" "$DRILL_RUN_ID" "$outcome" "$INJECTED_AT" "$FAULT_OBSERVED" "$RECOVERED_AT" \
-    "$CLEANUP_OK" "$(( (SECONDS - DRILL_STARTED) * 1000 ))" "$(git rev-parse --short=10 HEAD)" <<'PY'
+    "$CLEANUP_OK" "$(( (SECONDS - DRILL_STARTED) * 1000 ))" "$(git rev-parse --short=10 HEAD)" "$script_rc" <<'PY'
 import json, os, sys
-d, drill, run, outcome, injected, observed, recovered, cleanup, duration, commit = sys.argv[1:11]
+d, drill, run, outcome, injected, observed, recovered, cleanup, duration, commit, script_rc = sys.argv[1:12]
 assertions = [json.loads(l) for l in open(os.path.join(d, "assertions.jsonl"), encoding="utf-8")] if os.path.exists(os.path.join(d, "assertions.jsonl")) else []
 identity = open(os.path.join(d, "identity.txt"), encoding="utf-8").read().splitlines() if os.path.exists(os.path.join(d, "identity.txt")) else []
 result = {"drillId": drill, "runId": run, "gitCommit": commit, "treeState": os.environ.get("GIT_TREE_STATE"), "environment": "drill", "versions": identity,
           "injectedAtUtc": injected or None, "faultObserved": observed or None, "recoveredAtUtc": recovered or None,
-          "assertions": assertions, "cleanupSucceeded": cleanup == "true", "outcome": outcome, "durationMs": int(duration)}
+          "assertions": assertions, "cleanupSucceeded": cleanup == "true", "scriptExit": int(script_rc), "outcome": outcome, "durationMs": int(duration)}
 json.dump(result, open(os.path.join(d, "result.json"), "w", encoding="utf-8"), indent=2)
 PY
   log "$DRILL_ID $outcome (evidence: $DRILL_DIR/result.json)"
-  [[ "$outcome" == PASS ]]
+  [[ "$outcome" == PASS ]] && return 0
+  [[ "$outcome" == REFUSED ]] && return 2
+  return 1
 }
 
 # drill_sql_script <database> <file> [name=value ...]: runs a SQL file with sqlcmd variables (as sa;
