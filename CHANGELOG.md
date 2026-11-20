@@ -9,6 +9,10 @@ Details of a release: `docs/releases/`. What broke on the way:
 - Development towards M4 (outbox publication, event distribution, history
   and projections, the reconciler). Entries are added as functionality is
   verified.
+- Verification runner `scripts/verify.sh`: suites `full` (milestone) and
+  `dev`, step groups, stack reuse, per-step timings compared with the
+  previous run. `CARRIER_SIM_STEP` paces the carrier simulator; the release
+  stack's scenarios use 2 s and take about half the time.
 
 ## v0.4.0: Payment, shipping, compensation, cancellation, and interventions (M3)
 

@@ -13,6 +13,46 @@ and end with an explicit `PASS`, `FAIL`, or `UNVERIFIED`.
 | `Ixx` | invariant checked by scenarios and drills | named in check output |
 | `Axx` | Dapr runtime compatibility check | [versions.md](versions.md), `spikes/dapr-compat/` |
 
+## Verification Runs
+
+`scripts/verify.sh` runs the checks of a suite one after another, writes each
+step's log, exit code, and duration to `artifacts/verify/<run>/`
+(`steps.jsonl`, `summary.json`), and ends with a table that compares every
+step with the previous run of the same suite (a step more than 50 % and 30 s
+slower is flagged). It exits 1 if any step failed.
+
+| Command | What runs | Use |
+|---|---|---|
+| `scripts/verify.sh --suite full --keep-awake` | build gates, Compose check, integration tests; then from fresh volumes: release `--replicas` (S00, OBS, ACC, S02, S09, S23, S04, S24, S43, S03 with actors and SQL-only), drill `--replicas` with a 2 s start lease (every M1-M3 scenario and drill), core drill (R00, S49, R06 compute); a version and commit check of every service on each stack. Needs a clean tree | milestone and release verification |
+| `scripts/verify.sh --suite dev` | the drill `--replicas` phase only, every scenario and drill once; volumes kept | regression after a larger change |
+| `scripts/verify.sh --only m3 --reuse` | a group (`smoke`, `m1`, `m2`, `m3`, `release`, `core`) or step ids (`R09,S39`; `A:S04` forces the release stack) | the area being changed |
+
+`--reuse` skips the stack start when the running stack was built from `HEAD`
+with the same tree state and flavor. With uncommitted changes it cannot tell
+whether the code changed since the build: rebuild (omit `--reuse`) after
+changing anything under `src/`; script changes need no rebuild.
+`--keep-awake` keeps a Windows machine from idle sleep while the run lasts.
+
+The release stack runs with `CARRIER_SIM_STEP=00:00:02`: the simulated
+carrier reports its three statuses 2 s apart instead of 10 s, so release
+scenarios that wait for completed orders do not wait 30 s per order. The
+system under test keeps its release time profile; only the external
+simulator's pace changes (`--release-carrier-step default` restores 10 s).
+The drill stack uses its own short profile throughout.
+
+Typical durations on the development laptop:
+
+| Run | Before | After |
+|---|---|---|
+| release phase (11 steps, start-up included) | 23.0 min | 10.9 min |
+| fulfillment recovery check (REC) | 166 s | 123 s (the diagnostic call during the outage is bounded to 10 s) |
+| `--only smoke --reuse` (S02, S04, S13, S29, S39) | - | 2.0 min |
+
+The remaining time is in the guarantees themselves: review deadlines (20 s
+per round), deliberate outages (R06: 50 s), kills and restarts of replicas
+(7-20 s each), contention runs of 200-500 orders, and the start-up of a stack
+(about 80-90 s including the image build). These are not shortened.
+
 ## Unit Tests
 
 ```bash
