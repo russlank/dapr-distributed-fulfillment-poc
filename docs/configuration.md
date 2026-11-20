@@ -19,6 +19,10 @@ it). Compose refuses to start when a required value is missing.
 | `ADMIN_API_KEY` | admin endpoints of the order API (`X-Api-Key`) |
 | `CUSTOMER_API_KEY` | customer endpoints of the order API: `/orders` (`X-Api-Key`) |
 | `GRAFANA_ADMIN_PASSWORD` | Grafana `admin` user |
+| `OPERATOR_API_KEY` | operator endpoints of the order API: `/reviews`, `/interventions` (`X-Api-Key`) |
+| `PROVIDER_API_KEY` | the payment provider's API (sent by the payment service; required by the provider) |
+| `CARRIER_API_KEY` | the carrier's API (sent by the shipping service; required by the carrier) |
+| `CARRIER_HMAC_KEY` | signs carrier callbacks (carrier) and verifies them (order API ingress) |
 
 ## Application Settings
 
@@ -89,6 +93,34 @@ units each. Scenarios and drills create their own SKUs with test-only SQL
 | `Review__Rounds` | `2` | rounds including the first; after the last one expires the order is `Rejected` |
 | `Review__Operators` | `operator-1,operator-2` | simulated operator ids allowed to decide |
 | `SignalDispatcher__Lease`, `__BaseBackoff`, `__MaxBackoff` | 30 s, 1 s, 30 s | signal claim lease and retry backoff |
+
+## Payment, Shipping, Carrier, Interventions
+
+`DAPR_POC_ENV=drill` shortens the time-related defaults (in parentheses).
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `Payment__ProviderUrl` | `http://payment-provider-simulator:8080` | the payment provider |
+| `Payment__RequestTimeout` | 5 s (2 s) | per request; connecting gets half of it (a connect timeout counts as "nothing sent") |
+| `Payment__MaxSends`, `__SendBackoff` | 4, 1 s (500 ms) | sends per operation and execution, backoff doubling |
+| `Payment__StatusQueries`, `__StatusQueryInterval` | 6, 1 s (500 ms) | status queries after a request that may have reached the provider |
+| `Payment__IdempotencyWindow` | 10 s (3 s) | a `NotFound` status is trusted only this long after the last send |
+| `Provider__AuthorizationValidity` | 7 days (120 s) | simulator: how long an authorization can be captured |
+| `Provider__DeclineFromMinor` | 10,000,000 | simulator: authorizations from this amount are declined |
+| `Shipping__CarrierUrl` | `http://carrier-simulator:8080` | the carrier |
+| `Shipping__RequestTimeout`, `__MaxSends`, `__SendBackoff` | 5 s (2 s), 4, 1 s (500 ms) | dispatch requests to the carrier |
+| `Shipping__DeliveryDeadline` | 30 min (45 s) | a terminal status is expected this long after acceptance; then the carrier is polled once |
+| `CarrierSim__Step` | 10 s (2 s) | simulator: interval between the automatic PickedUp, InTransit, Delivered callbacks |
+| `CarrierSim__CallbackUrls` | `http://order-api:8080` | simulator: callback receivers, comma-separated, tried in turn (`CARRIER_CALLBACK_URLS`; `stack-up.sh --replicas` names both order API replicas) |
+| `CarrierSim__RetrySchedule` | `1,5,30,120,600` s (`1,2,4,8`) | simulator: retries of an unanswered callback, then dead letter |
+| `CarrierForwarder__Enabled`, `__PollInterval`, `__BatchSize`, `__Lease` | true, 500 ms, 10, 30 s | the order API's forwarder of accepted callbacks to Shipping |
+| `CarrierForwarder__MaxBackoff`, `__UnknownShipmentRetries` | 1 min, 5 | retry backoff; attempts while Shipping does not know the shipment, then an `AmbiguousDispatch` case |
+| `RepairDispatcher__Enabled` | true | the order API's starter of repair workflows for resolved cases |
+
+The workflow's time profile is fixed per environment: hold extension before
+the capture 30 min (drill 30 s), minimum remaining hold validity for the
+capture 2 min (15 s), compensation rounds 3 with 10 s (2 s) between them, and
+a waiting case re-read every 10 min (30 s).
 
 ## Dapr
 

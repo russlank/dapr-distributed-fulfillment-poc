@@ -105,6 +105,57 @@ sql InventoryDb "SELECT OperationKey, Outcome, ProcessedBy, Replays FROM invento
 - Each stock actor logs `stock actor <warehouse>|<sku> activated on <replica>`
   where it runs; after a replica loss it activates on another one.
 
+A round can be escalated before its deadline (`POST /reviews/<reviewId>/escalate`
+with `{"operatorId": ..., "reason": ...}`, or the simulator's `escalate`); the
+next round opens at once.
+
+## Payment, Shipment, Cancellation
+
+- Payment operations and every attempt (send or status query, with its
+  answer) are in `PaymentDb` (`payment.PaymentOperation`,
+  `payment.PaymentAttempt`); the provider's own record is in
+  `PaymentProviderSimDb` (`provider.Operation`, with `provider.Prohibition`
+  for keys compensated before they committed).
+- An order `Compensated` with `PaymentProviderUnavailable` never reached the
+  provider (every send refused); its void by key still prohibits a late
+  authorization.
+- Shipments and every carrier event Shipping received, with its outcome, are
+  in `ShippingDb` (`shipping.Shipment`, `shipping.CarrierStatusEvent`); the
+  callbacks as received and their forwarding state in `OrderDb`
+  (`orders.CarrierCallbackInbox`, `orders.CarrierStatusForward`,
+  `orders.CarrierCallbackConflict`).
+- A forward row that stays `Pending` with a `LastError` means Shipping could
+  not be reached or did not know the shipment yet; it is retried with backoff
+  and becomes an `AmbiguousDispatch` case after its retries.
+- A customer cancels with `POST /orders/<orderId>/cancel` (customer key).
+  `409 dispatch-started` means the shipment is already on its way.
+
+## Intervention Cases
+
+An order in `ManualInterventionRequired` waits for an operator:
+
+```bash
+. scripts/lib.sh
+sql OrderDb "SELECT CaseId, Kind, State, OperationKey, Evidence, OpenedAt FROM orders.InterventionCase WHERE OrderId = '<orderId>'"
+curl -s -X POST http://127.0.0.1:8080/interventions/<caseId>/resolution -H "X-Api-Key: $OPERATOR_API_KEY" -H 'content-type: application/json' \
+  -d '{"resolutionId":"<new GUID>","operatorId":"operator-1","action":"ConfirmExternalSuccess","evidence":"provider record: Committed"}'
+```
+
+Or with the client simulator: `resolve --case <caseId> --action ... --evidence ...`.
+
+| Kind | Check first | Then |
+|---|---|---|
+| `AmbiguousPayment` | the provider's record for the operation key in the case | `ConfirmExternalSuccess` (it committed) or `ConfirmExternalFailure` (it did not); the workflow reads the provider again either way and acts on its record |
+| `CompensationExhausted` | why the void, refund, or release failed (the attempts) | fix the cause, then `ConfirmExternalFailure` to compensate again, or `ConfirmExternalSuccess`/`Acknowledge` if it was done outside |
+| `AmbiguousDispatch` | the carrier's record for the shipment id (= order id) | `ConfirmExternalSuccess` dispatches again with the same id (a replay at the carrier) |
+| `DeliveryException`, `DeliveryOverdue` | the carrier status | `ConfirmExternalSuccess` completes the order; any other resolution is recorded, what happens next is decided outside the system |
+| `CarrierTerminalConflict` | Shipping's history for the shipment | `Acknowledge` (record only) |
+
+The answer names the path: `Signal` (the workflow continues), `Repair` (a
+repair workflow compensates; its outcome is written to the case's
+`RepairOutcome`), or `RecordOnly`. `503 workflow-state-unknown` changed
+nothing: retry the same request.
+
 ## Restarting a Replica
 
 A replica is an app container plus a sidecar that joins the app's network
@@ -133,3 +184,5 @@ Scheduler volume loses pending timers (see [journal.md](journal.md)).
 | every app exits at start with "Signal-specific AddOtlpExporter methods and the cross-cutting UseOtlpExporter method..." | per-signal and cross-cutting OTLP exporters combined | only `UseOtlpExporter` |
 | a sidecar exits with "could not determine host IP address" | its app container is not running | start the app, then recreate the sidecar |
 | a sidecar exits at first start with "There is already an object named 'sp_Upsert_v5_state'" | several sidecars created the state-store schema at the same time on a fresh `DaprStateDb` | start one sidecar first (as `stack-up.sh` does), then recreate the failed one |
+| carrier callbacks answered `401` | the carrier and the order API use different `CARRIER_HMAC_KEY` values, or the clocks differ by more than the accepted skew | recreate both with the same `.env` |
+| every shipment request answered 500 by the carrier although the shipment was stored | a transaction isolation level leaked through the connection pool (see [journal.md](journal.md)) | fixed; if it reappears, check for isolation levels above read committed |

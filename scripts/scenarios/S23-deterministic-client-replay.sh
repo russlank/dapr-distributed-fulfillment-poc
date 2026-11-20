@@ -114,14 +114,14 @@ row="$(sql OrderDb "SELECT CONCAT(
   (SELECT COUNT(*) FROM (SELECT h.OrderId FROM orders.OrderStatusHistory h WHERE h.OrderId IN ($run_orders) GROUP BY h.OrderId
      HAVING STRING_AGG(h.ToStatus, ',') WITHIN GROUP (ORDER BY h.Sequence) = 'Submitted,Validating,Reserving,PaymentAuthorized,Packing,Dispatched,AwaitingDelivery,Completed') x), '|',
   (SELECT COUNT(*) FROM orders.[Order] o WHERE o.OrderId IN ($run_orders)
-     AND (SELECT COUNT(*) FROM orders.StubEffect e WHERE e.OrderId = o.OrderId) = (SELECT COUNT(*) FROM orders.OrderLine l WHERE l.OrderId = o.OrderId) + 1
+     AND (SELECT COUNT(*) FROM orders.StubEffect e WHERE e.OrderId = o.OrderId) = (SELECT COUNT(*) FROM orders.OrderLine l WHERE l.OrderId = o.OrderId)
      AND EXISTS (SELECT 1 FROM orders.OrderOutbox x WHERE x.OrderId = o.OrderId AND x.EventType = 'OrderCompleted')), '|',
   (SELECT COUNT(*) FROM orders.StubEffect e WHERE e.OrderId IN ($run_orders)), ':',
   (SELECT ISNULL(SUM(e.Replays), 0) FROM orders.StubEffect e WHERE e.OrderId IN ($run_orders)))")"
 IFS='|' read -r orders keys closed history effects_ok effects_after <<< "$row"
 observed="orders=$orders keys=$keys start-requests-closed=$closed history-ok=$history effects-per-line-ok=$effects_ok effect rows:replays before replay $effects_before, after $effects_after"
 if [[ "$orders" == "$N" && "$keys" == "$N" && "$closed" == "$N" && "$history" == "$N" && "$effects_ok" == "$N" && "$effects_after" == "$effects_before" ]]; then
-  check S23-effects PASS "one order, key, closed start request per request; one Completed transition; one effect per line + completion; unchanged by the replay" "$observed"
+  check S23-effects PASS "one order, key, closed start request per request; one Completed transition; one effect per line, one completion event; unchanged by the replay" "$observed"
 else
   check S23-effects FAIL "$N each; effect rows unchanged" "$observed"
 fi

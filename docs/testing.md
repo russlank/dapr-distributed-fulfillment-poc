@@ -70,6 +70,14 @@ persisted rows with plain SQL, independent of the model under test.
 | client simulator | against two API hosts on one database: a seeded run creates 12 orders over both replicas; its replay from the recorded result (other replica assignment) returns the same order for each request; a new run under the used run id exits 3 and creates nothing (12 orders, keys, start requests); responses lost after commit: each retry is a replay, one order per key; requests left unresolved are reported (exit 4) and a replay resolves them; 6 concurrent copies per key on both replicas: one order, five replays, the other body `422`; 5 distinct bodies raced per key: one accepted, the rest `422` in the race and on repeat, the order holds the winner's customer and lines; approve decides the pending review once, a rerun (by order or by review) is a replay, a later reject is refused `409 review-already-decided` (one decision); inspect shows order and reviews and skips diagnostics without the admin key; results never contain a key |
 | fence | the claim counts every claim of a non-terminal order and audits it; terminal orders (all four statuses) are rejected, counted, and audited; 20 concurrent claims all count; an unknown order fails without writing |
 | inventory | against a migrated `InventoryDb` (the inventory's own operations, no actors): 60 concurrent one-unit reservations on a row of 20 succeed exactly 20 times (`Reserved` 20, never above `OnHand`); 20 racing repeats of one operation key make one hold and one stored result, the rest replays; `InsufficientStock` is stored and replayed; release racing the sweeper and consumption racing the sweeper close each hold once; consumption is all of the order's holds or none (one expired or missing hold consumes nothing); a closed order refuses late reservations; the outbox stays gapless per order with one creation and one closing event per hold; a second sweeper takes over only after the lease; whole-line allocation by warehouse priority; the schema's check constraints and unique indexes refuse invalid rows |
+| payment provider | the provider simulator in-process against its own database: a repeat of a key returns the stored result, another payload `409`; 20 concurrent requests of one key commit once; authorize/void, capture/void, capture/refund races (30 rounds each) never leave both effects; a late original after its compensation is `Prohibited`; a capture after a void is refused; expiry, decline, and every fault mode |
+| payment service | the executor against the real provider: a lost answer is adopted by a status query; an unreachable provider is `Unavailable` (nothing sent); an undeterminable outcome is `Ambiguous` and later reconciled |
+| hold extension | extend all holds or none under the order's lock, capped by the authorization, never shortening a hold; `HoldExpired`, `Incomplete`, `InsufficientValidity`; one stored result and `HoldExtended` events; a race with the sweeper |
+| lifecycle | forward-only status chain; the point of no return refuses a dispatch after a cancellation and a cancellation after the dispatch (a delayed `BeginDispatch` racing a cancellation); cases open once per kind; finalization on `Delivered` writes the completion event once |
+| carrier and Shipping | signed ingress: one inbox row and forward command per event, duplicates counted, another payload `409` and audited; Shipping's current-state rule (versions forward only, first terminal stays) and every outcome, including a wrong-order callback at a version already taken; the forwarder's outcomes (signal only for `TerminalApplied` while awaiting delivery, a case for `TerminalConflict` and for an unknown shipment after its retries) |
+| cancellation | `202`, `200` repeat, `409 dispatch-started`, `409 order-terminal`, `404`; a cancellation during a review wakes the workflow and ends the round `Cancelled` |
+| interventions | one transaction resolves a case and takes one path: `Signal` while the workflow runs, `Repair` when it is missing, terminated, or failed, `RecordOnly` on a terminal order; replays and other resolution ids; an action not allowed for the kind; an unreachable workflow host leaves the case open |
+| escalation | a round escalated before its deadline opens the next round and signals the waiter in one transaction; a repeat returns the same round; the old round's decision is superseded; the last round cannot be escalated |
 | schema | migrations apply twice without change; the API refuses to start on an unmigrated database; the database rejects a second start request, a second order per key, duplicate instance ids or history sequences, out-of-range lines, unknown statuses, inconsistent start-request lifecycle or lease values, a second effect per operation key, a simulated step not named `stub-…`, a second result per check, unknown attempt results, a second review round with one number, an inconsistent review lifecycle, an unknown review purpose, a decision without review, and an unknown signal state |
 
 ## Scenarios
@@ -269,6 +277,21 @@ the order must end `Completed` once, with one effect per key. Evidence:
 | REC-4 hosts down in review | every workflow-host replica is `SIGKILL`ed while an order awaits approval; the approval is decided during the outage | after the restart the run reads the approval and completes once; the signal is delivered (or made moot by the timer) within 60 s of readiness; attempt log, sidecar errors, and timing recorded |
 | REC-5 invocation after restart (diagnostic) | every workflow-host replica restarts | invocation from both order API sidecars works again within 60 s of readiness; time to the first success and the failure answers recorded |
 
+### Payment, Shipment, Reviews, Cancellation (drill stack)
+
+| Scenario | PASS when |
+|---|---|
+| S13 payment declined | the provider declines the authorization: `Rejected` (`PaymentDeclined`), hold released once, nothing captured or voided, no case |
+| S29, S31 operator approval and rejection | through the client simulator: both pending rounds listed; the approved order completes through payment and delivery (9 history rows, one capture), the rejected one ends `Rejected` (`ReviewRejected`) without hold or payment; repeats are replays |
+| S30 seeded scripted operators | the same seed and orders give the same plan and digest; every order ends as its choice implies (approve, reject, escalate then approve, ignore until both rounds expire); the same run again returns only replays |
+| S39 cancellation windows | during a review, after the authorization, after the dispatch started, after completion, unknown order: `202`/`200`/`409`/`404` with the matching end state |
+| S40, S41 expiry before capture and consumption | holds expired during an intervention pause before the capture (voided) and after it (refunded); an authorization expired before the capture: nothing captured |
+
+The remaining M3 scenarios run inside their drills: S10 (carrier part), S27,
+S43 (carrier part) in R13; S14 in R10; S25, S26 in R11; S32 in R19/R25; S33
+in R22; S34 in R23; S35 in R20/R21; S36 in R24/R25; S37 in R26; S38 in R09;
+S47 in R31; S50 in R33.
+
 ## Drills
 
 Drills run only against a drill stack (`bash scripts/stack-up.sh --drill`);
@@ -285,6 +308,7 @@ see [resilience-drills.md](resilience-drills.md).
 | R05 stock actor relocation (S07) | does a hot SKU stay correct when its stock actor's host dies under contention? | the actor moves to another replica; successes equal the stock |
 | R06 inventory outage (S08) | do holds expire correctly while the whole inventory is down? | nothing changes during the outage; expired holds compensate their orders, later orders complete |
 | R08 partial reservation (S45, S15) | are partial reservations compensated, and do holds expire without the Scheduler? | released once, `Rejected` or `Compensated`; the sweeper expires an orphan hold with Placement and Scheduler stopped |
+| R09, R10, R11, R13, R19-R27, R31, R33 | payment, compensation, carrier, review, cancellation, and intervention failures | see [resilience-drills.md](resilience-drills.md#run) |
 
 ## Build Gates
 

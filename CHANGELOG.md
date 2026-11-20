@@ -6,8 +6,35 @@ Details of a release: `docs/releases/`. What broke on the way:
 
 ## Unreleased (0.4.0-dev)
 
-- Development towards M3 (payment, shipping, compensation, cancellation,
-  interventions). Entries are added as functionality is verified.
+- Payment (M3): a payment service (`PaymentDb`) against an external payment
+  provider simulator (own database, no sidecar). Intent and attempt rows
+  before every request; a request without an answer is reconciled by status
+  query, a refused connection counts as nothing sent; outcomes `Unavailable`
+  and `Ambiguous`. Compensation by operation key: a void or refund against an
+  operation that never committed is a committed no-op that prohibits the
+  key, so a late original can never commit; a capture is refused after a void.
+- Holds are extended once before the capture (never beyond the
+  authorization, never shortened); the capture needs enough remaining
+  validity; the consumption checks expiry again; a hold lost after the
+  capture is refunded.
+- Shipping (M3): a shipping service (`ShippingDb`) and a carrier simulator
+  with signed callbacks. Ingress writes an inbox row and a forward command in
+  one transaction; a leased forwarder applies them through Shipping, whose
+  current-state rule keeps versions moving forward and the first terminal
+  status; `Delivered` completes the order with an `OrderCompleted` outbox row.
+- Cancellation with a point of no return before dispatch (`409
+  dispatch-started` afterwards); cancellation during a review.
+- Intervention cases (`AmbiguousPayment`, `CompensationExhausted`,
+  `AmbiguousDispatch`, delivery exceptions and overdue deliveries, carrier
+  terminal conflicts) and their resolution: signal to the waiting workflow,
+  a repair workflow with its own keys, or record only.
+- Manual review escalation; new compatible `409` codes `review-cancelled`,
+  `no-further-round`, `dispatch-started`, `order-terminal`.
+- Client simulator: `cancel`, `reviews`, `escalate`, `resolve`, and the
+  seeded scripted operator (`operator run`).
+- Scenarios S13, S29-S31, S30, S39, S40/S41; drills R09, R10, R11, R13,
+  R19-R27, R31, R33. Earlier scenarios and drills follow the full
+  fulfillment history.
 
 ## v0.3.0: Inventory contention and idempotent activities (M2)
 
