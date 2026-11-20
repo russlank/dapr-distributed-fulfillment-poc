@@ -234,7 +234,11 @@ public sealed partial class ShippingOperations(string connectionString, HttpClie
             return new CarrierStatusIngested(e.EventId, CarrierStatusOutcomes.UnknownShipment, false, null);
         }
 
-        var versionTaken = await ScalarAsync<int>(connection, tx, "SELECT COUNT(*) FROM shipping.CarrierStatusEvent WHERE ShipmentId = @s AND Version = @v AND Outcome <> 'CorrelationMismatch'", ct,
+        // A callback naming another order than the shipment's is always recorded as a mismatch, whatever its
+        // version: it must never be taken for a duplicate of the shipment's own event at that version.
+        var mismatch = Guid.Parse(orderOfShipment) != e.OrderId;
+        var versionTaken = !mismatch && await ScalarAsync<int>(connection, tx,
+            "SELECT COUNT(*) FROM shipping.CarrierStatusEvent WHERE ShipmentId = @s AND Version = @v AND Outcome <> 'CorrelationMismatch'", ct,
             ("@s", e.ShipmentId), ("@v", e.Version)) > 0;
         if (versionTaken)
         {
@@ -243,7 +247,7 @@ public sealed partial class ShippingOperations(string connectionString, HttpClie
         }
 
         string result;
-        if (Guid.Parse(orderOfShipment) != e.OrderId)
+        if (mismatch)
         {
             result = CarrierStatusOutcomes.CorrelationMismatch;
         }

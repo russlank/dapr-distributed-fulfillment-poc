@@ -102,12 +102,17 @@ public sealed class CarrierStatusTests(SqlServerFixture sql) : IAsyncLifetime
         var unknown = await IngestAsync(Guid.NewGuid(), CarrierStatuses.PickedUp, 1);
         var wrongOrder = await IngestAsync(shipment, CarrierStatuses.InTransit, 2, orderId: Guid.NewGuid());
         var real = await IngestAsync(shipment, CarrierStatuses.InTransit, 2);
+        var wrongOrderTakenVersion = await IngestAsync(shipment, CarrierStatuses.PickedUp, 1, orderId: Guid.NewGuid());
 
         Assert.Equal(
             (CarrierStatusOutcomes.PayloadConflict, CarrierStatusOutcomes.UnknownShipment, CarrierStatusOutcomes.CorrelationMismatch, CarrierStatusOutcomes.Applied),
             (conflict.Outcome, unknown.Outcome, wrongOrder.Outcome, real.Outcome));
-        Assert.Equal("InTransit|2", await Db.ScalarAsync<string>(shippingDb,
-            "SELECT CONCAT(CurrentStatus, '|', CurrentVersion) FROM shipping.Shipment WHERE ShipmentId = @s", ("@s", shipment)));
+        Assert.Equal(CarrierStatusOutcomes.CorrelationMismatch, wrongOrderTakenVersion.Outcome);
+        Assert.Equal("InTransit|2|2", await Db.ScalarAsync<string>(shippingDb,
+            """
+            SELECT CONCAT(CurrentStatus, '|', CurrentVersion, '|', (SELECT COUNT(*) FROM shipping.CarrierStatusEvent WHERE ShipmentId = @s AND Outcome = 'CorrelationMismatch'))
+            FROM shipping.Shipment WHERE ShipmentId = @s
+            """, ("@s", shipment)));
     }
 
     private static CarrierCallback Callback(Guid order, string status, int version, Guid? eventId = null) =>

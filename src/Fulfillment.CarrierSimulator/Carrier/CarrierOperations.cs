@@ -32,7 +32,8 @@ public sealed class CarrierOptions
 public sealed record AcceptOutcome(CarrierShipmentAccepted? Accepted, bool Conflict);
 
 /// <summary>A scripted callback (drill test control).</summary>
-/// <param name="SameEventIdAs">Reuse the event id of an earlier scripted step (index), for repeats and payload conflicts.</param>
+/// <param name="SameEventIdAs">Reuse the event id of an earlier scripted step (index): with the same status, version, and order a
+/// byte-identical resend (the earlier step's occurrence time too); otherwise a payload conflict.</param>
 public sealed record ScriptedCallback(string Status, int Version, int DelayMs, bool Truth = true, bool BadSignature = false, Guid? OrderIdOverride = null,
     int? SameEventIdAs = null, Guid? EventId = null);
 
@@ -127,12 +128,23 @@ public sealed class CarrierOperations(string connectionString, CarrierOptions op
         var orderId = await Scalar<Guid?>(connection, null, "SELECT OrderId FROM carrier.Shipment WHERE ShipmentId = @s", ct, ("@s", shipmentId)) ?? shipmentId;
         var ids = new List<Guid>();
         await using var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct);
-        foreach (var step in steps)
+        // One base time for the whole script: a resend must carry exactly the occurrence time of the step it repeats.
+        var baseTime = await Scalar<DateTime>(connection, tx, "SELECT SYSUTCDATETIME()", ct);
+        for (var n = 0; n < steps.Count; n++)
         {
+            var step = steps[n];
             var eventId = step.EventId ?? (step.SameEventIdAs is { } i ? ids[i] : Guid.NewGuid());
             ids.Add(eventId);
-            await InsertCallbackAsync(connection, tx, eventId, shipmentId, step.OrderIdOverride ?? orderId, step.Status, step.Version, step.DelayMs,
-                step.Truth, step.BadSignature, label, ct);
+            var occurredDelay = step.SameEventIdAs is { } r && steps[r] is var original && original.Status == step.Status && original.Version == step.Version
+                && original.OrderIdOverride == step.OrderIdOverride
+                ? original.DelayMs
+                : step.DelayMs;
+            await Exec(connection, tx,
+                """
+                INSERT carrier.Callback (EventId, ShipmentId, OrderId, Status, Version, OccurredAt, DueAt, State, Attempts, IsTruth, BadSignature, Label)
+                VALUES (@e, @s, @o, @st, @v, DATEADD(millisecond, @od, @base), DATEADD(millisecond, @d, @base), 'Scheduled', 0, @t, @b, @l);
+                """, ct, ("@e", eventId), ("@s", shipmentId), ("@o", step.OrderIdOverride ?? orderId), ("@st", step.Status), ("@v", step.Version), ("@od", occurredDelay),
+                ("@d", step.DelayMs), ("@base", baseTime), ("@t", step.Truth), ("@b", step.BadSignature), ("@l", label));
         }
 
         await tx.CommitAsync(ct);

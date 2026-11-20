@@ -5,6 +5,44 @@ keeps the expectation that turned out wrong.
 
 ## 2026-11-20: Payment provider, payment service, hold extension
 
+### A callback for the wrong order was taken for a duplicate
+
+- **Expected (drill R13):** a carrier callback naming another order than the
+  shipment's is recorded by Shipping as `CorrelationMismatch`.
+- **Observed:** the callback (PickedUp v1, wrong order id) was accepted and
+  forwarded, but Shipping answered `Duplicate` and recorded nothing. The
+  version check ("this shipment already has an event at v1") ran before the
+  correlation check.
+- **Fix:** the correlation check comes first; a mismatch is always recorded,
+  whatever its version. The integration test now also sends a wrong-order
+  callback at a version already taken.
+
+### The carrier's scripted repeats were not byte-identical
+
+- **Expected:** three scripted PickedUp callbacks with the same event id are
+  duplicates, answered `202` and counted by the ingress.
+- **Observed:** the second and third got `409` (payload conflict): each
+  scripted step had its own occurrence time, so the signed body differed.
+- **Fix (simulator):** a scripted step that repeats an earlier one (same event
+  id, status, version, and order) reuses its occurrence time; all steps of a
+  script share one base time. A repeat with another status stays a payload
+  conflict.
+
+### The extension before the capture changed nothing in the drill stack
+
+- **Expected:** every drill order shows a `HoldExtended` event before its
+  capture.
+- **Observed:** none did. The drill hold lifetime (60 s) outlasts the drill
+  extension (30 s), and an extension never shortens a hold. The decision path
+  (remaining validity checked, capture or compensation) still ran.
+- **Change:** R04 expects no extension event on the default drill stack. S40
+  and S41 recreate the inventory replicas with a 20 s hold lifetime for their
+  run, as R06 already did, so the extension really lengthens the holds there.
+  With the authorization already expired, S41 showed that no capture is sent
+  when the extension (capped at the authorization's expiry) leaves too little
+  validity. When a hold still has enough validity of its own, the provider's
+  refusal of the capture is the backstop.
+
 ### A terminated workflow made its intervention case unresolvable
 
 - **Expected (drill R26):** after an order's workflow is terminated, resolving
