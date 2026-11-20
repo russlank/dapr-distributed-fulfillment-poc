@@ -172,7 +172,9 @@ fi
 # not a timeout fix): invocation succeeds within 60 s of readiness.
 kill_pair workflow-host; kill_pair workflow-host-2
 sleep 3
-down_answer="$(invoke_probe order-api)"
+# Diagnostic only: what a caller sees while the hosts are down. Bounded, because the sidecar's own
+# invocation attempts otherwise keep the probe (and the outage) open for about 45 s.
+down_answer="$(invoke_probe order-api 10)"; [[ -n "$down_answer" ]] || down_answer='no answer within 10 s'
 start_pair workflow-host; start_pair workflow-host-2
 ready_s=$SECONDS; ready5="$(date -u +%H:%M:%S.%3N)"
 : > "$DRILL_DIR/REC-5-probes.txt"

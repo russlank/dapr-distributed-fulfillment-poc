@@ -1,5 +1,6 @@
 using System.Net;
 using System.Reflection;
+using Fulfillment.CarrierSimulator.Carrier;
 using Fulfillment.Messaging;
 using Fulfillment.Primitives;
 using Fulfillment.ServiceDefaults;
@@ -248,5 +249,24 @@ public class SidecarInvokerTests
                 ? throw new HttpRequestException("connection refused")
                 : Task.FromResult(new HttpResponseMessage(status.Value) { Content = new StringContent("{}") });
         }
+    }
+}
+
+public class CarrierOptionsTests
+{
+    [Theory]
+    [InlineData(null, 10)]
+    [InlineData("", 10)]
+    [InlineData("not-a-time", 10)]
+    [InlineData("00:00:00", 10)]
+    [InlineData("-00:00:02", 10)]
+    [InlineData("00:00:02", 2)]
+    public void Step_override_applies_only_a_positive_time_span(string? value, int expectedSeconds)
+    {
+        var options = new CarrierOptions();
+
+        CarrierOptions.ApplyStepOverride(options, value);
+
+        Assert.Equal(TimeSpan.FromSeconds(expectedSeconds), options.Step);
     }
 }

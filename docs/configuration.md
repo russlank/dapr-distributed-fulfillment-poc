@@ -111,6 +111,7 @@ units each. Scenarios and drills create their own SKUs with test-only SQL
 | `Shipping__RequestTimeout`, `__MaxSends`, `__SendBackoff` | 5 s (2 s), 4, 1 s (500 ms) | dispatch requests to the carrier |
 | `Shipping__DeliveryDeadline` | 30 min (45 s) | a terminal status is expected this long after acceptance; then the carrier is polled once |
 | `CarrierSim__Step` | 10 s (2 s) | simulator: interval between the automatic PickedUp, InTransit, Delivered callbacks |
+| `CARRIER_SIM_STEP` | empty | simulator: when set to a positive `TimeSpan` (for example `00:00:02`), replaces the step above; `scripts/verify.sh` sets it on the release stack so that scenarios do not wait 30 s per delivery. It paces only the simulated carrier, not the system under test |
 | `CarrierSim__CallbackUrls` | `http://order-api:8080` | simulator: callback receivers, comma-separated, tried in turn (`CARRIER_CALLBACK_URLS`; `stack-up.sh --replicas` names both order API replicas) |
 | `CarrierSim__RetrySchedule` | `1,5,30,120,600` s (`1,2,4,8`) | simulator: retries of an unanswered callback, then dead letter |
 | `CarrierForwarder__Enabled`, `__PollInterval`, `__BatchSize`, `__Lease` | true, 500 ms, 10, 30 s | the order API's forwarder of accepted callbacks to Shipping |

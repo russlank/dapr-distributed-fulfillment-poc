@@ -130,9 +130,9 @@ raise_via_sidecar() {
     "exec 3<>/dev/tcp/127.0.0.1/3500 && body='{\"signalId\":\"00000000-0000-0000-0000-000000000000\"}' && printf 'POST /v1.0/invoke/workflow-host/method/internal/workflows/$2/events/$3 HTTP/1.0\r\nHost: localhost\r\ndapr-api-token: %s\r\nContent-Type: application/json\r\nContent-Length: %s\r\n\r\n%s' \"\$DAPR_API_TOKEN\" \${#body} \"\$body\" >&3 && sed '1,/^\r\$/d' <&3" 2>/dev/null
 }
 
-# invoke_probe <order-api service>: one GET through that replica's sidecar to the workflow host's
+# invoke_probe <order-api service> [timeout seconds, default none]: one GET through that replica's sidecar to the workflow host's
 # management API (a state query for a nonexistent instance). Prints "<HTTP status> <first 160 chars of body>".
 invoke_probe() {
-  docker compose --profile replicas exec -T "$1" bash -c \
+  timeout "${2:-0}" docker compose --profile replicas exec -T "$1" bash -c \
     "exec 3<>/dev/tcp/127.0.0.1/3500 && printf 'GET /v1.0/invoke/workflow-host/method/internal/workflows/probe-none HTTP/1.0\r\nHost: localhost\r\ndapr-api-token: %s\r\n\r\n' \"\$DAPR_API_TOKEN\" >&3 && r=\$(cat <&3) && printf '%s %s' \"\$(printf '%s' \"\$r\" | head -1 | awk '{print \$2}')\" \"\$(printf '%s' \"\$r\" | sed '1,/^\r\$/d' | tr -d '\r\n' | cut -c1-160)\"" 2>/dev/null
 }

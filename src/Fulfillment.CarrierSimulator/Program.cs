@@ -14,6 +14,7 @@ var connectionString = builder.Configuration.GetConnectionString("CarrierSimDb")
 var carrierOptions = new CarrierOptions();
 CarrierOptions.ForEnvironment(carrierOptions, Environment.GetEnvironmentVariable("DAPR_POC_ENV"));
 builder.Configuration.GetSection(CarrierOptions.Section).Bind(carrierOptions);
+CarrierOptions.ApplyStepOverride(carrierOptions, Environment.GetEnvironmentVariable("CARRIER_SIM_STEP"));
 builder.Services.AddSingleton(carrierOptions);
 builder.Services.AddSingleton(new CarrierOperations(connectionString, carrierOptions));
 builder.Services.AddHttpClient("callbacks");

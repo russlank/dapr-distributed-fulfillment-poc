@@ -27,6 +27,20 @@ public sealed class CarrierOptions
             options.RetrySchedule = "1,2,4,8";
         }
     }
+
+    /// <summary>
+    /// Applies <c>CARRIER_SIM_STEP</c> (a positive <see cref="TimeSpan"/>, for example <c>00:00:02</c>) over the configured step.
+    /// It paces only the simulated carrier, an external party; test runs use it to shorten waits for delivery.
+    /// An empty or invalid value changes nothing.
+    /// </summary>
+    public static void ApplyStepOverride(CarrierOptions options, string? step)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (TimeSpan.TryParse(step, System.Globalization.CultureInfo.InvariantCulture, out var value) && value > TimeSpan.Zero)
+        {
+            options.Step = value;
+        }
+    }
 }
 
 public sealed record AcceptOutcome(CarrierShipmentAccepted? Accepted, bool Conflict);

@@ -766,6 +766,7 @@ services:
       CARRIER_API_KEY: ${CARRIER_API_KEY:?set CARRIER_API_KEY in .env}
       CARRIER_HMAC_KEY: ${CARRIER_HMAC_KEY:?set CARRIER_HMAC_KEY in .env}
       CarrierSim__CallbackUrls: ${CARRIER_CALLBACK_URLS:-http://order-api:8080}
+      CARRIER_SIM_STEP: ${CARRIER_SIM_STEP:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       ConnectionStrings__CarrierSimDb: "Server=sqlserver;Database=CarrierSimDb;User Id=carrier_simulator;Password=${CARRIER_SIM_DB_PASSWORD};TrustServerCertificate=true"
