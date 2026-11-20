@@ -73,7 +73,8 @@ public static class WorkflowManagementApi
                 return Results.Ok(new WorkflowStateView(instanceId, false, null, null, null, null, null));
             }
 
-            JsonElement? output = state.IsWorkflowCompleted ? state.ReadOutputAs<JsonElement>() : null;
+            // A workflow terminated or failed without an output reads as an undefined element, which cannot be written.
+            JsonElement? output = state.IsWorkflowCompleted && state.ReadOutputAs<JsonElement>() is { ValueKind: not JsonValueKind.Undefined } read ? read : null;
             return Results.Ok(new WorkflowStateView(
                 instanceId,
                 true,

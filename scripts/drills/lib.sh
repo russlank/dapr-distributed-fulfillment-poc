@@ -108,6 +108,13 @@ drill_schedule_fulfillment() {
     "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'POST /internal/drill/fulfillment/$1/schedule HTTP/1.0\r\nHost: localhost\r\ndapr-api-token: %s\r\nContent-Length: 0\r\n\r\n' \"\$APP_API_TOKEN\" >&3 && sed '1,/^\r\$/d' <&3" 2>/dev/null
 }
 
+# drill_terminate_fulfillment <order id>: the workflow host's drill-only control terminates
+# fulfill-{orderId:N} and waits for it to end. Prints {instanceId, terminated, previousStatus, status, error}.
+drill_terminate_fulfillment() {
+  docker compose exec -T workflow-host bash -c \
+    "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'POST /internal/drill/fulfillment/$1/terminate HTTP/1.0\r\nHost: localhost\r\ndapr-api-token: %s\r\nContent-Length: 0\r\n\r\n' \"\$APP_API_TOKEN\" >&3 && sed '1,/^\r\$/d' <&3" 2>/dev/null
+}
+
 # prometheus_sum <metric>: current sum over all series (empty when absent). Each query is bounded
 # (observed: unbounded queries hung, so a 150 s wait took 10 minutes).
 prometheus_sum() {

@@ -14,6 +14,9 @@ public static class InventoryFailpoints
 
     /// <summary>After all holds were consumed, before the activity returns (key: {orderId:N}:consume:1).</summary>
     public const string AfterConsumeCommitBeforeActivityCompletion = "AfterConsumeCommitBeforeActivityCompletion";
+
+    /// <summary>After one hold of a compensation was released, before the next one (key: {orderId:N}:release:{holdId:N}).</summary>
+    public const string AfterReleaseOneHoldBeforeNext = "AfterReleaseOneHoldBeforeNext";
 }
 
 /// <summary>Operation keys of inventory requests: stable per order, line, and warehouse.</summary>
@@ -67,7 +70,7 @@ public sealed class ReserveOrderLineActivity(InventoryOperations operations, ISt
 }
 
 /// <summary>Closes the order for reservations, then releases each hold still held (through its stock actor).</summary>
-public sealed class ReleaseOrderHoldsActivity(InventoryOperations operations, IStockCoordinator coordinator)
+public sealed class ReleaseOrderHoldsActivity(InventoryOperations operations, IStockCoordinator coordinator, Failpoints failpoints)
     : WorkflowActivity<ReleaseHoldsRequest, ReleaseHoldsResult>
 {
     public override async Task<ReleaseHoldsResult> RunAsync(WorkflowActivityContext context, ReleaseHoldsRequest input)
@@ -77,11 +80,12 @@ public sealed class ReleaseOrderHoldsActivity(InventoryOperations operations, IS
         int released = 0, notHeld = 0;
         foreach (var hold in held)
         {
-            var result = await coordinator.ReleaseAsync(hold.WarehouseId, hold.Sku,
-                new ReleaseCommand(input.OrderId, hold.HoldId, InventoryKeys.Release(input.OrderId, hold.HoldId)), CancellationToken.None);
+            var key = InventoryKeys.Release(input.OrderId, hold.HoldId);
+            var result = await coordinator.ReleaseAsync(hold.WarehouseId, hold.Sku, new ReleaseCommand(input.OrderId, hold.HoldId, key), CancellationToken.None);
             if (result.Outcome == InventoryOutcomes.Released)
             {
                 released++;
+                await failpoints.HitAsync(InventoryFailpoints.AfterReleaseOneHoldBeforeNext, key);
             }
             else
             {

@@ -5,6 +5,22 @@ keeps the expectation that turned out wrong.
 
 ## 2026-11-20: Payment provider, payment service, hold extension
 
+### A terminated workflow made its intervention case unresolvable
+
+- **Expected (drill R26):** after an order's workflow is terminated, resolving
+  its AmbiguousPayment case finds no workflow waiting and starts the repair
+  workflow.
+- **Observed:** the resolution answered `503 workflow-state-unknown` and the
+  case stayed open. The workflow host's state endpoint answered 500 for the
+  terminated instance: it read the output of every completed instance as a
+  `JsonElement`, a terminated one has none, and serializing the undefined
+  element threw.
+- **Fix:** an instance without an output reports none. The case that had been
+  refused was resolved afterwards with the same request and took the Repair
+  path (void with the repair key, order Compensated).
+- **What held:** the resolution never guessed. Without the workflow host's
+  answer it changed nothing and asked for a retry.
+
 ### A carrier forwarding test failed once in the full suite
 
 - **Expected:** the integration test that drains the carrier forward queue
