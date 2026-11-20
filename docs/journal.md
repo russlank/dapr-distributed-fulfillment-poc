@@ -5,6 +5,25 @@ keeps the expectation that turned out wrong.
 
 ## 2026-11-20: Payment provider, payment service, hold extension
 
+### A serializable transaction leaked into the carrier's next statement
+
+- **Expected:** the carrier simulator accepts a shipment in a serializable
+  transaction, then checks its (drill) failpoint and answers.
+- **Observed (first order on a drill stack with shipping):** every shipment
+  request got a 500 after the carrier had committed the shipment and its
+  callback schedule; the callbacks were then sent and applied, while Shipping
+  still saw the dispatch as unanswered. The failpoint check reads with
+  `READPAST`, which SQL Server refuses outside read committed and repeatable
+  read, and the pooled connection still carried the serializable isolation
+  level of the accept transaction.
+- **Fix:** the accept transaction uses the default isolation; its
+  `UPDLOCK, HOLDLOCK` read already serializes requests of one shipment id.
+  No other code sets an isolation level above read committed.
+- **What held:** Shipping classified a 500 after sending as "may have been
+  accepted", sent the same shipment id again, and after its budget the
+  workflow opened an `AmbiguousDispatch` case instead of guessing; no second
+  shipment was created.
+
 ### A connect that timed out was taken for a request that may have committed
 
 - **Expected:** a payment request that gets no answer within its timeout may

@@ -45,7 +45,9 @@ public sealed class CarrierOperations(string connectionString, CarrierOptions op
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"{request.OrderId:N}|{request.Parcels}"));
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(ct);
-        await using var tx = (SqlTransaction)await connection.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct);
+        // Default isolation: the UPDLOCK, HOLDLOCK read below serializes requests of one shipment id. (An explicit
+        // Serializable transaction leaked its isolation level through the connection pool into later statements.)
+        await using var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct);
         await using (var read = new SqlCommand("SELECT PayloadHash, AcceptedAt FROM carrier.Shipment WITH (UPDLOCK, HOLDLOCK) WHERE ShipmentId = @s", connection, tx))
         {
             read.Parameters.AddWithValue("@s", request.ShipmentId);
