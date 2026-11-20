@@ -39,8 +39,36 @@ public class FulfillOrderWorkflowTests
             InventoryActivities.ReserveOrderLine => new ReserveLineResult(InventoryOutcomes.Reserved, Guid.NewGuid(), "W1", null, ["W1:Reserved"], "inventory-1"),
             InventoryActivities.ConsumeOrderHolds => new ConsumeHoldsResult(InventoryOutcomes.Consumed, 2, "inventory-1"),
             InventoryActivities.ReleaseOrderHolds => new ReleaseHoldsResult(1, 0, "inventory-1"),
+            InventoryActivities.ExtendOrderHolds => new ExtendHoldsResult(InventoryOutcomes.Extended, AuthExpires, 1_800_000, false, "inventory-1"),
+            PaymentActivities.ExecutePayment => Paid((PaymentOperationRequest)input!),
+            OrderLifecycleActivities.AdvanceFulfillment => new StepResult(StepOutcomes.Applied, "k", ((AdvanceFulfillmentRequest)input!).ToStatus),
+            OrderLifecycleActivities.BeginDispatch => new BeginDispatchResult(DispatchOutcomes.Started, "Packing"),
             _ => throw new InvalidOperationException(name),
         };
+
+    private static readonly DateTime AuthExpires = new(2026, 11, 25, 0, 0, 0, DateTimeKind.Utc);
+
+    /// <summary>The successful outcome of each payment step.</summary>
+    private static PaymentOperationResult Paid(PaymentOperationRequest r, string? outcome = null, string? code = null) =>
+        new($"{r.OrderId:N}:{r.Step}:{r.Qualifier}", outcome ?? r.Step switch
+        {
+            PaymentSteps.Authorize => PaymentOutcomes.Authorized,
+            PaymentSteps.Capture => PaymentOutcomes.Captured,
+            PaymentSteps.Void => PaymentOutcomes.Voided,
+            _ => PaymentOutcomes.Refunded,
+        }, code, r.Step == PaymentSteps.Authorize ? AuthExpires : null, 1, 0, false, "payment-1");
+
+    private static string[] PaymentSteps_(FakeWorkflowContext c) =>
+        [.. c.ActivityCalls.Select(a => a.Input).OfType<PaymentOperationRequest>().Select(r => r.Step)];
+
+    /// <summary>The activities of a run after the second reservation, in order, when every step succeeds.</summary>
+    private static readonly string[] AfterReservation =
+    [
+        PaymentActivities.ExecutePayment, OrderLifecycleActivities.AdvanceFulfillment, OrderLifecycleActivities.AdvanceFulfillment,
+        FulfillmentWorkflow.ApplyStubStepActivity, FulfillmentWorkflow.ApplyStubStepActivity, OrderLifecycleActivities.BeginDispatch,
+        InventoryActivities.ExtendOrderHolds, PaymentActivities.ExecutePayment, InventoryActivities.ConsumeOrderHolds,
+        FulfillmentWorkflow.CompleteStubFulfillmentActivity,
+    ];
 
     /// <summary>Resolutions returned one after another (the last one repeats).</summary>
     private static Func<string, object?, object?> Resolutions(params ReviewResolution[] sequence)
@@ -74,8 +102,14 @@ public class FulfillOrderWorkflowTests
                 (FulfillmentWorkflow.BeginFulfillmentActivity, AppIds.OrderApi),
                 (InventoryActivities.ReserveOrderLine, AppIds.InventoryService),
                 (InventoryActivities.ReserveOrderLine, AppIds.InventoryService),
+                (PaymentActivities.ExecutePayment, AppIds.PaymentService),
+                (OrderLifecycleActivities.AdvanceFulfillment, AppIds.OrderApi),
+                (OrderLifecycleActivities.AdvanceFulfillment, AppIds.OrderApi),
                 (FulfillmentWorkflow.ApplyStubStepActivity, AppIds.OrderApi),
                 (FulfillmentWorkflow.ApplyStubStepActivity, AppIds.OrderApi),
+                (OrderLifecycleActivities.BeginDispatch, AppIds.OrderApi),
+                (InventoryActivities.ExtendOrderHolds, AppIds.InventoryService),
+                (PaymentActivities.ExecutePayment, AppIds.PaymentService),
                 (InventoryActivities.ConsumeOrderHolds, AppIds.InventoryService),
                 (FulfillmentWorkflow.CompleteStubFulfillmentActivity, AppIds.OrderApi),
             ],
@@ -86,6 +120,11 @@ public class FulfillOrderWorkflowTests
         Assert.Equal(new FulfillmentResult(FulfillmentOutcomes.Completed, "Completed", 1), result);
         Assert.Empty(context.Timers);
         Assert.DoesNotContain(FulfillmentWorkflow.CreateReviewTaskActivity, Names(context));
+        Assert.Equal([PaymentSteps.Authorize, PaymentSteps.Capture], PaymentSteps_(context));
+        var capture = context.ActivityCalls.Select(c => c.Input).OfType<PaymentOperationRequest>().Last();
+        Assert.Equal(new PaymentOperationRequest(OrderId, PaymentSteps.Capture, "1", 1234, "EUR", PaymentSteps.Authorize, "1"), capture);
+        var extend = context.ActivityCalls.Select(c => c.Input).OfType<ExtendHoldsRequest>().Single();
+        Assert.Equal((2, AuthExpires), (extend.ExpectedLines, extend.AuthorizationExpiresAtUtc));
     }
 
     [Fact]
@@ -145,8 +184,8 @@ public class FulfillOrderWorkflowTests
     [InlineData(FulfillmentWorkflow.ValidateOrderActivity, 2)]
     [InlineData(FulfillmentWorkflow.RecordChecksActivity, 5)]
     [InlineData(FulfillmentWorkflow.BeginFulfillmentActivity, 6)]
-    [InlineData(FulfillmentWorkflow.ApplyStubStepActivity, 9)]
-    [InlineData(FulfillmentWorkflow.CompleteStubFulfillmentActivity, 12)]
+    [InlineData(FulfillmentWorkflow.ApplyStubStepActivity, 12)]
+    [InlineData(FulfillmentWorkflow.CompleteStubFulfillmentActivity, 18)]
     public async Task Run_StepFindsTheOrderTerminal_EndsThereWithoutFurtherSteps(string step, int calls)
     {
         var context = new FakeWorkflowContext(Instance)
@@ -212,9 +251,7 @@ public class FulfillOrderWorkflowTests
                 FulfillmentWorkflow.ClaimExecutionActivity, FulfillmentWorkflow.ValidateOrderActivity, FulfillmentWorkflow.PriceOrderActivity,
                 FulfillmentWorkflow.AssessOrderRiskActivity, FulfillmentWorkflow.RecordChecksActivity, FulfillmentWorkflow.CreateReviewTaskActivity,
                 FulfillmentWorkflow.ResolveReviewActivity, FulfillmentWorkflow.ResolveReviewActivity, FulfillmentWorkflow.BeginFulfillmentActivity,
-                InventoryActivities.ReserveOrderLine, InventoryActivities.ReserveOrderLine,
-                FulfillmentWorkflow.ApplyStubStepActivity, FulfillmentWorkflow.ApplyStubStepActivity,
-                InventoryActivities.ConsumeOrderHolds, FulfillmentWorkflow.CompleteStubFulfillmentActivity,
+                InventoryActivities.ReserveOrderLine, InventoryActivities.ReserveOrderLine, .. AfterReservation,
             ],
             Names(context));
         Assert.Equal([ReviewWakes.Initial, ReviewWakes.Signal], Wakes(context));
@@ -401,6 +438,186 @@ public class FulfillOrderWorkflowTests
         Assert.Equal(new FulfillmentResult(FulfillmentOutcomes.Compensated, "Compensated", 1), result);
     }
 
+    private static Func<string, object?, object?> Payment(string step, string outcome, string? code = null) =>
+        (name, input) => name == PaymentActivities.ExecutePayment && ((PaymentOperationRequest)input!).Step == step ? Paid((PaymentOperationRequest)input!, outcome, code) : null;
+
+    private static Func<string, object?, object?> Both(params Func<string, object?, object?>[] overrides) =>
+        (name, input) => overrides.Select(o => o(name, input)).FirstOrDefault(r => r is not null);
+
+    [Fact]
+    public async Task Run_AuthorizationDeclined_RejectsAfterReleasing_WithoutAnyCompensatingPayment()
+    {
+        var context = new FakeWorkflowContext(Instance) { ActivityResult = Results(Payment(PaymentSteps.Authorize, PaymentOutcomes.Declined)) };
+
+        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.Equal([PaymentActivities.ExecutePayment, InventoryActivities.ReleaseOrderHolds, FulfillmentWorkflow.CloseUnfulfilledOrderActivity], Names(context)[^3..]);
+        Assert.Equal([PaymentSteps.Authorize], PaymentSteps_(context));
+        Assert.Equal(new CloseUnfulfilledRequest(OrderId, "Rejected", "PaymentDeclined"), context.ActivityCalls[^1].Input);
+        Assert.Equal(FulfillmentOutcomes.Rejected, result.Outcome);
+    }
+
+    [Fact]
+    public async Task Run_ProviderUnavailable_VoidsTheAuthorizationKeyAndCompensates()
+    {
+        // Nothing can have committed; the void by key still prohibits a late authorization.
+        var context = new FakeWorkflowContext(Instance) { ActivityResult = Results(Payment(PaymentSteps.Authorize, PaymentOutcomes.Unavailable)) };
+
+        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.Equal([PaymentSteps.Authorize, PaymentSteps.Void], PaymentSteps_(context));
+        Assert.Equal(new PaymentOperationRequest(OrderId, PaymentSteps.Void, "1", 1234, "EUR", PaymentSteps.Authorize, "1", true),
+            context.ActivityCalls.Select(c => c.Input).OfType<PaymentOperationRequest>().Last());
+        Assert.Equal(new CloseUnfulfilledRequest(OrderId, "Compensated", "PaymentProviderUnavailable"), context.ActivityCalls[^1].Input);
+        Assert.Equal(FulfillmentOutcomes.Compensated, result.Outcome);
+    }
+
+    [Fact]
+    public async Task Run_CancellationRecordedBeforeDispatch_VoidsReleasesAndCancels_NoCapture()
+    {
+        var context = new FakeWorkflowContext(Instance)
+        {
+            ActivityResult = Results((name, _) => name == OrderLifecycleActivities.BeginDispatch ? new BeginDispatchResult(DispatchOutcomes.CancelRequested, "Packing") : null),
+        };
+
+        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.Equal([PaymentSteps.Authorize, PaymentSteps.Void], PaymentSteps_(context));
+        Assert.DoesNotContain(InventoryActivities.ExtendOrderHolds, Names(context));
+        Assert.Equal(new CloseUnfulfilledRequest(OrderId, "Cancelled", "CancellationRequested"), context.ActivityCalls[^1].Input);
+        Assert.Equal(FulfillmentOutcomes.Cancelled, result.Outcome);
+    }
+
+    [Theory]
+    [InlineData(InventoryOutcomes.HoldExpired, 1_800_000)]
+    [InlineData(InventoryOutcomes.InsufficientValidity, 1_000)]
+    [InlineData(InventoryOutcomes.Extended, 1_000)]
+    public async Task Run_HoldsCannotLastThroughTheCapture_VoidsInsteadOfCapturing(string outcome, long remaining)
+    {
+        var context = new FakeWorkflowContext(Instance)
+        {
+            ActivityResult = Results((name, _) => name == InventoryActivities.ExtendOrderHolds ? new ExtendHoldsResult(outcome, null, remaining, false, "inventory-1") : null),
+        };
+
+        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.Equal([PaymentSteps.Authorize, PaymentSteps.Void], PaymentSteps_(context));
+        Assert.Equal(new CloseUnfulfilledRequest(OrderId, "Compensated", "ReservationExpired"), context.ActivityCalls[^1].Input);
+        Assert.Equal(FulfillmentOutcomes.Compensated, result.Outcome);
+    }
+
+    [Fact]
+    public async Task Run_CaptureRejected_VoidsAndCompensates()
+    {
+        var context = new FakeWorkflowContext(Instance) { ActivityResult = Results(Payment(PaymentSteps.Capture, PaymentOutcomes.Rejected, "AuthorizationExpired")) };
+
+        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.Equal([PaymentSteps.Authorize, PaymentSteps.Capture, PaymentSteps.Void], PaymentSteps_(context));
+        Assert.Equal(new CloseUnfulfilledRequest(OrderId, "Compensated", "PaymentCaptureFailed"), context.ActivityCalls[^1].Input);
+        Assert.Equal(FulfillmentOutcomes.Compensated, result.Outcome);
+    }
+
+    [Fact]
+    public async Task Run_VoidFindsTheAuthorizationCaptured_RefundsTheCapture()
+    {
+        var context = new FakeWorkflowContext(Instance)
+        {
+            ActivityResult = Results(Both(Payment(PaymentSteps.Capture, PaymentOutcomes.Unavailable), Payment(PaymentSteps.Void, PaymentOutcomes.Rejected, "AlreadyCaptured"))),
+        };
+
+        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.Equal([PaymentSteps.Authorize, PaymentSteps.Capture, PaymentSteps.Void, PaymentSteps.Refund], PaymentSteps_(context));
+        Assert.Equal(FulfillmentOutcomes.Compensated, result.Outcome);
+    }
+
+    [Fact]
+    public async Task Run_AmbiguousAuthorization_WaitsForTheCaseThenAdoptsTheProviderRecord()
+    {
+        var caseId = Guid.NewGuid();
+        var reads = 0;
+        var context = new FakeWorkflowContext(Instance)
+        {
+            ActivityResult = Results(Both(
+                Payment(PaymentSteps.Authorize, PaymentOutcomes.Ambiguous, "StatusUndetermined"),
+                (name, input) => name switch
+                {
+                    OrderLifecycleActivities.OpenInterventionCase => new CaseResult(caseId, InterventionKinds.AmbiguousPayment, CaseStates.Open, null, "ManualInterventionRequired", false, true),
+                    OrderLifecycleActivities.ReadInterventionCase => ++reads == 1
+                        ? new CaseResult(caseId, InterventionKinds.AmbiguousPayment, CaseStates.Resolved, CaseActions.ConfirmExternalSuccess, "Reserving", false, false)
+                        : null,
+                    PaymentActivities.ReconcilePayment => Paid((PaymentOperationRequest)input!, PaymentOutcomes.Authorized),
+                    _ => null,
+                })),
+            Events = { [InterventionSignals.EventName(caseId)] = new object() },
+        };
+
+        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.Equal(
+            [PaymentActivities.ExecutePayment, OrderLifecycleActivities.OpenInterventionCase, OrderLifecycleActivities.ReadInterventionCase, PaymentActivities.ReconcilePayment,
+                OrderLifecycleActivities.AdvanceFulfillment],
+            Names(context)[8..13]);
+        Assert.Equal(new OpenCaseRequest(OrderId, InterventionKinds.AmbiguousPayment, "authorize-1",
+            $"operation {OrderId:N}:authorize:1: 1 send(s), 0 status query(ies), code StatusUndetermined"), context.ActivityCalls[9].Input);
+        Assert.Equal(FulfillmentOutcomes.Completed, result.Outcome);
+    }
+
+    [Fact]
+    public async Task Run_CompensationStaysUnresolved_RetriesInRoundsThenWaitsForACase()
+    {
+        var caseId = Guid.NewGuid();
+        var context = new FakeWorkflowContext(Instance)
+        {
+            TimersFireImmediately = true,
+            ActivityResult = Results(Both(
+                Payment(PaymentSteps.Authorize, PaymentOutcomes.Unavailable),
+                Payment(PaymentSteps.Void, PaymentOutcomes.Ambiguous, "BudgetExhausted"),
+                (name, _) => name switch
+                {
+                    OrderLifecycleActivities.OpenInterventionCase => new CaseResult(caseId, InterventionKinds.CompensationExhausted, CaseStates.Open, null, "ManualInterventionRequired", false, true),
+                    OrderLifecycleActivities.ReadInterventionCase => new CaseResult(caseId, InterventionKinds.CompensationExhausted, CaseStates.Resolved, CaseActions.ConfirmExternalSuccess, "Reserving", false, false),
+                    _ => null,
+                })),
+        };
+
+        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.Equal([PaymentSteps.Authorize, PaymentSteps.Void, PaymentSteps.Void, PaymentSteps.Void], PaymentSteps_(context));
+        Assert.Contains(new OpenCaseRequest(OrderId, InterventionKinds.CompensationExhausted, "void", $"operation {OrderId:N}:void:1: Ambiguous after 3 round(s), code BudgetExhausted"),
+            context.ActivityCalls.Select(c => c.Input));
+        Assert.Equal(new CloseUnfulfilledRequest(OrderId, "Compensated", "PaymentProviderUnavailable"), context.ActivityCalls[^1].Input);
+        Assert.Equal(FulfillmentOutcomes.Compensated, result.Outcome);
+    }
+
+    [Fact]
+    public async Task Run_ReleaseKeepsFailing_OpensACompensationCaseInsteadOfFailingTheRun()
+    {
+        var caseId = Guid.NewGuid();
+        var releases = 0;
+        var context = new FakeWorkflowContext(Instance)
+        {
+            TimersFireImmediately = true,
+            ActivityResult = Results(Both(
+                Payment(PaymentSteps.Authorize, PaymentOutcomes.Declined),
+                (name, _) => name switch
+                {
+                    InventoryActivities.ReleaseOrderHolds when ++releases == 1 => throw new WorkflowTaskFailedException("failed", new WorkflowTaskFailureDetails("SqlException", "timeout", null)),
+                    OrderLifecycleActivities.OpenInterventionCase => new CaseResult(caseId, InterventionKinds.CompensationExhausted, CaseStates.Open, null, "ManualInterventionRequired", false, true),
+                    OrderLifecycleActivities.ReadInterventionCase => new CaseResult(caseId, InterventionKinds.CompensationExhausted, CaseStates.Resolved, CaseActions.Acknowledge, "Reserving", false, false),
+                    _ => null,
+                })),
+        };
+
+        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.Equal(2, releases);
+        Assert.Contains(OrderLifecycleActivities.OpenInterventionCase, Names(context));
+        Assert.Equal(new CloseUnfulfilledRequest(OrderId, "Rejected", "PaymentDeclined"), context.ActivityCalls[^1].Input);
+        Assert.Equal(FulfillmentOutcomes.Rejected, result.Outcome);
+    }
+
     [Theory]
     [InlineData(InventoryOutcomes.HoldExpired, "ReservationExpired")]
     [InlineData(InventoryOutcomes.Incomplete, "ReservationExpired")]
@@ -416,8 +633,11 @@ public class FulfillOrderWorkflowTests
 
         var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
 
-        Assert.Equal([InventoryActivities.ConsumeOrderHolds, InventoryActivities.ReleaseOrderHolds, FulfillmentWorkflow.CloseUnfulfilledOrderActivity], Names(context)[^3..]);
+        // The capture already happened: the holds are released and the capture refunded by its key.
+        Assert.Equal([InventoryActivities.ConsumeOrderHolds, InventoryActivities.ReleaseOrderHolds, PaymentActivities.ExecutePayment, FulfillmentWorkflow.CloseUnfulfilledOrderActivity], Names(context)[^4..]);
         Assert.DoesNotContain(FulfillmentWorkflow.CompleteStubFulfillmentActivity, Names(context));
+        Assert.Equal(new PaymentOperationRequest(OrderId, PaymentSteps.Refund, "1", 1234, "EUR", PaymentSteps.Capture, "1", true),
+            context.ActivityCalls[^2].Input);
         Assert.Equal(new CloseUnfulfilledRequest(OrderId, "Compensated", reason), context.ActivityCalls[^1].Input);
         Assert.Equal(new FulfillmentResult(FulfillmentOutcomes.Compensated, "Compensated", 1), result);
     }

@@ -35,3 +35,23 @@ public sealed class CloseUnfulfilledOrderActivity(FulfillmentSteps steps) : Work
 {
     public override Task<StepResult> RunAsync(WorkflowActivityContext context, CloseUnfulfilledRequest input) => steps.CloseUnfulfilledAsync(input);
 }
+
+public sealed class AdvanceFulfillmentActivity(OrderLifecycleSteps steps) : WorkflowActivity<AdvanceFulfillmentRequest, StepResult>
+{
+    public override Task<StepResult> RunAsync(WorkflowActivityContext context, AdvanceFulfillmentRequest input) => steps.AdvanceAsync(input);
+}
+
+public sealed class BeginDispatchActivity(OrderLifecycleSteps steps) : WorkflowActivity<BeginDispatchRequest, BeginDispatchResult>
+{
+    public override Task<BeginDispatchResult> RunAsync(WorkflowActivityContext context, BeginDispatchRequest input) => steps.BeginDispatchAsync(input);
+}
+
+public sealed class OpenInterventionCaseActivity(OrderLifecycleSteps steps) : WorkflowActivity<OpenCaseRequest, CaseResult>
+{
+    public override Task<CaseResult> RunAsync(WorkflowActivityContext context, OpenCaseRequest input) => steps.OpenCaseAsync(input);
+}
+
+public sealed class ReadInterventionCaseActivity(OrderLifecycleSteps steps) : WorkflowActivity<ReadCaseRequest, CaseResult>
+{
+    public override Task<CaseResult> RunAsync(WorkflowActivityContext context, ReadCaseRequest input) => steps.ReadCaseAsync(input);
+}

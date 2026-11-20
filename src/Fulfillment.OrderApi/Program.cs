@@ -33,6 +33,7 @@ builder.Services.AddSingleton(sp =>
 {
     return new FulfillmentSteps(orderDb, sp.GetRequiredService<RuntimeIdentity>().Replica, Checkpoints(sp));
 });
+builder.Services.AddSingleton(sp => new OrderLifecycleSteps(orderDb, Checkpoints(sp)));
 
 // Reviews: decisions (operator key), review steps, and the signal dispatcher that wakes workflows
 // through the workflow host's management API. Review timing follows the environment's time profile.
@@ -69,6 +70,10 @@ builder.Services.AddDaprWorkflow(options =>
     options.RegisterActivity<CreateReviewTaskActivity>(FulfillmentWorkflow.CreateReviewTaskActivity);
     options.RegisterActivity<ResolveReviewActivity>(FulfillmentWorkflow.ResolveReviewActivity);
     options.RegisterActivity<ExpireOrEscalateReviewActivity>(FulfillmentWorkflow.ExpireOrEscalateReviewActivity);
+    options.RegisterActivity<AdvanceFulfillmentActivity>(OrderLifecycleActivities.AdvanceFulfillment);
+    options.RegisterActivity<BeginDispatchActivity>(OrderLifecycleActivities.BeginDispatch);
+    options.RegisterActivity<OpenInterventionCaseActivity>(OrderLifecycleActivities.OpenInterventionCase);
+    options.RegisterActivity<ReadInterventionCaseActivity>(OrderLifecycleActivities.ReadInterventionCase);
 });
 
 var app = builder.Build();

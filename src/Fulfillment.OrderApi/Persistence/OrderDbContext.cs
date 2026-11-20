@@ -39,6 +39,8 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
 
     public DbSet<PendingSignal> PendingSignals => Set<PendingSignal>();
 
+    public DbSet<InterventionCase> InterventionCases => Set<InterventionCase>();
+
     public DbSet<SignalAttempt> SignalAttempts => Set<SignalAttempt>();
 
     public DbSet<ReviewWake> ReviewWakes => Set<ReviewWake>();
@@ -63,6 +65,7 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         ConfigureReviewDecision(modelBuilder.Entity<ReviewDecision>());
         ConfigurePendingSignal(modelBuilder.Entity<PendingSignal>());
         ConfigureSignalAttempt(modelBuilder.Entity<SignalAttempt>());
+        ConfigureInterventionCase(modelBuilder.Entity<InterventionCase>());
         ConfigureReviewWake(modelBuilder.Entity<ReviewWake>());
     }
 
@@ -75,12 +78,16 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         order.ToTable("Order", t =>
         {
             t.HasCheckConstraint("CK_Order_Status", InList<OrderStatus>("Status"));
+            // I15: an order is cancelled or dispatched, never both.
+            t.HasCheckConstraint("CK_Order_CancelOrDispatch", "[CancelRequestedAt] IS NULL OR [DispatchStartedAt] IS NULL");
         });
         order.HasKey(o => o.OrderId);
         order.Property(o => o.OrderId).ValueGeneratedNever();
         order.Property(o => o.CustomerId).HasMaxLength(OrderLimits.MaxCustomerIdLength).IsUnicode(false);
         order.Property(o => o.Status).HasConversion<string>().HasMaxLength(32).IsUnicode(false);
         order.Property(o => o.CreatedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+        order.Property(o => o.CancelRequestedAt).HasColumnType("datetime2(3)");
+        order.Property(o => o.DispatchStartedAt).HasColumnType("datetime2(3)");
         order.Property(o => o.RowVersion).IsRowVersion();
         order.HasIndex(o => new { o.CustomerId, o.CreatedAt }).HasDatabaseName("IX_Order_Customer");
         order.HasMany(o => o.Lines).WithOne().HasForeignKey(l => l.OrderId).OnDelete(DeleteBehavior.Cascade);
@@ -332,6 +339,39 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         attempt.HasIndex(a => a.LeaseToken).IsUnique().HasDatabaseName("UX_SignalAttempt_LeaseToken");
         attempt.HasIndex(a => new { a.SignalId, a.CalledAt }).HasDatabaseName("IX_SignalAttempt_Signal");
         attempt.HasOne<PendingSignal>().WithMany().HasForeignKey(a => a.SignalId).OnDelete(DeleteBehavior.Cascade);
+    }
+
+    private static void ConfigureInterventionCase(EntityTypeBuilder<InterventionCase> c)
+    {
+        c.ToTable("InterventionCase", t =>
+        {
+            t.HasCheckConstraint("CK_InterventionCase_State", "[State] IN ('Open', 'Reconciling', 'Resolved', 'Abandoned')");
+            t.HasCheckConstraint("CK_InterventionCase_Kind",
+                "[Kind] IN ('AmbiguousPayment', 'AmbiguousDispatch', 'CarrierTerminalConflict', 'DeliveryException', 'DeliveryOverdue', 'CompensationExhausted', 'WorkflowFaulted', 'WorkflowMissing', 'ExecutionMismatch', 'SignalStuck', 'ProjectionGap')");
+            t.HasCheckConstraint("CK_InterventionCase_Resolution",
+                "([State] = 'Resolved' AND [ResolutionAction] IS NOT NULL AND [ResolutionPath] IS NOT NULL AND [ResolvedAt] IS NOT NULL)"
+                + " OR ([State] <> 'Resolved' AND [ResolutionAction] IS NULL AND [ResolutionPath] IS NULL AND [ResolvedAt] IS NULL)");
+            t.HasCheckConstraint("CK_InterventionCase_Action", "[ResolutionAction] IS NULL OR [ResolutionAction] IN ('ConfirmExternalSuccess', 'ConfirmExternalFailure', 'Acknowledge')");
+            t.HasCheckConstraint("CK_InterventionCase_Path", "[ResolutionPath] IS NULL OR [ResolutionPath] IN ('Signal', 'Repair', 'RecordOnly')");
+        });
+        c.HasKey(x => x.CaseId);
+        c.Property(x => x.CaseId).HasDefaultValueSql("NEWSEQUENTIALID()");
+        c.Property(x => x.Kind).HasMaxLength(32).IsUnicode(false);
+        c.Property(x => x.State).HasMaxLength(16).IsUnicode(false);
+        c.Property(x => x.OperationKey).HasMaxLength(200).IsUnicode(false);
+        c.Property(x => x.Evidence).HasMaxLength(2000);
+        c.Property(x => x.ResumeStatus).HasMaxLength(32).IsUnicode(false);
+        c.Property(x => x.OpenedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+        c.Property(x => x.ResolutionAction).HasMaxLength(32).IsUnicode(false);
+        c.Property(x => x.ResolutionPath).HasMaxLength(16).IsUnicode(false);
+        c.Property(x => x.ResolutionEvidence).HasMaxLength(2000);
+        c.Property(x => x.ResolvedBy).HasMaxLength(64).IsUnicode(false);
+        c.Property(x => x.ResolvedAt).HasColumnType("datetime2(3)");
+        c.Property(x => x.RepairOutcome).HasMaxLength(64).IsUnicode(false);
+        c.HasOne<Order>().WithMany().HasForeignKey(x => x.OrderId);
+        c.HasIndex(x => x.OperationKey).IsUnique().HasDatabaseName("UX_InterventionCase_OperationKey");
+        // One open case per order and kind.
+        c.HasIndex(x => new { x.OrderId, x.Kind }).IsUnique().HasFilter("[State] IN ('Open', 'Reconciling')").HasDatabaseName("UX_InterventionCase_OpenPerKind");
     }
 
     private static void ConfigureReviewWake(EntityTypeBuilder<ReviewWake> wake)

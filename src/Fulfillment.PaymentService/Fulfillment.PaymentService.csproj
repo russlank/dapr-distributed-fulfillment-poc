@@ -1,9 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
-  <!-- Dapr app payment-service: owns PaymentDb; calls the external payment provider simulator (from M3). -->
+  <!-- Dapr app payment-service: owns PaymentDb; runs payment operations against the external payment provider by operation key. -->
   <ItemGroup>
     <ProjectReference Include="..\Fulfillment.ServiceDefaults\Fulfillment.ServiceDefaults.csproj" />
     <ProjectReference Include="..\Fulfillment.Contracts\Fulfillment.Contracts.csproj" />
     <PackageReference Include="Dapr.AspNetCore" />
     <PackageReference Include="Dapr.Workflow" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
   </ItemGroup>
 </Project>

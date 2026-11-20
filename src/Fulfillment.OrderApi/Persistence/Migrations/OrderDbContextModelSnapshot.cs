@@ -100,10 +100,111 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.InterventionCase", b =>
+                {
+                    b.Property<Guid>("CaseId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier")
+                        .HasDefaultValueSql("NEWSEQUENTIALID()");
+
+                    b.Property<string>("Evidence")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(32)");
+
+                    b.Property<DateTime>("OpenedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<string>("OperationKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("RepairOutcome")
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<string>("ResolutionAction")
+                        .HasMaxLength(32)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(32)");
+
+                    b.Property<string>("ResolutionEvidence")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<Guid?>("ResolutionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ResolutionPath")
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<DateTime?>("ResolvedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("ResolvedBy")
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<string>("ResumeStatus")
+                        .HasMaxLength(32)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(32)");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.HasKey("CaseId");
+
+                    b.HasIndex("OperationKey")
+                        .IsUnique()
+                        .HasDatabaseName("UX_InterventionCase_OperationKey");
+
+                    b.HasIndex("OrderId", "Kind")
+                        .IsUnique()
+                        .HasDatabaseName("UX_InterventionCase_OpenPerKind")
+                        .HasFilter("[State] IN ('Open', 'Reconciling')");
+
+                    b.ToTable("InterventionCase", "orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_InterventionCase_Action", "[ResolutionAction] IS NULL OR [ResolutionAction] IN ('ConfirmExternalSuccess', 'ConfirmExternalFailure', 'Acknowledge')");
+
+                            t.HasCheckConstraint("CK_InterventionCase_Kind", "[Kind] IN ('AmbiguousPayment', 'AmbiguousDispatch', 'CarrierTerminalConflict', 'DeliveryException', 'DeliveryOverdue', 'CompensationExhausted', 'WorkflowFaulted', 'WorkflowMissing', 'ExecutionMismatch', 'SignalStuck', 'ProjectionGap')");
+
+                            t.HasCheckConstraint("CK_InterventionCase_Path", "[ResolutionPath] IS NULL OR [ResolutionPath] IN ('Signal', 'Repair', 'RecordOnly')");
+
+                            t.HasCheckConstraint("CK_InterventionCase_Resolution", "([State] = 'Resolved' AND [ResolutionAction] IS NOT NULL AND [ResolutionPath] IS NOT NULL AND [ResolvedAt] IS NOT NULL) OR ([State] <> 'Resolved' AND [ResolutionAction] IS NULL AND [ResolutionPath] IS NULL AND [ResolvedAt] IS NULL)");
+
+                            t.HasCheckConstraint("CK_InterventionCase_State", "[State] IN ('Open', 'Reconciling', 'Resolved', 'Abandoned')");
+                        });
+                });
+
             modelBuilder.Entity("Fulfillment.OrderApi.Domain.Order", b =>
                 {
                     b.Property<Guid>("OrderId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("CancelRequestedAt")
+                        .HasColumnType("datetime2(3)");
 
                     b.Property<DateTime>("CreatedAt")
                         .ValueGeneratedOnAdd()
@@ -115,6 +216,9 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                         .HasMaxLength(64)
                         .IsUnicode(false)
                         .HasColumnType("varchar(64)");
+
+                    b.Property<DateTime?>("DispatchStartedAt")
+                        .HasColumnType("datetime2(3)");
 
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
@@ -135,6 +239,8 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
 
                     b.ToTable("Order", "orders", t =>
                         {
+                            t.HasCheckConstraint("CK_Order_CancelOrDispatch", "[CancelRequestedAt] IS NULL OR [DispatchStartedAt] IS NULL");
+
                             t.HasCheckConstraint("CK_Order_Status", "[Status] IN ('Submitted', 'Validating', 'Reserving', 'PaymentAuthorized', 'Packing', 'AwaitingApproval', 'Dispatched', 'AwaitingDelivery', 'Completed', 'Rejected', 'Cancelled', 'Compensated', 'ManualInterventionRequired')");
                         });
                 });
@@ -801,6 +907,15 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                 });
 
             modelBuilder.Entity("Fulfillment.OrderApi.Domain.IdempotencyKey", b =>
+                {
+                    b.HasOne("Fulfillment.OrderApi.Domain.Order", null)
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.InterventionCase", b =>
                 {
                     b.HasOne("Fulfillment.OrderApi.Domain.Order", null)
                         .WithMany()

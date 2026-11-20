@@ -3,6 +3,40 @@
 What broke, what surprised us, and what we changed. Newest first. Each entry
 keeps the expectation that turned out wrong.
 
+## 2026-11-20: Payment provider, payment service, hold extension
+
+### A connect that timed out was taken for a request that may have committed
+
+- **Expected:** a payment request that gets no answer within its timeout may
+  have reached the provider, so the payment service queries the status before
+  it sends again; a request that never connected cannot have committed, and
+  after the budget the order is compensated (nothing to reconcile).
+- **Observed (integration test, provider address with nothing listening):**
+  the operation ended `Ambiguous` after one request instead of `Unavailable`
+  after three. On Windows a refused connection to a closed local port takes
+  about two seconds (the connect is retried), longer than the request timeout,
+  so the request was recorded as `Timeout`, the payment service started status
+  queries, and those timed out too. The same happens for any host that does
+  not answer the connect at all.
+- **Fix:** connecting has its own limit (half the request timeout). A failure
+  while establishing the connection (refused, name not resolved, connect
+  timeout) is recorded as `Refused`: no request bytes were sent. A request
+  timeout or a connection broken after sending stays "may have committed".
+  .NET reports the connect timeout as a cancellation with an inner
+  `TimeoutException` while the request's own timeout token is still unset;
+  that is how the two are told apart.
+- **Lesson:** "no answer" is two different facts depending on whether the
+  connection existed; only one of them can hide a committed payment.
+
+### An in-process aborted response arrives as a timeout
+
+- **Observed:** the provider's `DropResponseAfterCommit` (the server aborts
+  the connection after committing) reached the in-process test client as a
+  timeout, not as a broken connection.
+- **Consequence:** none for correctness: both answers mean "may have
+  committed" and lead to a status query, which found the committed
+  authorization. The test accepts either answer.
+
 ## 2026-11-19: Inventory (holds, stock actors, sweeper)
 
 ### Range locks on missing keys deadlocked under contention

@@ -196,7 +196,8 @@ public sealed class FulfillmentSteps(string connectionString, string replica, St
             return new StepResult(StepOutcomes.AlreadyTerminal, key, status.ToString());
         }
 
-        if (status != OrderStatus.Reserving)
+        // Packing in M3 (after the payment authorization); Reserving where the run has no payment step.
+        if (status is not (OrderStatus.Packing or OrderStatus.Reserving))
         {
             throw new InvalidOperationException($"simulated fulfillment step of an order in status {status}");
         }
@@ -238,8 +239,11 @@ public sealed class FulfillmentSteps(string connectionString, string replica, St
             return new StepResult(StepOutcomes.AlreadyTerminal, key, status.ToString());
         }
 
-        if (!await OrderTransitions.TryTransitionAsync(connection, tx, request.OrderId, OrderStatus.Reserving, OrderStatus.Completed,
-                OrderReasonCodes.StubFulfillmentCompleted, checkpoint, key, ct))
+        // Completed from the last fulfillment status: Packing (payment captured, stock consumed) or, after a
+        // shipment, AwaitingDelivery/Dispatched; Reserving where the run has no payment step.
+        var reason = status == OrderStatus.Reserving ? OrderReasonCodes.StubFulfillmentCompleted : OrderReasonCodes.FulfillmentCompleted;
+        if (status is not (OrderStatus.Reserving or OrderStatus.Packing or OrderStatus.Dispatched or OrderStatus.AwaitingDelivery)
+            || !await OrderTransitions.TryTransitionAsync(connection, tx, request.OrderId, status, OrderStatus.Completed, reason, checkpoint, key, ct))
         {
             throw new InvalidOperationException($"completion of an order in status {status}");
         }
@@ -267,9 +271,12 @@ public sealed class FulfillmentSteps(string connectionString, string replica, St
         {
             nameof(OrderStatus.Rejected) => OrderStatus.Rejected,
             nameof(OrderStatus.Compensated) => OrderStatus.Compensated,
-            _ => throw new ArgumentException($"an unfulfilled order ends Rejected or Compensated, not {request.Status}", nameof(request)),
+            nameof(OrderStatus.Cancelled) => OrderStatus.Cancelled,
+            _ => throw new ArgumentException($"an unfulfilled order ends Rejected, Compensated, or Cancelled, not {request.Status}", nameof(request)),
         };
-        if (request.ReasonCode is not (OrderReasonCodes.InsufficientStock or OrderReasonCodes.ReservationExpired or OrderReasonCodes.ReservationFailed))
+        if (request.ReasonCode is not (OrderReasonCodes.InsufficientStock or OrderReasonCodes.ReservationExpired or OrderReasonCodes.ReservationFailed
+            or OrderReasonCodes.PaymentDeclined or OrderReasonCodes.PaymentProviderUnavailable or OrderReasonCodes.PaymentCaptureFailed
+            or OrderReasonCodes.PaymentFailed or OrderReasonCodes.CancellationRequested))
         {
             throw new ArgumentException($"unknown reason {request.ReasonCode}", nameof(request));
         }
@@ -284,7 +291,9 @@ public sealed class FulfillmentSteps(string connectionString, string replica, St
             return new StepResult(status == target ? StepOutcomes.AlreadyApplied : StepOutcomes.AlreadyTerminal, key, status.ToString());
         }
 
-        if (!await OrderTransitions.TryTransitionAsync(connection, tx, request.OrderId, OrderStatus.Reserving, target, request.ReasonCode, checkpoint, key, ct))
+        // From any status of a running fulfillment after reservation began, including a case wait.
+        if (status is not (OrderStatus.Reserving or OrderStatus.PaymentAuthorized or OrderStatus.Packing or OrderStatus.ManualInterventionRequired)
+            || !await OrderTransitions.TryTransitionAsync(connection, tx, request.OrderId, status, target, request.ReasonCode, checkpoint, key, ct))
         {
             throw new InvalidOperationException($"closing an unfulfilled order in status {status}");
         }

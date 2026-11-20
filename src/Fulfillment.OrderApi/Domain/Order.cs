@@ -69,6 +69,39 @@ public static class OrderReasonCodes
 
     /// <summary>Compensated: a reservation or consume step failed after its retries; holds released.</summary>
     public const string ReservationFailed = "ReservationFailed";
+
+    /// <summary>Reserving → PaymentAuthorized: the provider authorized the order's amount.</summary>
+    public const string PaymentAuthorized = "PaymentAuthorized";
+
+    /// <summary>PaymentAuthorized → Packing.</summary>
+    public const string PackingStarted = "PackingStarted";
+
+    /// <summary>Rejected: the provider declined the authorization; holds released.</summary>
+    public const string PaymentDeclined = "PaymentDeclined";
+
+    /// <summary>Compensated: the provider could not be reached and nothing can have been committed; holds released, authorization key voided.</summary>
+    public const string PaymentProviderUnavailable = "PaymentProviderUnavailable";
+
+    /// <summary>Compensated: the capture was refused (for example the authorization expired); authorization voided, holds released.</summary>
+    public const string PaymentCaptureFailed = "PaymentCaptureFailed";
+
+    /// <summary>Compensated after an intervention case confirmed that the payment did not happen, or a case resolution ended the order.</summary>
+    public const string PaymentFailed = "PaymentFailed";
+
+    /// <summary>A non-terminal order waits for an intervention case.</summary>
+    public const string InterventionRequired = "InterventionRequired";
+
+    /// <summary>A case on a terminal order: history only, the status stays.</summary>
+    public const string PostTerminalCase = "PostTerminalCase";
+
+    /// <summary>ManualInterventionRequired → the status before the case: the case was resolved and the run continues.</summary>
+    public const string InterventionResolved = "InterventionResolved";
+
+    /// <summary>Cancelled: the customer's cancellation was recorded before dispatch started; holds released, authorization voided.</summary>
+    public const string CancellationRequested = "CancellationRequested";
+
+    /// <summary>The fulfillment completed (payment captured, stock consumed).</summary>
+    public const string FulfillmentCompleted = "FulfillmentCompleted";
 }
 
 /// <summary>
@@ -93,6 +126,12 @@ public sealed class Order
 
     /// <summary>Database time (SYSUTCDATETIME) of the acceptance.</summary>
     public DateTime CreatedAt { get; private set; }
+
+    /// <summary>Database time a cancellation was accepted; set only while dispatch has not started (I15).</summary>
+    public DateTime? CancelRequestedAt { get; private set; }
+
+    /// <summary>Database time the dispatch started (the cancellation point of no return); set only without a cancellation (I15).</summary>
+    public DateTime? DispatchStartedAt { get; private set; }
 
     /// <summary>Concurrency token for later conditional status transitions.</summary>
     public byte[] RowVersion { get; private set; } = [];

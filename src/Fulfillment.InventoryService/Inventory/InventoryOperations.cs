@@ -234,6 +234,93 @@ public sealed class InventoryOperations(string connectionString, string replica)
         });
 
     /// <summary>
+    /// Extends every hold of the order once, all or none, under the order's lock: each must be Held and unexpired by
+    /// SQL time and there must be <paramref name="expectedLines"/> of them. The new end is the earlier of now +
+    /// <paramref name="extension"/> and the authorization's expiry; a hold is never shortened. If the holds would
+    /// still last less than <paramref name="minimumRemaining"/>, nothing changes (InsufficientValidity). Each
+    /// extended hold gets a HoldExtended outbox row (not a closing event). A repeated key returns the stored outcome
+    /// with the holds' current expiry, so a replay never claims validity that is gone.
+    /// </summary>
+    public Task<ExtendHoldsResult> ExtendOrderAsync(Guid orderId, int expectedLines, TimeSpan extension, DateTime? authorizationExpiresAt,
+        TimeSpan minimumRemaining, string operationKey, CancellationToken ct = default) =>
+        WithDeadlockRetryAsync(async () =>
+        {
+            await using var connection = await OpenAsync(ct);
+            await using var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct);
+            await LockOrderAsync(connection, tx, orderId, ct);
+            var stored = await StoredAsync(connection, tx, operationKey, ct);
+            if (stored is { } s)
+            {
+                var (expires, remaining) = await EarliestExpiryAsync(connection, tx, orderId, ct);
+                await tx.CommitAsync(ct);
+                return new ExtendHoldsResult(s.Outcome, expires, remaining, true, Replica);
+            }
+
+            var holds = new List<(Guid Id, bool Usable, long TargetRemaining)>();
+            await using (var read = new SqlCommand(
+                             """
+                             DECLARE @now datetime2(3) = SYSUTCDATETIME();
+                             DECLARE @target datetime2(3) = DATEADD(millisecond, @ext, @now);
+                             IF @auth IS NOT NULL AND @auth < @target SET @target = @auth;
+                             SELECT HoldId,
+                                    CASE WHEN State = 'Held' AND ExpiresAt > @now THEN 1 ELSE 0 END,
+                                    DATEDIFF_BIG(millisecond, @now, CASE WHEN ExpiresAt > @target THEN ExpiresAt ELSE @target END)
+                             FROM inventory.Hold WITH (UPDLOCK, ROWLOCK) WHERE OrderId = @o;
+                             """, connection, tx))
+            {
+                read.Parameters.AddWithValue("@o", orderId);
+                read.Parameters.AddWithValue("@ext", (int)extension.TotalMilliseconds);
+                read.Parameters.Add("@auth", System.Data.SqlDbType.DateTime2).Value = (object?)authorizationExpiresAt ?? DBNull.Value;
+                await using var reader = await read.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    holds.Add((reader.GetGuid(0), reader.GetInt32(1) == 1, reader.GetInt64(2)));
+                }
+            }
+
+            var outcome = holds.Count != expectedLines ? InventoryOutcomes.Incomplete
+                : holds.Any(h => !h.Usable) ? InventoryOutcomes.HoldExpired
+                : holds.Min(h => h.TargetRemaining) < minimumRemaining.TotalMilliseconds ? InventoryOutcomes.InsufficientValidity
+                : InventoryOutcomes.Extended;
+            if (outcome == InventoryOutcomes.Extended)
+            {
+                foreach (var hold in holds)
+                {
+                    await using var update = new SqlCommand(
+                        """
+                        DECLARE @target datetime2(3) = DATEADD(millisecond, @ext, SYSUTCDATETIME());
+                        IF @auth IS NOT NULL AND @auth < @target SET @target = @auth;
+                        UPDATE inventory.Hold SET ExpiresAt = @target OUTPUT inserted.ExpiresAt
+                        WHERE HoldId = @h AND State = 'Held' AND ExpiresAt < @target;
+                        """, connection, tx);
+                    update.Parameters.AddWithValue("@h", hold.Id);
+                    update.Parameters.AddWithValue("@ext", (int)extension.TotalMilliseconds);
+                    update.Parameters.Add("@auth", System.Data.SqlDbType.DateTime2).Value = (object?)authorizationExpiresAt ?? DBNull.Value;
+                    if (await update.ExecuteScalarAsync(ct) is DateTime until)
+                    {
+                        await OutboxAsync(connection, tx, orderId, "HoldExtended", hold.Id, new { holdId = hold.Id, expiresAt = until, operationKey }, ct);
+                    }
+                }
+            }
+
+            await RecordAsync(connection, tx, operationKey, "Extend", orderId, outcome, null, null, ct);
+            var (earliest, left) = await EarliestExpiryAsync(connection, tx, orderId, ct);
+            await tx.CommitAsync(ct);
+            return new ExtendHoldsResult(outcome, earliest, left, false, Replica);
+        });
+
+    private static async Task<(DateTime? ExpiresAt, long RemainingMilliseconds)> EarliestExpiryAsync(SqlConnection connection, SqlTransaction tx, Guid orderId, CancellationToken ct)
+    {
+        await using var read = new SqlCommand(
+            "SELECT MIN(ExpiresAt), ISNULL(DATEDIFF_BIG(millisecond, SYSUTCDATETIME(), MIN(ExpiresAt)), 0) FROM inventory.Hold WHERE OrderId = @o AND State = 'Held';",
+            connection, tx);
+        read.Parameters.AddWithValue("@o", orderId);
+        await using var reader = await read.ExecuteReaderAsync(ct);
+        await reader.ReadAsync(ct);
+        return (reader.IsDBNull(0) ? null : DateTime.SpecifyKind(reader.GetDateTime(0), DateTimeKind.Utc), Math.Max(0, reader.GetInt64(1)));
+    }
+
+    /// <summary>
     /// The sweeper's step: expires one hold whose ExpiresAt passed by SQL time (Held → Expired,
     /// Reserved -= q). Rows locked by another transaction are skipped. Returns the hold, or null
     /// when none is due.

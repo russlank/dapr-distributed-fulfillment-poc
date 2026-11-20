@@ -35,6 +35,7 @@ builder.Services.AddDaprWorkflow(options =>
     options.RegisterActivity<ReserveOrderLineActivity>(InventoryActivities.ReserveOrderLine);
     options.RegisterActivity<ReleaseOrderHoldsActivity>(InventoryActivities.ReleaseOrderHolds);
     options.RegisterActivity<ConsumeOrderHoldsActivity>(InventoryActivities.ConsumeOrderHolds);
+    options.RegisterActivity<ExtendOrderHoldsActivity>(InventoryActivities.ExtendOrderHolds);
 });
 // Non-reentrant (the default): one turn per (warehouse, SKU) at a time.
 builder.Services.AddActors(options => options.Actors.RegisterActor<StockActor>());

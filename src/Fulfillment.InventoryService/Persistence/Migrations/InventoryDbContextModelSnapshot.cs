@@ -183,7 +183,7 @@ namespace Fulfillment.InventoryService.Persistence.Migrations
 
                     b.ToTable("Outbox", "inventory", t =>
                         {
-                            t.HasCheckConstraint("CK_Outbox_EventType", "[EventType] IN ('HoldCreated', 'HoldReleased', 'HoldExpired', 'HoldConsumed')");
+                            t.HasCheckConstraint("CK_Outbox_EventType", "[EventType] IN ('HoldCreated', 'HoldReleased', 'HoldExpired', 'HoldConsumed', 'HoldExtended')");
 
                             t.HasCheckConstraint("CK_Outbox_Sequence", "[Sequence] >= 1");
 
@@ -242,9 +242,9 @@ namespace Fulfillment.InventoryService.Persistence.Migrations
 
                     b.ToTable("ProcessedOperation", "inventory", t =>
                         {
-                            t.HasCheckConstraint("CK_ProcessedOperation_Operation", "[Operation] IN ('Reserve', 'Release', 'Consume')");
+                            t.HasCheckConstraint("CK_ProcessedOperation_Operation", "[Operation] IN ('Reserve', 'Release', 'Consume', 'Extend')");
 
-                            t.HasCheckConstraint("CK_ProcessedOperation_Outcome", "[Outcome] IN ('Reserved', 'InsufficientStock', 'OrderClosed', 'Released', 'NotHeld', 'Consumed', 'HoldExpired', 'Incomplete')");
+                            t.HasCheckConstraint("CK_ProcessedOperation_Outcome", "[Outcome] IN ('Reserved', 'InsufficientStock', 'OrderClosed', 'Released', 'NotHeld', 'Consumed', 'HoldExpired', 'Incomplete', 'Extended', 'InsufficientValidity')");
                         });
                 });
 

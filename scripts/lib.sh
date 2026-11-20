@@ -212,7 +212,8 @@ set_stock() {
 # inventory_invariants <sku pattern>: the SQL invariants of the matching stock rows, holds, and their
 # orders' outbox, as "reserved-mismatch|hold-event-violations|sequence-gaps|holds|rows" (0|0|0|... is clean):
 #   Reserved equals the sum of the Held holds of each stock row (no leaked or double-counted units);
-#   each hold has exactly one HoldCreated and, once it left Held, exactly one closing event (I16);
+#   each hold has exactly one HoldCreated and, once it left Held, exactly one closing event (I16;
+#   HoldExtended rows are not closing events);
 #   each order's outbox sequence is 1..n without gaps or repeats.
 inventory_invariants() {
   sql InventoryDb "SELECT CONCAT(
@@ -220,7 +221,7 @@ inventory_invariants() {
        AND s.Reserved <> ISNULL((SELECT SUM(h.Quantity) FROM inventory.Hold h WHERE h.WarehouseId = s.WarehouseId AND h.Sku = s.Sku AND h.State = 'Held'), 0)), '|',
     (SELECT COUNT(*) FROM inventory.Hold h WHERE h.Sku LIKE '$1' AND (
        (SELECT COUNT(*) FROM inventory.Outbox o WHERE o.HoldId = h.HoldId AND o.EventType = 'HoldCreated') <> 1
-       OR (SELECT COUNT(*) FROM inventory.Outbox o WHERE o.HoldId = h.HoldId AND o.EventType <> 'HoldCreated') <> CASE WHEN h.State = 'Held' THEN 0 ELSE 1 END
+       OR (SELECT COUNT(*) FROM inventory.Outbox o WHERE o.HoldId = h.HoldId AND o.EventType IN ('HoldReleased', 'HoldExpired', 'HoldConsumed')) <> CASE WHEN h.State = 'Held' THEN 0 ELSE 1 END
        OR (h.State = 'Released' AND NOT EXISTS (SELECT 1 FROM inventory.Outbox o WHERE o.HoldId = h.HoldId AND o.EventType = 'HoldReleased'))
        OR (h.State = 'Expired' AND NOT EXISTS (SELECT 1 FROM inventory.Outbox o WHERE o.HoldId = h.HoldId AND o.EventType = 'HoldExpired'))
        OR (h.State = 'Consumed' AND NOT EXISTS (SELECT 1 FROM inventory.Outbox o WHERE o.HoldId = h.HoldId AND o.EventType = 'HoldConsumed')))), '|',

@@ -12,6 +12,7 @@ builder.AddServiceDefaults(new ServiceDefaultsOptions(AppIds.WorkflowHost, UsesD
 
 // Workflow concurrency limits are sidecar settings (dapr/config), not SDK options: the SDK's
 // MaxConcurrentWorkflows/MaxConcurrentActivities are obsolete and inert in 1.19.
+FulfillmentTimings.Current = FulfillmentTimings.ForEnvironment(Environment.GetEnvironmentVariable("DAPR_POC_ENV"));
 builder.Services.AddDaprWorkflow(options =>
 {
     options.RegisterWorkflow<RuntimeProbeWorkflow>(RuntimeProbe.WorkflowName);

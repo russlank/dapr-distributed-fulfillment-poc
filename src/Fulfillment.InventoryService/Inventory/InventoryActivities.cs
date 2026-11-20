@@ -28,6 +28,8 @@ public static class InventoryKeys
     public static string Close(Guid orderId) => OperationKey.For(orderId, "close", "1").Value;
 
     public static string Consume(Guid orderId) => OperationKey.For(orderId, "consume", "1").Value;
+
+    public static string Extend(Guid orderId) => OperationKey.For(orderId, "extend", "1").Value;
 }
 
 /// <summary>
@@ -105,5 +107,16 @@ public sealed class ConsumeOrderHoldsActivity(InventoryOperations operations, Fa
         }
 
         return new ConsumeHoldsResult(result.Outcome, result.Consumed, operations.Replica);
+    }
+}
+
+/// <summary>Extends all holds of the order once before the payment capture (direct guarded SQL, like consumption).</summary>
+public sealed class ExtendOrderHoldsActivity(InventoryOperations operations) : WorkflowActivity<ExtendHoldsRequest, ExtendHoldsResult>
+{
+    public override Task<ExtendHoldsResult> RunAsync(WorkflowActivityContext context, ExtendHoldsRequest input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        return operations.ExtendOrderAsync(input.OrderId, input.ExpectedLines, input.Extension, input.AuthorizationExpiresAtUtc,
+            input.MinimumRemaining, InventoryKeys.Extend(input.OrderId));
     }
 }

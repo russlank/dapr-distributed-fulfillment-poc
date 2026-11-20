@@ -589,6 +589,21 @@ services:
       toxiproxy:
         condition: service_started
 
+  payment-db-migrate:
+    build:
+      context: ./src
+      args:
+        <<: *build-args
+        PROJECT: Fulfillment.PaymentService
+    image: fulfillment/payment-service:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    restart: "no"
+    mem_limit: 256m
+    command: ["migrate"]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      ConnectionStrings__PaymentDb: "Server=sqlserver;Database=PaymentDb;User Id=payment_service;Password=${PAYMENT_DB_PASSWORD};TrustServerCertificate=true"
   payment-service:
     <<: *app
     build:
@@ -597,10 +612,14 @@ services:
         <<: *build-args
         PROJECT: Fulfillment.PaymentService
     image: fulfillment/payment-service:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    depends_on:
+      payment-db-migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app-env
       REPLICA_NAME: payment-service
       ConnectionStrings__PaymentDb: "Server=sqlserver;Database=PaymentDb;User Id=payment_service;Password=${PAYMENT_DB_PASSWORD};TrustServerCertificate=true"
+      PROVIDER_API_KEY: ${PROVIDER_API_KEY:?set PROVIDER_API_KEY in .env}
   payment-service-dapr:
     <<: *daprd
     network_mode: "service:payment-service"
@@ -623,10 +642,14 @@ services:
     <<: *app
     image: fulfillment/payment-service:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
     profiles: [replicas]
+    depends_on:
+      payment-db-migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app-env
       REPLICA_NAME: payment-service-2
       ConnectionStrings__PaymentDb: "Server=sqlserver;Database=PaymentDb;User Id=payment_service;Password=${PAYMENT_DB_PASSWORD};TrustServerCertificate=true"
+      PROVIDER_API_KEY: ${PROVIDER_API_KEY:?set PROVIDER_API_KEY in .env}
   payment-service-2-dapr:
     <<: *daprd
     profiles: [replicas]

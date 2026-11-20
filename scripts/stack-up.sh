@@ -36,7 +36,7 @@ for s in "${all_services[@]}"; do [[ "$s" == *-dapr ]] && sidecars+=("$s") || ot
 docker compose "${profiles[@]}" up -d "${build[@]}" "${others[@]}"
 
 # `up --wait` fails as soon as a one-shot job exits, even with code 0, so wait for each job here.
-for job in db-init scheduler-volume-init order-db-migrate inventory-db-migrate; do
+for job in db-init scheduler-volume-init order-db-migrate inventory-db-migrate payment-db-migrate; do
   code=$(docker wait "$(docker compose ps -a -q "$job")")
   if [[ "$code" != 0 ]]; then
     docker compose logs "$job" | tail -20
@@ -58,7 +58,7 @@ docker compose "${profiles[@]}" up -d --no-deps --force-recreate "$first"
 wait_until 120 "${first%-dapr} ready" ready "${first%-dapr}" || { docker compose logs --tail 30 "$first"; die "$first not ready"; }
 docker compose "${profiles[@]}" up -d --no-deps --force-recreate "${sidecars[@]:1}"
 
-services=($(printf '%s\n' "${others[@]}" | grep -vE '^(db-init|scheduler-volume-init|order-db-migrate|inventory-db-migrate|sqlserver|rabbitmq|toxiproxy|placement|scheduler|otel-collector|jaeger|prometheus|grafana)$'))
+services=($(printf '%s\n' "${others[@]}" | grep -vE '^(db-init|scheduler-volume-init|order-db-migrate|inventory-db-migrate|payment-db-migrate|sqlserver|rabbitmq|toxiproxy|placement|scheduler|otel-collector|jaeger|prometheus|grafana)$'))
 for svc in "${services[@]}"; do
   wait_until 120 "$svc ready" ready "$svc" || { docker compose logs --tail 30 "$svc" "$svc-dapr" 2>/dev/null; die "$svc not ready"; }
   log "$svc ready: $(http_body "$svc" /system/component-identity)"

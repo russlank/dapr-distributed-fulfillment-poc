@@ -237,9 +237,9 @@ public sealed class InventoryDbContext(DbContextOptions<InventoryDbContext> opti
     {
         processed.ToTable("ProcessedOperation", t =>
         {
-            t.HasCheckConstraint("CK_ProcessedOperation_Operation", "[Operation] IN ('Reserve', 'Release', 'Consume')");
+            t.HasCheckConstraint("CK_ProcessedOperation_Operation", "[Operation] IN ('Reserve', 'Release', 'Consume', 'Extend')");
             t.HasCheckConstraint("CK_ProcessedOperation_Outcome",
-                "[Outcome] IN ('Reserved', 'InsufficientStock', 'OrderClosed', 'Released', 'NotHeld', 'Consumed', 'HoldExpired', 'Incomplete')");
+                "[Outcome] IN ('Reserved', 'InsufficientStock', 'OrderClosed', 'Released', 'NotHeld', 'Consumed', 'HoldExpired', 'Incomplete', 'Extended', 'InsufficientValidity')");
         });
         processed.HasKey(p => p.OperationKey);
         processed.Property(p => p.OperationKey).HasMaxLength(200).IsUnicode(false);
@@ -256,7 +256,7 @@ public sealed class InventoryDbContext(DbContextOptions<InventoryDbContext> opti
         outbox.ToTable("Outbox", t =>
         {
             t.HasCheckConstraint("CK_Outbox_Sequence", "[Sequence] >= 1");
-            t.HasCheckConstraint("CK_Outbox_EventType", "[EventType] IN ('HoldCreated', 'HoldReleased', 'HoldExpired', 'HoldConsumed')");
+            t.HasCheckConstraint("CK_Outbox_EventType", "[EventType] IN ('HoldCreated', 'HoldReleased', 'HoldExpired', 'HoldConsumed', 'HoldExtended')");
             t.HasCheckConstraint("CK_Outbox_State", "[State] IN ('Pending', 'Published')");
         });
         outbox.HasKey(o => o.Id);

@@ -28,8 +28,9 @@ namespace Fulfillment.WorkflowHost.Orders;
 /// and after every wake-up (signal or timer, in whatever order Dapr delivers them); only the expiry
 /// activity takes a review out of Pending by time, and only when SQL time reached the deadline.
 ///
-/// The simulated steps stand in for payment and shipment, which do not exist yet: they call no
-/// other service and record "stub-" effects only.
+/// After reservation: payment authorization at the external provider (payment service), packing (simulated
+/// "stub-" steps), the cancellation point of no return, one extension of the holds, the capture, and the
+/// consumption of the holds (see FulfillOrderWorkflow.Payment.cs). Shipment does not exist yet.
 /// </summary>
 public sealed partial class FulfillOrderWorkflow : Workflow<FulfillmentInput, FulfillmentResult>
 {
@@ -123,42 +124,7 @@ public sealed partial class FulfillOrderWorkflow : Workflow<FulfillmentInput, Fu
             }
         }
 
-        context.SetCustomStatus("fulfilling");
-        foreach (var line in validation.Lines.OrderBy(l => l.LineNumber))
-        {
-            var step = await context.CallActivityAsync<StepResult>(FulfillmentWorkflow.ApplyStubStepActivity,
-                new StubStepRequest(orderId, StubSteps.Fulfil, StubSteps.LineQualifier(line.LineNumber)), OnOrderApi);
-            if (step.Terminal)
-            {
-                return Fenced(log, context, step.OrderStatus, claim);
-            }
-        }
-
-        ConsumeHoldsResult consumed;
-        try
-        {
-            consumed = await context.CallActivityAsync<ConsumeHoldsResult>(InventoryActivities.ConsumeOrderHolds,
-                new ConsumeHoldsRequest(orderId, validation.Lines.Count), OnInventory);
-        }
-        catch (WorkflowTaskFailedException)
-        {
-            return await EndUnfulfilledAsync(context, log, orderId, claim, "Compensated", ReasonCodes.ReservationFailed);
-        }
-
-        if (consumed.Outcome != InventoryOutcomes.Consumed)
-        {
-            return await EndUnfulfilledAsync(context, log, orderId, claim, "Compensated", ReasonCodes.ReservationExpired);
-        }
-
-        var completed = await context.CallActivityAsync<StepResult>(FulfillmentWorkflow.CompleteStubFulfillmentActivity,
-            new CompleteFulfillmentRequest(orderId, context.InstanceId), OnOrderApi);
-        if (completed.Terminal)
-        {
-            return Fenced(log, context, completed.OrderStatus, claim);
-        }
-
-        context.SetCustomStatus("completed");
-        return new FulfillmentResult(FulfillmentOutcomes.Completed, completed.OrderStatus, claim.ExecutionClaims);
+        return await AfterReservationAsync(context, log, orderId, claim, validation, await priceTask);
     }
 
     /// <summary>
@@ -243,21 +209,51 @@ public sealed partial class FulfillOrderWorkflow : Workflow<FulfillmentInput, Fu
     }
 
     /// <summary>
-    /// Releases every hold of the order (closing it in the inventory first), then ends the order
-    /// Rejected or Compensated in OrderDb. If the release itself keeps failing, the run fails and
-    /// the holds expire by the sweeper.
+    /// Ends an order that cannot be fulfilled: releases every hold (closing the order in the inventory first),
+    /// compensates what it holds at the provider (void or refund by key), then ends it Rejected, Compensated, or
+    /// Cancelled in OrderDb. A release that still fails after its retries opens a CompensationExhausted case instead
+    /// of failing the run; after the case is resolved the release is tried again.
     /// </summary>
-    private static async Task<FulfillmentResult> EndUnfulfilledAsync(WorkflowContext context, ILogger log, Guid orderId, ExecutionClaimResult claim, string status, string reason)
+    private static Task<FulfillmentResult> EndUnfulfilledAsync(WorkflowContext context, ILogger log, Guid orderId, ExecutionClaimResult claim, string status, string reason) =>
+        EndUnfulfilledAsync(context, log, orderId, claim, status, reason, Money.None, null);
+
+    private static async Task<FulfillmentResult> EndUnfulfilledAsync(WorkflowContext context, ILogger log, Guid orderId, ExecutionClaimResult claim, string status, string reason,
+        Money money, PriceQuote? price)
     {
         context.SetCustomStatus($"releasing:{reason}");
-        await context.CallActivityAsync<ReleaseHoldsResult>(InventoryActivities.ReleaseOrderHolds, new ReleaseHoldsRequest(orderId, reason), OnInventory);
+        for (var round = 1; ; round++)
+        {
+            try
+            {
+                await context.CallActivityAsync<ReleaseHoldsResult>(InventoryActivities.ReleaseOrderHolds, new ReleaseHoldsRequest(orderId, reason), OnInventory);
+                break;
+            }
+            catch (WorkflowTaskFailedException)
+            {
+                await WaitForCaseAsync(context, orderId, InterventionKinds.CompensationExhausted, $"release-{round}",
+                    $"releasing the holds failed after retries (reason {reason})");
+            }
+        }
+
+        if (money != Money.None)
+        {
+            context.SetCustomStatus($"compensating:{reason}");
+            await CompensatePaymentAsync(context, orderId, money, price!);
+        }
+
         var closed = await context.CallActivityAsync<StepResult>(FulfillmentWorkflow.CloseUnfulfilledOrderActivity,
             new CloseUnfulfilledRequest(orderId, status, reason), OnOrderApi);
         LogUnfulfilled(log, context.InstanceId, status, reason);
-        context.SetCustomStatus(status == "Rejected" ? "rejected" : "compensated");
+        context.SetCustomStatus(status switch { "Rejected" => "rejected", "Cancelled" => "cancelled", _ => "compensated" });
+        var outcome = status switch
+        {
+            "Rejected" => FulfillmentOutcomes.Rejected,
+            "Cancelled" => FulfillmentOutcomes.Cancelled,
+            _ => FulfillmentOutcomes.Compensated,
+        };
         return closed.Terminal && closed.OrderStatus != status
             ? Fenced(log, context, closed.OrderStatus, claim)
-            : new FulfillmentResult(status == "Rejected" ? FulfillmentOutcomes.Rejected : FulfillmentOutcomes.Compensated, closed.OrderStatus, claim.ExecutionClaims);
+            : new FulfillmentResult(outcome, closed.OrderStatus, claim.ExecutionClaims);
     }
 
     /// <summary>Reason codes the workflow sets (the order API's closed code domain).</summary>
@@ -266,6 +262,11 @@ public sealed partial class FulfillOrderWorkflow : Workflow<FulfillmentInput, Fu
         public const string InsufficientStock = "InsufficientStock";
         public const string ReservationExpired = "ReservationExpired";
         public const string ReservationFailed = "ReservationFailed";
+        public const string PaymentDeclined = "PaymentDeclined";
+        public const string PaymentProviderUnavailable = "PaymentProviderUnavailable";
+        public const string PaymentCaptureFailed = "PaymentCaptureFailed";
+        public const string PaymentFailed = "PaymentFailed";
+        public const string CancellationRequested = "CancellationRequested";
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "fulfillment {InstanceId}: ended {Status} ({Reason}); holds released")]

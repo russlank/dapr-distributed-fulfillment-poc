@@ -252,6 +252,9 @@ public static class FulfillmentOutcomes
 
     /// <summary>The fulfillment could not finish after effects began (reservation failed or a hold expired): released and compensated.</summary>
     public const string Compensated = "Compensated";
+
+    /// <summary>The customer cancelled before dispatch started; holds released and the authorization voided.</summary>
+    public const string Cancelled = "Cancelled";
 }
 
 /// <summary>
