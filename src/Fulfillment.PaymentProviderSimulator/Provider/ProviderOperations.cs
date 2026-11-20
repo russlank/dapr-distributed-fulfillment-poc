@@ -125,7 +125,7 @@ public sealed class ProviderOperations(string connectionString, ProviderOptions 
             await insert.ExecuteNonQueryAsync(ct);
         }
 
-        // Compensation of an operation that never committed: it can no longer commit (OD-19).
+        // Compensation of an operation that never committed: that operation can no longer commit.
         if (result is ProviderResults.NothingToVoid or ProviderResults.NothingToRefund && code == ProviderResultCodes.ReferenceNeverCommitted)
         {
             await ExecAsync(connection, tx,
