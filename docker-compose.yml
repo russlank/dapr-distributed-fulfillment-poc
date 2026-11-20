@@ -733,6 +733,7 @@ services:
     environment:
       REPLICA_NAME: payment-provider-simulator
       DAPR_POC_ENV: ${DAPR_POC_ENV:-local}
+      PROVIDER_API_KEY: ${PROVIDER_API_KEY:?set PROVIDER_API_KEY in .env}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       ConnectionStrings__PaymentProviderSimDb: "Server=sqlserver;Database=PaymentProviderSimDb;User Id=payment_provider_sim;Password=${PAYMENT_PROVIDER_SIM_DB_PASSWORD};TrustServerCertificate=true"

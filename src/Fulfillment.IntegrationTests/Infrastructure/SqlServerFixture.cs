@@ -1,4 +1,5 @@
 extern alias inventory;
+extern alias provider;
 
 using Fulfillment.IntegrationTests.Infrastructure;
 using Fulfillment.OrderApi.Persistence;
@@ -75,6 +76,16 @@ public sealed class SqlServerFixture : IAsyncLifetime
     }
 
     /// <summary>Creates a database and applies the InventoryDb migrations, as the inventory migration job does.</summary>
+    public async Task<string> CreateProviderDbAsync(string prefix)
+    {
+        var connectionString = await CreateDatabaseAsync(prefix);
+        var options = new DbContextOptionsBuilder<provider::Fulfillment.PaymentProviderSimulator.Persistence.ProviderDbContext>();
+        provider::Fulfillment.PaymentProviderSimulator.Persistence.ProviderDbContext.Configure(options, connectionString);
+        await using var db = new provider::Fulfillment.PaymentProviderSimulator.Persistence.ProviderDbContext(options.Options);
+        await db.Database.MigrateAsync();
+        return connectionString;
+    }
+
     public async Task<string> CreateInventoryDbAsync(string prefix)
     {
         var connectionString = await CreateDatabaseAsync(prefix);

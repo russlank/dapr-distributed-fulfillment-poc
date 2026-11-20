@@ -45,11 +45,16 @@ public static class Db
         return rows;
     }
 
-    public static async Task ExecuteAsync(string connectionString, string sql)
+    public static async Task ExecuteAsync(string connectionString, string sql, params (string Name, object Value)[] parameters)
     {
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync();
         await using var command = new SqlCommand(sql, connection);
+        foreach (var (name, value) in parameters)
+        {
+            command.Parameters.AddWithValue(name, value);
+        }
+
         await command.ExecuteNonQueryAsync();
     }
 
