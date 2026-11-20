@@ -13,7 +13,7 @@
 #                 request 200 replayed with its original order id, every order still Completed
 #   S23-reused    a new run under the used run id is refused by the simulator (exit 3), nothing created
 #   S23-effects   OrderDb: one order, one idempotency key, one start request (Closed) per logical
-#                 request; history Submitted, Validating, Reserving, Completed once; one stub effect
+#                 request; history Submitted through AwaitingDelivery, Completed once; one stub effect
 #                 per line plus one completion effect, no extra rows after the replay
 #   S23-operator  orders that need a review: followed until they wait, approved through the operator
 #                 API, the approval repeated (replayed, one decision each), replayed and Completed;
@@ -112,10 +112,10 @@ row="$(sql OrderDb "SELECT CONCAT(
   (SELECT COUNT(*) FROM orders.IdempotencyKey WHERE [Key] LIKE '$CLIENT_RUN-o%'), '|',
   (SELECT COUNT(*) FROM orders.WorkflowStartRequest WHERE OrderId IN ($run_orders) AND State = 'Closed'), '|',
   (SELECT COUNT(*) FROM (SELECT h.OrderId FROM orders.OrderStatusHistory h WHERE h.OrderId IN ($run_orders) GROUP BY h.OrderId
-     HAVING STRING_AGG(h.ToStatus, ',') WITHIN GROUP (ORDER BY h.Sequence) = 'Submitted,Validating,Reserving,Completed') x), '|',
+     HAVING STRING_AGG(h.ToStatus, ',') WITHIN GROUP (ORDER BY h.Sequence) = 'Submitted,Validating,Reserving,PaymentAuthorized,Packing,Dispatched,AwaitingDelivery,Completed') x), '|',
   (SELECT COUNT(*) FROM orders.[Order] o WHERE o.OrderId IN ($run_orders)
      AND (SELECT COUNT(*) FROM orders.StubEffect e WHERE e.OrderId = o.OrderId) = (SELECT COUNT(*) FROM orders.OrderLine l WHERE l.OrderId = o.OrderId) + 1
-     AND EXISTS (SELECT 1 FROM orders.StubEffect e WHERE e.OrderId = o.OrderId AND e.OperationKey LIKE '%stub-complete:1')), '|',
+     AND EXISTS (SELECT 1 FROM orders.OrderOutbox x WHERE x.OrderId = o.OrderId AND x.EventType = 'OrderCompleted')), '|',
   (SELECT COUNT(*) FROM orders.StubEffect e WHERE e.OrderId IN ($run_orders)), ':',
   (SELECT ISNULL(SUM(e.Replays), 0) FROM orders.StubEffect e WHERE e.OrderId IN ($run_orders)))")"
 IFS='|' read -r orders keys closed history effects_ok effects_after <<< "$row"

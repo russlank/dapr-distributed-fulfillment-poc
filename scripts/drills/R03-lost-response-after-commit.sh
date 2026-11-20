@@ -12,7 +12,7 @@
 #                  order-api-2 answered 200 replayed with the committed order id
 #   R03-servers    order-api-2's log shows the replay of that order
 #   R03-once       OrderDb: one order, one key, one start request (Closed), one started workflow,
-#                  Completed once, one effect per line plus completion
+#                  Completed once, one effect per line, one completion event
 DRILL_ID=R03
 . "$(dirname "$0")/lib.sh"
 OUT_DIR="$DRILL_DIR"
@@ -86,7 +86,7 @@ started="$(sql OrderDb "SELECT COUNT(*) FROM orders.WorkflowStartAttempt WHERE O
 RECOVERED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
 observed="$consistent; started workflows $started; final status $(jq_py client "r['items'][0]['follow']['finalStatus']"); $(head -1 "$DRILL_DIR/sql-orders.jsonl")"
 if [[ "$consistent" == ok && "$started" == 1 ]]; then
-  assert R03-once PASS "one order, key, Closed start request, one started workflow, Completed once, one effect per line plus completion" "$observed"
+  assert R03-once PASS "one order, key, Closed start request, one started workflow, Completed once, one effect per line, one completion event" "$observed"
 else
   assert R03-once FAIL "one of each" "$observed"
 fi

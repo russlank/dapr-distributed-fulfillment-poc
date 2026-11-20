@@ -9,7 +9,7 @@
 #   S04-servers    each replica's own log names every order: it was accepted (committed) by exactly
 #                  one replica, and the other replica answered copies of it as replays
 #   S04-sql        OrderDb per key: one order, one key row, one start request (Closed), history
-#                  Submitted, Validating, Reserving, Completed with one terminal transition, one effect
+#                  history through AwaitingDelivery to Completed with one terminal transition, one effect
 #                  per line plus one completion, no fence rejection
 #   S04-race       at least one copy lost the insert race in the database (unique-key resolution on the
 #                  replica that lost): concurrency reached SQL, not only the fast path; UNVERIFIED if all
@@ -79,7 +79,7 @@ consistent="$(sql_consistent "$OUT_DIR/sql-orders.jsonl" "$KEYS")"
 keys_rows="$(sql OrderDb "SELECT COUNT(*) FROM orders.IdempotencyKey WHERE [Key] LIKE '$CLIENT_RUN-o%'")"
 observed="orders $(wc -l < "$OUT_DIR/sql-orders.jsonl" | tr -d ' '), key rows $keys_rows; $consistent; effect replays $(python -c "import json,sys; print(sum(json.loads(l)['effectReplays'] for l in open(sys.argv[1])))" "$OUT_DIR/sql-orders.jsonl"); claims $(python -c "import json,sys; print([json.loads(l)['claims'] for l in open(sys.argv[1])])" "$OUT_DIR/sql-orders.jsonl")"
 if [[ "$consistent" == ok && "$keys_rows" == "$KEYS" ]]; then
-  check S04-sql PASS "one order, key, Closed start request per key; one Completed transition; one effect per line plus completion" "$observed"
+  check S04-sql PASS "one order, key, Closed start request per key; one Completed transition; one effect per line, one completion event" "$observed"
 else
   check S04-sql FAIL "$KEYS consistent orders" "$observed"
 fi

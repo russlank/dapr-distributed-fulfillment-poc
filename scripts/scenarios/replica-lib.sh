@@ -52,7 +52,7 @@ sql_orders_report() {
     (SELECT STRING_AGG(CONCAT(l.Sku, ':', l.Quantity), ',') WITHIN GROUP (ORDER BY l.LineNumber) FROM orders.OrderLine l WHERE l.OrderId = o.OrderId),
     (SELECT COUNT(*) FROM orders.OrderLine l WHERE l.OrderId = o.OrderId),
     (SELECT COUNT(*) FROM orders.StubEffect e WHERE e.OrderId = o.OrderId),
-    (SELECT COUNT(*) FROM orders.StubEffect e WHERE e.OrderId = o.OrderId AND e.OperationKey LIKE '%stub-complete:1'),
+    (SELECT COUNT(*) FROM orders.OrderOutbox x WHERE x.OrderId = o.OrderId AND x.EventType = 'OrderCompleted'),
     (SELECT ISNULL(SUM(e.Replays), 0) FROM orders.StubEffect e WHERE e.OrderId = o.OrderId)
     FROM orders.[Order] o WHERE o.CustomerId LIKE '$1%' ORDER BY o.CreatedAt" | python -c "
 import json, sys
@@ -68,7 +68,7 @@ for line in sys.stdin:
 }
 
 # sql_consistent <report file> <expected orders> -> "ok" or the first problems: one key and one Closed
-# start request per order, history ending Completed once, one effect per line plus one completion.
+# start request per order, history ending AwaitingDelivery, Completed once, one effect per line, one OrderCompleted outbox row.
 sql_consistent() {
   python - "$1" "$2" <<'PY'
 import json, sys
@@ -81,8 +81,8 @@ for r in rows:
     bad = []
     if r["keys"] != 1: bad.append(f"keys={r['keys']}")
     if r["startRequests"] != 1 or r["startState"] != "Closed": bad.append(f"start={r['startRequests']}:{r['startState']}")
-    if r["status"] != "Completed" or not r["history"].endswith("Reserving,Completed") or r["history"].count("Completed") != 1: bad.append(f"history={r['history']}")
-    if r["effects"] != r["lineCount"] + 1 or r["completionEffects"] != 1: bad.append(f"effects={r['effects']} for {r['lineCount']} lines")
+    if r["status"] != "Completed" or not r["history"].endswith("Reserving,PaymentAuthorized,Packing,Dispatched,AwaitingDelivery,Completed") or r["history"].count("Completed") != 1: bad.append(f"history={r['history']}")
+    if r["effects"] != r["lineCount"] or r["completionEffects"] != 1: bad.append(f"effects={r['effects']} for {r['lineCount']} lines")
     if r["fenceRejections"] != 0: bad.append(f"fenceRejections={r['fenceRejections']}")
     if bad: problems.append(r["orderId"] + ": " + " ".join(bad))
 print("ok" if not problems else "; ".join(problems[:4]))

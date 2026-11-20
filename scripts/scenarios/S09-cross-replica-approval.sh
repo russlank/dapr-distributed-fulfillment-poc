@@ -13,7 +13,7 @@
 #   S09-resumed   the workflow woke by the signal and re-read SQL (wake rows Initial:Pending then
 #                 Signal:Approved); the signal is Forwarded only after a raise to a running instance
 #   S09-completed every order Completed with history Submitted, Validating, AwaitingApproval,
-#                 Reserving, Completed (one terminal transition), one effect per operation key, start
+#                 Reserving, PaymentAuthorized, Packing, Dispatched, AwaitingDelivery, Completed (one terminal transition), one effect per operation key, start
 #                 request Closed, workflow Completed, its state under workflow-host only
 # Evidence in artifacts/scenarios/S09-<time>/ (execution views with signal attempts and timings).
 . "$(dirname "$0")/../lib.sh"
@@ -114,7 +114,7 @@ for i in $(seq 1 "$N"); do
     (SELECT COUNT(*) FROM orders.ReviewDecision WHERE OrderId = '$o'))")"
   host_rows="$(sql DaprStateDb "SELECT COUNT(*) FROM dbo.state WHERE [Key] LIKE 'workflow-host||%||fulfill-$normalized||%'")"
   own_rows="$(sql DaprStateDb "SELECT COUNT(*) FROM dbo.state WHERE [Key] LIKE 'order-api||%||fulfill-$normalized||%'")"
-  if [[ "$row" == "1:Submitted,2:Validating,3:AwaitingApproval,4:Reserving,5:Completed|stub-complete:1,stub-fulfil:line-1|Closed:-|1" \
+  if [[ "$row" == "1:Submitted,2:Validating,3:AwaitingApproval,4:Reserving,5:PaymentAuthorized,6:Packing,7:Dispatched,8:AwaitingDelivery,9:Completed|stub-fulfil:line-1|Closed:-|1" \
         && "$(json_get "$e" workflow.status)" == Completed && "$(json_get "$e" workflow.output.outcome)" == Completed && "${host_rows:-0}" -gt 0 && "$own_rows" == 0 ]]; then
     completed_ok=$((completed_ok + 1))
   else
@@ -128,7 +128,7 @@ else
   check S09-resumed FAIL "$N/$N" "$resumed_ok/$N; ${r_details[*]:0:3}"
 fi
 if [[ "$completed_ok" == "$N" ]]; then
-  check S09-completed PASS "Completed once (5 history rows), one effect per key, request Closed, workflow Completed on workflow-host only" "$completed_ok/$N"
+  check S09-completed PASS "Completed once (9 history rows), one effect per key, request Closed, workflow Completed on workflow-host only" "$completed_ok/$N"
 else
   check S09-completed FAIL "$N/$N" "$completed_ok/$N; ${c_details[*]:0:3}"
 fi

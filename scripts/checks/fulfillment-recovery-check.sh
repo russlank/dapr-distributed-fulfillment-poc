@@ -68,8 +68,8 @@ verify() {
   view() { admin_api GET "/system/orders/$order/execution" "" "$(api_base)" > "$DRILL_DIR/$check-execution.json"; [[ -n "$(json_get "$(cat "$DRILL_DIR/$check-execution.json")" workflow.status)" ]]; }
   wait_until 60 "$check workflow state readable" view
   local outcome; outcome="$(json_get "$(cat "$DRILL_DIR/$check-execution.json")" workflow.output.outcome)"
-  if [[ "$status" == Completed && "$history" == "${EXPECT_HISTORY:-1:Submitted,2:Validating,3:Reserving,4:Completed}" \
-        && "$keys" == "${EXPECT_KEYS:-stub-complete:1,stub-fulfil:line-1,stub-fulfil:line-2}" \
+  if [[ "$status" == Completed && "$history" == "${EXPECT_HISTORY:-1:Submitted,2:Validating,3:Reserving,4:PaymentAuthorized,5:Packing,6:Dispatched,7:AwaitingDelivery,8:Completed}" \
+        && "$keys" == "${EXPECT_KEYS:-stub-fulfil:line-1,stub-fulfil:line-2}" \
         && "$checks" == 2 && "$outcome" == Completed && -n "${4:-}" ]] && eval "$4"; then
     assert "$check" PASS "$what" "order $order Completed, history $history; effects $detail; claims/rejections $claims; workflow $outcome; ${5:-}"
   else
@@ -161,7 +161,7 @@ sidecar4="$(wc -l < "$DRILL_DIR/REC-4-sidecar-errors.txt" | tr -d ' ') sidecar i
 detail="decision during outage: $d_status; hosts killed $killed_at, ready $ready_at; signal $s4_state after $s4_attempts attempts, first successful call $s4_success_call, delivered ${s4_delay} ms after the hosts were ready; attempts (result/http/calls): $attempts4 $sidecar4; wakes $wakes4"
 FAULT_OBSERVED="$FAULT_OBSERVED; REC-4: $detail"
 if [[ "$d_status" == 200 && ( "$s4_state" == Forwarded || "$s4_state" == Discarded ) && "${s4_delay:-999999}" -le 60000 && "$wakes4" == *":Approved" ]]; then
-  EXPECT_HISTORY="1:Submitted,2:Validating,3:AwaitingApproval,4:Reserving,5:Completed" EXPECT_KEYS="stub-complete:1,stub-fulfil:line-1" verify REC-4 "$order" "decided while every workflow host was down: after their restart the run resumed, read the approval, completed once" "true" "$detail"
+  EXPECT_HISTORY="1:Submitted,2:Validating,3:AwaitingApproval,4:Reserving,5:PaymentAuthorized,6:Packing,7:Dispatched,8:AwaitingDelivery,9:Completed" EXPECT_KEYS="stub-fulfil:line-1" verify REC-4 "$order" "decided while every workflow host was down: after their restart the run resumed, read the approval, completed once" "true" "$detail"
 else
   assert REC-4 FAIL "delivered within 60 s of recovery, completed once" "$detail"
 fi

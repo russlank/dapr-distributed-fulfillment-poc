@@ -22,7 +22,7 @@
 #                  holds each order once; after the network recovers, a replay of the run returns
 #                  exactly those orders, which then complete
 #   S24-sql        OrderDb for every order of the scenario: one key row, one Closed start request,
-#                  Completed once, one effect per line plus completion, no fence rejection
+#                  Completed once, one effect per line, one completion event, no fence rejection
 # Evidence in artifacts/scenarios/S24-<time>/.
 . "$(dirname "$0")/../lib.sh"
 . "$(dirname "$0")/replica-lib.sh"
@@ -152,7 +152,7 @@ consistent="$(sql_consistent "$OUT_DIR/sql-orders.jsonl" $(( N * 2 + 3 )))"
 keys_rows="$(sql OrderDb "SELECT COUNT(*) FROM orders.IdempotencyKey WHERE [Key] LIKE 's24[ludx]-$STAMP-o%'")"
 observed="$consistent; key rows $keys_rows/$(( N * 2 + 3 )); effect replays $(python -c "import json,sys; print(sum(json.loads(l)['effectReplays'] for l in open(sys.argv[1])))" "$OUT_DIR/sql-orders.jsonl")"
 if [[ "$consistent" == ok && "$keys_rows" == "$(( N * 2 + 3 ))" ]]; then
-  check S24-sql PASS "every order once: one key, one Closed start request, Completed once, one effect per line plus completion" "$observed"
+  check S24-sql PASS "every order once: one key, one Closed start request, Completed once, one effect per line, one completion event" "$observed"
 else
   check S24-sql FAIL "$(( N * 2 + 3 )) consistent orders" "$observed"
 fi

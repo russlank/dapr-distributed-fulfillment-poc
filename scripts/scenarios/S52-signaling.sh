@@ -60,7 +60,7 @@ instance_of() { echo "fulfill-$(echo "$1" | tr -d '-' | tr 'A-F' 'a-f')"; }
 evidence() { admin_api GET "/system/orders/$2/execution" "" "$(api_base)" > "$DRILL_DIR/$1-execution.json"; }
 waiting() { [[ "$(wakes "$1")" == "Initial:Pending" && "$(status_of "$1")" == AwaitingApproval ]]; }
 completed_once() { [[ "$(status_of "$1")" == Completed && "$(sql OrderDb "SELECT COUNT(*) FROM orders.OrderStatusHistory WHERE OrderId = '$1' AND ToStatus = 'Completed'")" == 1 ]]; }
-COMPLETE_HISTORY="1:Submitted:Accepted,2:Validating:ValidationStarted,3:AwaitingApproval:ReviewRequired,4:Reserving:ReviewApproved,5:Completed:StubFulfillmentCompleted"
+COMPLETE_HISTORY="1:Submitted:Accepted,2:Validating:ValidationStarted,3:AwaitingApproval:ReviewRequired,4:Reserving:ReviewApproved,5:PaymentAuthorized:PaymentAuthorized,6:Packing:PackingStarted,7:Dispatched:ShipmentDispatched,8:AwaitingDelivery:DeliveryAwaited,9:Completed:Delivered"
 INJECTED_AT="$(date -u +%FT%TZ)"
 
 # S52-A decision committed before the run reaches its wait ---------------------------------------

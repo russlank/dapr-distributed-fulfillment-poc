@@ -9,7 +9,7 @@
 #                  check results and without completion for the whole outage; workflows Running
 #   R06-recovered  after the pool is restored every order completes, with two check results each
 #   R06-once       OrderDb: one key, one start request (Closed), one execution claim, history
-#                  Submitted, Validating, Reserving, Completed, one effect per line plus completion;
+#                  history through AwaitingDelivery to Completed, one effect per line, one completion event;
 #                  re-executed check activities, if any, counted as replays of one result
 DRILL_ID=R06
 . "$(dirname "$0")/lib.sh"
@@ -89,7 +89,7 @@ consistent="$(sql_consistent "$DRILL_DIR/sql-orders.jsonl" "$N")"
 claims="$(python -c "import json,sys; print([json.loads(l)['claims'] for l in open(sys.argv[1])])" "$DRILL_DIR/sql-orders.jsonl")"
 observed="$consistent; execution claims $claims"
 if [[ "$consistent" == ok && "$claims" == "[$(printf '1, %.0s' $(seq 1 "$N") | sed 's/, $//')]" ]]; then
-  assert R06-once PASS "one key, Closed start request, one claim, Completed once, one effect per line plus completion per order" "$observed"
+  assert R06-once PASS "one key, Closed start request, one claim, Completed once, one effect per line and one completion event per order" "$observed"
 else
   assert R06-once FAIL "consistent orders, one claim each" "$observed"
 fi

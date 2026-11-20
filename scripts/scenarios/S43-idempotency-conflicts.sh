@@ -12,7 +12,7 @@
 #                  the other replica; the accepted body repeated: 200 replayed; answers from both replicas
 #   S43-servers    the replicas' own logs: refusals of other bodies recorded by both replicas
 #   S43-sql        OrderDb: each order holds the accepted body (customer, lines), one key row, one
-#                  Closed start request, Completed once, one effect per line plus completion
+#                  Closed start request, Completed once, one effect per line, one completion event
 # Evidence in artifacts/scenarios/S43-<time>/.
 . "$(dirname "$0")/../lib.sh"
 . "$(dirname "$0")/replica-lib.sh"
@@ -113,7 +113,7 @@ PY
 IFS='|' read -r bodies_ok bodies_bad <<< "$bodies"
 observed="$consistent; orders holding the accepted body: $bodies_ok/$KEYS ${bodies_bad}"
 if [[ "$consistent" == ok && "$bodies_ok" == "$KEYS" ]]; then
-  check S43-sql PASS "each order holds the accepted body; one key, one Closed start request, Completed once, one effect per line plus completion" "$observed"
+  check S43-sql PASS "each order holds the accepted body; one key, one Closed start request, Completed once, one effect per line, one completion event" "$observed"
 else
   check S43-sql FAIL "$total consistent orders, accepted bodies stored" "$observed"
 fi

@@ -15,7 +15,7 @@
 #                  shows the next resolution; wake rows Initial:Pending then Signal:Approved (a Timer
 #                  wake after the deadline is also correct, reported as such)
 #   R01-completed  Completed once (history Submitted, Validating, AwaitingApproval, Reserving,
-#                  Completed), one decision, one effect per line plus completion, one execution claim,
+#                  Completed), one decision, one effect per line, one completion event, one execution claim,
 #                  start request Closed
 DRILL_ID=R01
 . "$(dirname "$0")/lib.sh"
@@ -116,7 +116,7 @@ history="$(python -c "import json,sys; print(json.loads(open(sys.argv[1]).readli
 claims="$(python -c "import json,sys; print(json.loads(open(sys.argv[1]).readline())['claims'])" "$DRILL_DIR/sql-orders.jsonl")"
 decisions="$(sql OrderDb "SELECT COUNT(*) FROM orders.ReviewDecision d JOIN orders.ReviewTask r ON r.ReviewId = d.ReviewId WHERE r.OrderId = '$order_id'")"
 observed="$consistent; history $history; decisions $decisions; execution claims $claims"
-if [[ "$consistent" == ok && "$history" == "Submitted,Validating,AwaitingApproval,Reserving,Completed" && "$decisions" == 1 && "$claims" == 1 ]]; then
+if [[ "$consistent" == ok && "$history" == "Submitted,Validating,AwaitingApproval,Reserving,PaymentAuthorized,Packing,Dispatched,AwaitingDelivery,Completed" && "$decisions" == 1 && "$claims" == 1 ]]; then
   assert R01-completed PASS "Completed once; one decision; one effect set; one execution claim; start request Closed" "$observed"
 else
   assert R01-completed FAIL "one of each" "$observed"
