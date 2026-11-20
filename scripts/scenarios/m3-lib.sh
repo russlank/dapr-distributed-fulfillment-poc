@@ -50,8 +50,8 @@ provider_ops() {
 }
 # provider_money <order id>: "authorized|captured|voided|refunded" counts of financial effects at the provider.
 provider_money() {
-  sql PaymentProviderSimDb "SELECT CONCAT(SUM(CASE WHEN Result = 'Authorized' THEN 1 ELSE 0 END), '|', SUM(CASE WHEN Result = 'Captured' THEN 1 ELSE 0 END), '|',
-    SUM(CASE WHEN Result = 'Voided' THEN 1 ELSE 0 END), '|', SUM(CASE WHEN Result = 'Refunded' THEN 1 ELSE 0 END))
+  sql PaymentProviderSimDb "SELECT CONCAT(COUNT(CASE WHEN Result = 'Authorized' THEN 1 END), '|', COUNT(CASE WHEN Result = 'Captured' THEN 1 END), '|',
+    COUNT(CASE WHEN Result = 'Voided' THEN 1 END), '|', COUNT(CASE WHEN Result = 'Refunded' THEN 1 END))
     FROM provider.Operation WHERE OperationKey LIKE '$(nkey "$1"):%'"
 }
 # payment_ops <order id>: the payment service's operations, "Kind=State/Outcome" in creation order.

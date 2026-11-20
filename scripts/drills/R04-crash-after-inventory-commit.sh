@@ -66,10 +66,10 @@ row="$(sql InventoryDb "SELECT CONCAT(
 history="$(sql OrderDb "SELECT STRING_AGG(ToStatus, ',') WITHIN GROUP (ORDER BY Sequence) FROM orders.OrderStatusHistory WHERE OrderId = '$order_id'")"
 inv="$(inventory_invariants "$SKU")"
 observed="client exit $c; holds|state|outbox|stock $row; history $history; invariants $inv"
-if [[ "$c" == 0 && "$row" == "1|Consumed|HoldCreated,HoldExtended,HoldConsumed|3/0" && "$history" == "Submitted,Validating,Reserving,PaymentAuthorized,Packing,Dispatched,AwaitingDelivery,Completed" && "$inv" == 0\|0\|0\|1\|1 ]]; then
-  assert R04-once PASS "one hold, one creation, one extension, and one consumption event, stock moved once; Completed once" "$observed"
+if [[ "$c" == 0 && "$row" == "1|Consumed|HoldCreated,HoldConsumed|3/0" && "$history" == "Submitted,Validating,Reserving,PaymentAuthorized,Packing,Dispatched,AwaitingDelivery,Completed" && "$inv" == 0\|0\|0\|1\|1 ]]; then
+  assert R04-once PASS "one hold, one creation and one consumption event (the 60 s drill hold outlasts the 30 s extension), stock moved once; Completed once" "$observed"
 else
-  assert R04-once FAIL "1|Consumed|HoldCreated,HoldExtended,HoldConsumed|3/0" "$observed"
+  assert R04-once FAIL "1|Consumed|HoldCreated,HoldConsumed|3/0" "$observed"
 fi
 
 # R04-restart -----------------------------------------------------------------------------------
