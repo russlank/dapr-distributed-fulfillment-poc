@@ -144,16 +144,16 @@ start_pair workflow-host; start_pair workflow-host-2
 ready_at="$(sql OrderDb "SELECT CONVERT(varchar(23), SYSUTCDATETIME(), 126)")"
 c4() { completed "$order"; }
 wait_until 180 "REC-4 order completed" c4
-delivered4() { [[ "$(sql OrderDb "SELECT State FROM orders.PendingSignal WHERE OrderId = '$order'")" != Pending ]]; }
+delivered4() { [[ "$(sql OrderDb "SELECT State FROM orders.PendingSignal WHERE OrderId = '$order' AND EventName LIKE 'ReviewSignal%'")" != Pending ]]; }
 wait_until 120 "REC-4 signal finished" delivered4
 sql OrderDb "SELECT CONCAT(a.Attempt, ' ', CONVERT(varchar(23), a.CalledAt, 126), ' ', ISNULL(a.Result, 'unfinished'), ' ', LEFT(a.DispatcherId, CHARINDEX('/', a.DispatcherId) - 1), ' http=', a.HttpStatus, ' calls=', a.InvocationAttempts, ' reported=', a.ReportedStatus, ' transport=', a.TransportError)
-  FROM orders.SignalAttempt a JOIN orders.PendingSignal s ON s.SignalId = a.SignalId WHERE s.OrderId = '$order' ORDER BY a.Id" > "$DRILL_DIR/REC-4-attempts.txt"
+  FROM orders.SignalAttempt a JOIN orders.PendingSignal s ON s.SignalId = a.SignalId WHERE s.OrderId = '$order' AND s.EventName LIKE 'ReviewSignal%' ORDER BY a.Id" > "$DRILL_DIR/REC-4-attempts.txt"
 for s in order-api-dapr order-api-2-dapr; do
   docker compose --profile replicas logs --since 5m -t "$s" 2>/dev/null | grep -i -E "level=(error|warning)" | grep -i -E "invoke|resolv|workflow-host|connect" >> "$DRILL_DIR/REC-4-sidecar-errors.txt"
 done
 row="$(sql OrderDb "SELECT CONCAT(s.State, '|', s.Attempts, '|', DATEDIFF(millisecond, '$ready_at', ISNULL(s.ForwardedAt, s.ClosedAt)), '|',
   (SELECT TOP 1 CONVERT(varchar(23), a.CalledAt, 126) FROM orders.SignalAttempt a WHERE a.SignalId = s.SignalId AND a.Result IN ('Forwarded', 'Discarded') ORDER BY a.Id))
-  FROM orders.PendingSignal s WHERE s.OrderId = '$order'")"
+  FROM orders.PendingSignal s WHERE s.OrderId = '$order' AND s.EventName LIKE 'ReviewSignal%'")"
 IFS='|' read -r s4_state s4_attempts s4_delay s4_success_call <<< "$row"
 wakes4="$(sql OrderDb "SELECT STRING_AGG(CONCAT(w.Wake, ':', w.SeenStatus), ',') WITHIN GROUP (ORDER BY w.Id) FROM orders.ReviewWake w JOIN orders.ReviewTask r ON r.ReviewId = w.ReviewId WHERE r.OrderId = '$order'")"
 attempts4="$(awk '{print $3"/"$5"/"$6}' "$DRILL_DIR/REC-4-attempts.txt" | sort | uniq -c | tr -s ' ' | tr '\n' ';')"

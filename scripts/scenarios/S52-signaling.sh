@@ -53,7 +53,7 @@ wakes() { sql OrderDb "SELECT ISNULL(STRING_AGG(CONCAT(w.Wake, ':', w.SeenStatus
 history() { sql OrderDb "SELECT STRING_AGG(CONCAT(Sequence, ':', ToStatus, ':', ReasonCode), ',') WITHIN GROUP (ORDER BY Sequence) FROM orders.OrderStatusHistory WHERE OrderId = '$1'"; }
 signal_row() { sql OrderDb "SELECT CONCAT(s.State, '|', ISNULL(s.LastErrorCode, '-'), '|', s.Attempts, '|',
   (SELECT STRING_AGG(CONCAT(ISNULL(a.Result, 'unfinished'), '@', LEFT(a.DispatcherId, CHARINDEX('/', a.DispatcherId) - 1)), ',') WITHIN GROUP (ORDER BY a.Id) FROM orders.SignalAttempt a WHERE a.SignalId = s.SignalId))
-  FROM orders.PendingSignal s WHERE s.OrderId = '$1'"; }
+  FROM orders.PendingSignal s WHERE s.OrderId = '$1' AND s.EventName LIKE 'ReviewSignal%'"; }
 status_of() { sql OrderDb "SELECT Status FROM orders.[Order] WHERE OrderId = '$1'"; }
 event_of() { echo "ReviewSignal_$(echo "$1" | tr -d '-' | tr 'A-F' 'a-f')"; }
 instance_of() { echo "fulfill-$(echo "$1" | tr -d '-' | tr 'A-F' 'a-f')"; }
@@ -177,7 +177,7 @@ read -r status body <<< "$(decide "$(api_base)" "$review2" approve)"
 terminal_c2() { [[ "$(status_of "$C2")" == Completed || "$(status_of "$C2")" == Rejected ]]; }
 wait_until 60 "C2: order terminal" terminal_c2
 evidence C2 "$C2"
-signals="$(sql OrderDb "SELECT COUNT(*) FROM orders.PendingSignal WHERE OrderId = '$C2'")"
+signals="$(sql OrderDb "SELECT COUNT(*) FROM orders.PendingSignal WHERE OrderId = '$C2' AND EventName LIKE 'ReviewSignal%'")"
 decisions="$(sql OrderDb "SELECT COUNT(*) FROM orders.ReviewDecision WHERE OrderId = '$C2'")"
 observed="decision at the deadline: $status $(json_get "$body" code); order $(status_of "$C2"); decisions $decisions, signals $signals; wakes $(wakes "$C2"); history $(history "$C2")"
 if [[ "$status" == 200 && "$(status_of "$C2")" == Completed && "$decisions" == 1 && "$signals" == 1 ]] \
