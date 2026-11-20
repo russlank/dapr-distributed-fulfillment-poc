@@ -26,6 +26,11 @@ Scripts use the same build through `client_sim` in `scripts/lib.sh`.
 | `load` | a seeded workload (`--orders`, `--clients`, `--max-lines`, `--review-rate`) with `--concurrency` requests in flight and an optional `--rate` | new run: every order created; replay: every order returned as before |
 | `approve` | decides the pending review of `--order` ids, `--review` ids, or every order of a result file (`--from`); `--outcome approve\|reject`, `--operator`, `--wait` | accepted, or replayed (same decision again) |
 | `inspect` | business view (customer key), reviews (operator key), execution diagnostics (admin key) of `--order` ids or a result file | the order exists; a section whose key is not set is `skipped` |
+| `cancel` | requests cancellation of `--order` ids or every order of a result file (customer key) | `202` recorded or `200` already requested; `409 dispatch-started` / `order-terminal` and `404` are reported as failed expectations |
+| `reviews` | lists the reviews of `--order` ids or a result file, or every review with `--status` (operator key) | the list was answered |
+| `escalate` | escalates the pending round of `--order` ids, or `--review` ids, before the deadline (`--operator`, `--reason`) | `escalated`, or `replayed` (the same next round again); `409 no-further-round` for the last round |
+| `resolve` | resolves intervention cases (`--case`, `--action ConfirmExternalSuccess\|ConfirmExternalFailure\|Acknowledge`, `--evidence`, `--operator`, `--resolution-seed`) | `resolved:<path>` (Signal, Repair, RecordOnly) or `replayed:<path>` |
+| `operator run` | the seeded scripted operator over `--order` ids or a result file (`--seed`, weights `--approve`/`--reject`/`--escalate`/`--ignore`, `--operators`, `--wait`; `--plan-only` prints the plan without sending) | every planned decision accepted or replayed |
 | `identity`, `probe` | build identity; the M0 runtime probe through the admin API | |
 
 Common options: `--url` (repeat or comma-separate one URL per replica;
@@ -56,6 +61,20 @@ version; the result records the workload and its SHA-256 digest.
 Replica assignment is part of the run: round robin by index (default), or
 `--distribution seeded`. Retries go to the next replica unless `--replica`
 pins one.
+
+## Scripted Operators
+
+`operator run` decides, per order, one of approve, reject, escalate (then
+approve the next round), or ignore (the deadline policy decides). The choice
+for an order depends only on the seed, the weights, the operator list, and the
+order id (SplitMix64 seeded from the order id's hash), not on the other orders
+or their order in the input. The plan and its SHA-256 digest are part of the
+result (`workloadDigest`), and `--plan-only` prints them without sending
+anything. Decision ids derive from the review, the outcome, the operator, and
+`operator-run-<seed>`, so running the same command again returns every
+decision as a replay and makes no second decision; an escalation repeated for
+the same round returns the same next round. Resolution ids of `resolve` derive
+the same way from the case, action, operator, and `--resolution-seed`.
 
 ## Ambiguous Outcomes
 

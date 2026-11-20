@@ -166,10 +166,11 @@ request, its attempts, the claims, and the workflow's runtime state.
 ## Fulfillment Workflow
 
 `FulfillOrderWorkflow` runs on the workflow host; every step that touches
-business state is an activity on the service that owns the data. Stock
-reservation is real (see [Inventory](#inventory)); payment and shipment do
-not exist yet and are represented by **simulated** steps that change nothing
-outside `OrderDb`.
+business state is an activity on the service that owns the data. Stock,
+payment, and shipment are real (inventory service, payment service against
+the external payment provider, shipping service against the external
+carrier). Packing remains **simulated**: one `stub-` step per line that
+changes nothing outside `OrderDb`.
 
 | Step | Where | Does |
 |---|---|---|
@@ -178,12 +179,20 @@ outside `OrderDb`.
 | `PriceOrder`, `AssessOrderRisk` | compute worker | independent checks, scheduled together and awaited together, so they run at the same time (on one or two compute replicas). Pricing uses a fixed stub price list (`stub-v1`); the risk rule (`stub-v2`) scores the order's size and requires a review from an order value of 1,000.00 |
 | `RecordFulfillmentChecks` | order API | stores both results once (`OrderCheck`) and returns the **stored** risk result: the first committed result decides whether a review is required, whatever a repeated computation returned |
 | review (if required) | order API, workflow | `CreateReviewTask`, `ResolveReview`, `ExpireOrEscalateReview` and the durable wait (see [Reviews and Signals](#reviews-and-signals)) |
-| `BeginStubFulfillment` | order API | → `Reserving`: from `Validating` only if the stored result requires no review, from `AwaitingApproval` only if the review is `Approved`; no path skips a required review |
+| `BeginStubFulfillment` | order API | → `Reserving`: from `Validating` only if the stored result requires no review, from `AwaitingApproval` only if the review is `Approved`; no path skips a required review; a cancellation recorded before ends the order `Cancelled` instead |
 | `ReserveOrderLine` | inventory service | one per line, in ordinal SKU order: a hold for the whole line in the first warehouse (by priority) that can serve it; `InsufficientStock` when none can |
-| `ApplyStubFulfillmentStep` | order API | one simulated step per line, in line order (`stub-fulfil`, qualifier `line-N`) |
+| `ExecutePayment` (authorize) | payment service | authorizes the order's amount at the provider (see [Payment](#payment)) |
+| `AdvanceFulfillment` | order API | `Reserving` → `PaymentAuthorized` → `Packing`; later `Dispatched` → `AwaitingDelivery` (only forward along this chain) |
+| `ApplyStubFulfillmentStep` | order API | one simulated packing step per line, in line order (`stub-fulfil`, qualifier `line-N`) |
+| `BeginDispatch` | order API | the cancellation point of no return (see [Cancellation](#cancellation)) |
+| `ExtendOrderHolds` | inventory service | extends every hold once before the capture, never beyond the authorization's expiry; reports the remaining validity |
+| `ExecutePayment` (capture) | payment service | captures the authorized amount, only with enough hold validity left |
 | `ConsumeOrderHolds` | inventory service | turns all of the order's holds into consumed stock in one transaction, or none of them (`HoldExpired`, `Incomplete`) |
-| `CompleteStubFulfillment` | order API | the terminal transaction (below) |
-| `ReleaseOrderHolds`, `CloseUnfulfilledOrder` | inventory service, order API | only when the order cannot be fulfilled: close the order for reservations and release its holds, then `Reserving` → `Rejected` or `Compensated` (below) |
+| `DispatchShipment` | shipping service | hands the shipment to the carrier (see [Shipping and the Carrier](#shipping-and-the-carrier)) |
+| `GetShipmentStatus`, `PollCarrierStatus` | shipping service | Shipping's record of the carrier status (`PollCarrierStatus` asks the carrier once, at the delivery deadline) |
+| `FinalizeDelivered` | order API | the terminal transaction on `Delivered` (below) |
+| `OpenInterventionCase`, `ReadInterventionCase` | order API | a case and its durable wait (see [Intervention Cases](#intervention-cases)) |
+| `ReleaseOrderHolds`, compensating `ExecutePayment`, `CloseUnfulfilledOrder` | inventory, payment, order API | only when the order cannot be fulfilled: release the holds, void or refund by key, then `Rejected`, `Compensated`, or `Cancelled` (below) |
 
 Every order API step starts by locking the order row (`UPDLOCK`), so all
 steps of one order, from any replica, retry, or repeated run, are
@@ -194,37 +203,167 @@ serialized. Each step is safe to repeat:
   transaction with the next sequence number (the lock keeps the numbering
   contiguous; the unique `(OrderId, Sequence)` index is the backstop). A
   repeated validation finds `Validating` and changes nothing.
-- **Effects are keyed.** Simulated effects (`StubEffect`) and check results
-  (`OrderCheck`) are stored under their operation key
-  (`{orderId:N}:{step}:{qualifier}`, for example `…:stub-fulfil:line-2`,
-  `…:check:price`). The key is the primary key, so an effect exists at most
-  once; an execution that finds it returns the stored result and only counts
-  a replay (`Replays`). Simulated steps are recognisable everywhere: their
-  names start with `stub-`, a check constraint enforces it, and they have
-  their own table.
+- **Effects are keyed.** Simulated effects (`StubEffect`), check results
+  (`OrderCheck`), payment operations, inventory operations, and shipments are
+  stored under their operation key (`{orderId:N}:{step}:{qualifier}`, for
+  example `…:stub-fulfil:line-2`, `…:authorize:1`, `…:extend:1`). An
+  execution that finds the key returns the stored result and only counts a
+  replay. Simulated steps are recognisable everywhere: their names start with
+  `stub-`, a check constraint enforces it, and they have their own table.
 - **A terminal order ends the run.** Every step that finds the order
   terminal changes nothing and returns `AlreadyTerminal`; the workflow then
   ends without further steps.
 
-The **terminal transaction** inserts the completion effect
-(`…:stub-complete:1`), moves the order `Reserving` → `Completed` with its
-history row (`StubFulfillmentCompleted`), and closes the start request
+The **terminal transaction** (`FinalizeDelivered`) moves the order
+`AwaitingDelivery` → `Completed` with its history row (`Delivered`), writes
+the `OrderCompleted` row of the order outbox, and closes the start request
 (`Closed`, lease cleared), all or nothing. A rejection by validation closes
 the request the same way. The workflow is deterministic: no clock, random
 numbers, or I/O in its code; later steps work from earlier results in its
-history (the validated lines), and keys derive from the order id and step.
-Activities are retried by the workflow on failure (5 attempts, exponential
-backoff); every step tolerates it.
+history (the validated lines, the authorization's expiry), and keys derive
+from the order id and step. Activities are retried by the workflow on
+failure (5 attempts, exponential backoff); every step tolerates it.
+
+**An order that cannot be fulfilled** releases its holds first (closing the
+order in the inventory), then compensates what it holds at the provider: a
+void by the authorization's key, or a refund by the capture's key (a void
+that finds the authorization captured is followed by a refund). A
+compensation without a definite result is retried in rounds (same key); after
+the last round a `CompensationExhausted` case waits for an operator. A
+release that keeps failing opens the same kind of case. Once the dispatch
+happened there is no compensation: an undeterminable dispatch, a delivery
+exception, or an overdue delivery opens a case.
 
 | Status | Set by |
 |---|---|
 | `Submitted` | acceptance |
 | `Validating` | validation |
 | `AwaitingApproval` | round 1 of a required review |
-| `Reserving` | `BeginStubFulfillment` (no review required, or review approved); the simulated steps run here. The statuses between `Reserving` and `Completed` belong to the real steps and are not used yet |
-| `Completed` | the terminal transaction |
-| `Rejected` | validation, a rejected review, the final expiry of a review, or a line no warehouse can serve (`InsufficientStock`) |
-| `Compensated` | the order's holds were released after a reservation failed for good (`ReservationFailed`: the activity's retries ran out) or a hold expired before it was consumed (`ReservationExpired`) |
+| `Reserving` | `BeginStubFulfillment` (no review required, or review approved) |
+| `PaymentAuthorized`, `Packing` | `AdvanceFulfillment` after the authorization and before the packing steps |
+| `Dispatched`, `AwaitingDelivery` | `AdvanceFulfillment` after the carrier accepted the shipment |
+| `ManualInterventionRequired` | an open intervention case; the resolution puts the order back to the status it had |
+| `Completed` | the terminal transaction on `Delivered` |
+| `Rejected` | validation, a rejected review, the final expiry of a review, a line no warehouse can serve (`InsufficientStock`), or a declined authorization (`PaymentDeclined`) |
+| `Compensated` | the order's holds were released and its payment voided or refunded: a reservation failed for good (`ReservationFailed`), a hold expired before it was consumed (`ReservationExpired`), the provider could not be reached (`PaymentProviderUnavailable`), the capture was refused (`PaymentCaptureFailed`), or a repair compensated it (`PaymentFailed`) |
+| `Cancelled` | a customer cancellation recorded before the point of no return (`CancellationRequested`) |
+
+## Payment
+
+The payment provider is an external system (simulated, no sidecar, its own
+database). The payment service calls it over HTTP; every operation carries
+the caller's operation key, and the provider stores each key with a hash of
+its payload: a repeat returns the stored result, the same key with another
+payload is refused (`409`).
+
+For each operation the payment service writes its intent row, and each
+attempt row, **before** the request is sent. Then:
+
+| What happened to the request | The payment service |
+|---|---|
+| answered (committed, declined, prohibited) | stores the result; done |
+| no connection could be made (refused, name not resolved, connect timeout) | nothing was sent: resends with backoff; after its budget `Unavailable` |
+| sent, but no answer (timeout, broken connection) | it may have committed: asks the provider's status for that key; `Committed` is adopted, `NotFound` is trusted only after the idempotency window (then the same key is sent again); without an answer the outcome is `Ambiguous` |
+
+`Unavailable` compensates (nothing can have committed; the void by key still
+records the key as prohibited). `Ambiguous` opens an `AmbiguousPayment` case:
+the workflow waits, and after the resolution it asks the provider again
+(`ReconcilePayment`); the provider's record wins over the operator's claim.
+
+**Compensation by key.** A void references the authorization's key, a refund
+the capture's key. In the provider's database, under locks on both keys, a
+compensation against an operation that never committed is a committed no-op
+(`NothingToVoid`, `NothingToRefund`) that leaves a **prohibition**: the
+original key can no longer commit (a late request with it returns
+`Prohibited`), and a capture is refused once its authorization was voided.
+So a delayed original can never commit after its compensation.
+
+**Before the capture** the holds are extended once (key `…:extend:1`): the
+new end is the earlier of now plus the extension (30 minutes; drill 30 s)
+and the authorization's expiry, and an extension never shortens a hold. The
+capture starts only if the holds' remaining validity covers its own retry
+and status-query window (2 minutes; drill 15 s); otherwise the authorization
+is voided and the order compensated (`ReservationExpired`). The extension
+does not guarantee the consumption, which checks expiry again in its own
+transaction; a hold lost after the capture is refunded. Holds keep expiring
+while an order waits in an intervention case; the continuation acts on what
+the inventory then holds.
+
+## Shipping and the Carrier
+
+The carrier is external as well (simulated, own database, no sidecar).
+`DispatchShipment` sends the shipment with the order's id as shipment id, so
+every retry asks with the same key; the carrier stores the shipment and its
+callback schedule before it answers. A request that may have reached the
+carrier is resent with the same id; if the outcome stays unknown, the stock
+is already consumed and the payment captured, so the workflow opens an
+`AmbiguousDispatch` case rather than compensate.
+
+**Callbacks** are signed (HMAC over timestamp and body) and arrive at the
+order API (`POST /carrier/callbacks`): it checks the signature, then writes
+the inbox row and a forward command in one transaction and answers `202`. A
+repeated event (same id and payload) is counted; the same id with another
+payload is refused (`409`) and audited; a bad signature gets `401`.
+
+The **carrier forwarder** in every order API replica claims due forward
+commands with a lease and calls Shipping by service invocation; Shipping
+stores the outcome, and the forwarder records it with its consequence in one
+`OrderDb` transaction:
+
+| Shipping's outcome | Meaning | Consequence |
+|---|---|---|
+| `Applied` | a newer, non-terminal status | none |
+| `TerminalApplied` | the first terminal status (`Delivered`, `Exception`) | a carrier signal for the waiting workflow (only while `AwaitingDelivery`) |
+| `Stale`, `Duplicate`, `TerminalRepeat` | older version, version already recorded, the same terminal again | none |
+| `TerminalConflict` | another terminal status after the first one | a `CarrierTerminalConflict` case (also after completion: the order stays `Completed`) |
+| `CorrelationMismatch` | the callback names another order than the shipment's | recorded, nothing else |
+| `UnknownShipment` | Shipping has no such shipment (yet) | retried; then an `AmbiguousDispatch` case |
+| `PayloadConflict` | the event id is known with another payload | audited |
+
+Shipping's **current-state rule**: versions only move forward, and the first
+terminal status stays. Every forwarded event is kept with its outcome (one
+row per event id; one per shipment and version, except mismatches). The
+workflow never trusts the signal: woken by it, or by the delivery deadline
+(then after one poll of the carrier), it reads Shipping's record.
+
+## Cancellation
+
+`POST /orders/{id}/cancel` (customer key) records a cancellation request; the
+order ends `Cancelled` at the fulfillment's next check, which releases the
+holds and voids an authorization by key. `BeginDispatch` is the **point of
+no return**: it records the dispatch start only if no cancellation was
+recorded, and the cancellation is recorded only if the dispatch has not
+started. Both lock the order row, and a check constraint refuses a row with
+both. Answers: `202` recorded, `200` already requested (or already
+`Cancelled`), `409 dispatch-started` once the dispatch started (checked
+first), `409 order-terminal` for another terminal order, `404`. A
+cancellation during a review wakes the waiting workflow; the round becomes
+`Cancelled`, and a later decision gets `409 review-cancelled`.
+
+## Intervention Cases
+
+A case (`InterventionCase`: one open case per order and kind) is opened by the
+workflow when it cannot decide safely: `AmbiguousPayment`,
+`CompensationExhausted`, `AmbiguousDispatch`, `DeliveryException`,
+`DeliveryOverdue`, `CarrierTerminalConflict`. A non-terminal order waits in
+`ManualInterventionRequired`; the workflow waits for the resolution's signal
+and re-reads the case periodically (a lost signal only delays).
+
+An operator resolves it with `POST /interventions/{id}/resolution` (operator
+key; a resolution id makes a repeat a replay; the action must suit the kind:
+`ConfirmExternalSuccess`, `ConfirmExternalFailure`, `Acknowledge`). One
+transaction resolves the case and takes exactly one path:
+
+| Path | When | What follows |
+|---|---|---|
+| `Signal` | the original workflow is running (asked of the workflow host) | the order goes back to its status, and a pending signal wakes the workflow, which re-reads the case and continues (after a payment case it first reconciles with the provider) |
+| `Repair` | no workflow waits (terminated, failed, missing) | a repair start request; a repair dispatcher starts `RepairOrderWorkflow` (`repair-{order}-{case}`): for payment cases it releases the holds, voids with its own repair key (refunds if the authorization was captured), ends the order `Compensated`, and records the outcome on the case |
+| `RecordOnly` | the order is terminal | the resolution is recorded; nothing else |
+
+If the workflow host cannot be asked, nothing changes and the operator is told
+to retry (`503 workflow-state-unknown`). Repair keys differ from the original
+keys, so a repair never repeats an original effect; voiding by the
+authorization's key also prohibits a late original.
 
 ## Inventory
 
@@ -301,14 +440,20 @@ grace)`. Whatever Dapr delivers first, SQL decides:
 
 | SQL says | The workflow |
 |---|---|
-| `Approved` | `BeginStubFulfillment` (`AwaitingApproval` → `Reserving`) and the simulated steps |
+| `Approved` | `BeginStubFulfillment` (`AwaitingApproval` → `Reserving`) and the fulfillment |
 | `Rejected` | `ResolveReview` already moved the order to `Rejected` (`ReviewRejected`) and closed the start request; the run ends |
 | `Pending`, SQL time before the deadline | waits again (an early timer or a stray signal changes nothing); the next timer is never in the past |
 | `Pending`, deadline reached | `ExpireOrEscalateReview`: the only step that takes a review out of `Pending` by time (`Expired`, conditional on SQL time). It opens the next round (fresh deadline) or, after the last round, rejects the order (`ReviewExpired`) and closes the start request. An approval committed before the deadline is never expired |
 
-Manual escalation, cancellation, and operational intervention cases are not
-built yet; the review wait never assumes an approval and never abandons a
-review without the expiry protocol.
+An operator can **escalate** a pending round before its deadline
+(`POST /reviews/{id}/escalate`): in one transaction the round becomes
+`Escalated`, the next round opens with a fresh deadline, and a pending signal
+wakes the workflow, which follows an escalated round like an expired one. A
+repeat returns the same next round; the last round cannot be escalated
+(`409 no-further-round`); a decision for an escalated round is superseded. A
+cancellation during the wait ends the round `Cancelled` (see
+[Cancellation](#cancellation)). The review wait never assumes an approval
+and never abandons a review without the expiry protocol.
 
 **Signals** are wake-up hints only; the fact is in SQL before the signal row
 exists. A signal dispatcher in every order API replica claims due signals
