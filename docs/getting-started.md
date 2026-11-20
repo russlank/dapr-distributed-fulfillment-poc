@@ -66,13 +66,15 @@ curl -s -X POST http://127.0.0.1:8080/orders -H "X-Api-Key: $CUSTOMER_API_KEY" \
 ```
 
 Within about a second the start dispatcher starts its workflow through the
-workflow host, and within a few seconds more the order is `Completed`: its
-line is reserved and consumed in the inventory (the catalog SKUs start with
-1,000,000 units in `W1`), and payment and shipment are simulated steps in
-this version. An unknown SKU, or more than is in stock, ends `Rejected`
-(`InsufficientStock`). `GET /orders/<orderId>` shows the status and its
-history; the execution view shows the start, the checks, the simulated
-effects, and the workflow (an order from 1,000.00, for example 100 × `SKU-R1`, waits for an operator's approval first; see [operations.md](operations.md#reviews)):
+workflow host. The line is reserved in the inventory (the catalog SKUs
+start with 1,000,000 units in `W1`), the payment is authorized at the
+payment provider simulator, the order is packed, captured, and dispatched to
+the carrier simulator, which reports `PickedUp`, `InTransit`, and
+`Delivered` 10 s apart; on delivery the order is `Completed` (about half a
+minute after submission). An unknown SKU, or more than is in stock, ends
+`Rejected` (`InsufficientStock`). `GET /orders/<orderId>` shows the status
+and its history; the execution view shows the start, the checks, the
+simulated packing effects, and the workflow (an order from 1,000.00, for example 100 × `SKU-R1`, waits for an operator's approval first; see [operations.md](operations.md#reviews)):
 `curl -s http://127.0.0.1:8080/system/orders/<orderId>/execution -H "X-Api-Key: $ADMIN_API_KEY"`.
 
 ## Stop and Reset

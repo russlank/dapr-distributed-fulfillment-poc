@@ -135,7 +135,7 @@ with `--replicas` for ACC-4). Evidence: `artifacts/checks/ACC-<time>/`.
 | ACC-3 conflict | same key, other payload: `422 idempotency-key-reused`, row counts unchanged |
 | ACC-4 replicas | 20 concurrent submissions with one key, alternating `order-api` and `order-api-2`: one `201`, nineteen `200`, one order (`UNVERIFIED` without the second replica) |
 | ACC-5 restart | after a cold restart of the order API the retry returns the same order |
-| ACC-6 completed | started by the dispatcher; the order is `Completed` with history `Submitted`, `Validating`, `Reserving`, `Completed`; the start request `Closed` without error code (`Started` need not be observed); one simulated effect per key (two lines, completion); workflow `Completed` with outcome `Completed`; its state in `DaprStateDb` belongs to `workflow-host` only, none to `order-api`'s own sidecar |
+| ACC-6 completed | started by the dispatcher; the order is `Completed` with history `Submitted`, `Validating`, `Reserving`, `PaymentAuthorized`, `Packing`, `Dispatched`, `AwaitingDelivery`, `Completed`; the start request `Closed` without error code (`Started` need not be observed); one simulated packing effect per line (two lines); workflow `Completed` with outcome `Completed`; its state in `DaprStateDb` belongs to `workflow-host` only, none to `order-api`'s own sidecar |
 
 ### S51 Concurrent Workflow Start
 

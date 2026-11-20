@@ -4,7 +4,7 @@ Releases of the PoC; each tag `v<version>` marks a verified milestone.
 Details of a release: `docs/releases/`. What broke on the way:
 [docs/journal.md](docs/journal.md).
 
-## Unreleased (0.4.0-dev)
+## v0.4.0: Payment, shipping, compensation, cancellation, and interventions (M3)
 
 - Payment (M3): a payment service (`PaymentDb`) against an external payment
   provider simulator (own database, no sidecar). Intent and attempt rows
@@ -35,6 +35,7 @@ Details of a release: `docs/releases/`. What broke on the way:
 - Scenarios S13, S29-S31, S30, S39, S40/S41; drills R09, R10, R11, R13,
   R19-R27, R31, R33. Earlier scenarios and drills follow the full
   fulfillment history.
+- Limitations and deferred work: [docs/releases/v0.4.0.md](docs/releases/v0.4.0.md).
 
 ## v0.3.0: Inventory contention and idempotent activities (M2)
 

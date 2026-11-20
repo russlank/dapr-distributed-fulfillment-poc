@@ -5,19 +5,23 @@ Workflow, Actors, and Pub/Sub on .NET 10, with SQL Server as the source of
 business truth, external client, carrier, and payment-provider simulators,
 and scripted failure drills. Synthetic data only; not production software.
 
-**Status:** durable orders with real stock reservation and a simulated
-payment and shipment. Orders are accepted idempotently, started once in
-effect from any order API replica, validated, checked in parallel on the
-compute workers, held for an operator's approval from 1,000.00 (decided in
-SQL, signaled to the waiting workflow), and then reserved: each line whole
-from the first warehouse that can serve it, through stock actors, guarded by
-SQL so that stock is never oversold, also across replica crashes and actor
-relocation. Holds that are not consumed in time expire by the inventory's
-own sweeper; a failed or expired reservation releases every hold and
-compensates the order. Every business effect is keyed and stored once. An
-external client simulator submits seeded, replayable workloads, duplicates,
-contention runs, and operator decisions over HTTP. Payment, shipping,
-escalation and cancellation, and event distribution are not built yet. Every role runs with
+**Status:** durable orders fulfilled end to end against an external payment
+provider and carrier (both simulated, outside Dapr). Orders are accepted
+idempotently, started once in effect from any order API replica, validated,
+checked in parallel on the compute workers, held for an operator's approval
+from 1,000.00 (decided in SQL, signaled to the waiting workflow, with
+expiry and escalation), and reserved through stock actors guarded by SQL so
+that stock is never oversold. Payment is authorized and captured by
+operation key with reconciliation of lost answers; the shipment goes to the
+carrier, whose signed callbacks Shipping records under a current-state rule
+until delivery completes the order. Failures before the dispatch release
+the holds and void or refund the payment; customers can cancel until the
+dispatch starts; what cannot be decided safely becomes an intervention case
+that an operator resolves. Every business effect is keyed and stored once.
+An external client simulator submits seeded, replayable workloads,
+duplicates, contention runs, cancellations, and operator decisions over
+HTTP. Event distribution (outbox publication, projections, the reconciler)
+is not built yet. Every role runs with
 its own Dapr sidecar, reports its identity and health, and exports
 telemetry; scenario and drill scripts prove the behavior from the databases.
 
@@ -48,6 +52,7 @@ Details: [docs/getting-started.md](docs/getting-started.md).
 | [docs/versions.md](docs/versions.md) | pinned versions and observed Dapr runtime behavior |
 | [docs/journal.md](docs/journal.md) | what broke and what changed because of it |
 | [CHANGELOG.md](CHANGELOG.md) | releases |
+| [docs/releases/v0.4.0.md](docs/releases/v0.4.0.md) | M3 release: payment, shipping, interventions, verified guarantees, limitations |
 | [docs/releases/v0.3.0.md](docs/releases/v0.3.0.md) | M2 release: inventory, verified guarantees, limitations |
 | [docs/releases/v0.2.0.md](docs/releases/v0.2.0.md) | M1 release: capabilities, verified guarantees, limitations |
 | [spikes/dapr-compat/README.md](spikes/dapr-compat/README.md) | the Dapr compatibility spike |
