@@ -195,6 +195,7 @@ services:
     environment:
       <<: *app-env
       REPLICA_NAME: order-api
+      CARRIER_HMAC_KEY: ${CARRIER_HMAC_KEY:?set CARRIER_HMAC_KEY in .env}
       ConnectionStrings__OrderDb: "Server=sqlserver;Database=OrderDb;User Id=order_api;Password=${ORDER_DB_PASSWORD};TrustServerCertificate=true"
       ADMIN_API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in .env}
       CUSTOMER_API_KEY: ${CUSTOMER_API_KEY:?set CUSTOMER_API_KEY in .env}
@@ -232,6 +233,7 @@ services:
     environment:
       <<: *app-env
       REPLICA_NAME: order-api-2
+      CARRIER_HMAC_KEY: ${CARRIER_HMAC_KEY:?set CARRIER_HMAC_KEY in .env}
       ConnectionStrings__OrderDb: "Server=sqlserver;Database=OrderDb;User Id=order_api;Password=${ORDER_DB_PASSWORD};TrustServerCertificate=true"
       ADMIN_API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in .env}
       CUSTOMER_API_KEY: ${CUSTOMER_API_KEY:?set CUSTOMER_API_KEY in .env}
@@ -669,6 +671,21 @@ services:
       toxiproxy:
         condition: service_started
 
+  shipping-db-migrate:
+    build:
+      context: ./src
+      args:
+        <<: *build-args
+        PROJECT: Fulfillment.ShippingService
+    image: fulfillment/shipping-service:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    restart: "no"
+    mem_limit: 256m
+    command: ["migrate"]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      ConnectionStrings__ShippingDb: "Server=sqlserver;Database=ShippingDb;User Id=shipping_service;Password=${SHIPPING_DB_PASSWORD};TrustServerCertificate=true"
   shipping-service:
     <<: *app
     build:
@@ -677,10 +694,14 @@ services:
         <<: *build-args
         PROJECT: Fulfillment.ShippingService
     image: fulfillment/shipping-service:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
+    depends_on:
+      shipping-db-migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app-env
       REPLICA_NAME: shipping-service
       ConnectionStrings__ShippingDb: "Server=sqlserver;Database=ShippingDb;User Id=shipping_service;Password=${SHIPPING_DB_PASSWORD};TrustServerCertificate=true"
+      CARRIER_API_KEY: ${CARRIER_API_KEY:?set CARRIER_API_KEY in .env}
   shipping-service-dapr:
     <<: *daprd
     network_mode: "service:shipping-service"
@@ -703,10 +724,14 @@ services:
     <<: *app
     image: fulfillment/shipping-service:${IMAGE_TAG:-local-${BUILD_FLAVOR:-release}}
     profiles: [replicas]
+    depends_on:
+      shipping-db-migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app-env
       REPLICA_NAME: shipping-service-2
       ConnectionStrings__ShippingDb: "Server=sqlserver;Database=ShippingDb;User Id=shipping_service;Password=${SHIPPING_DB_PASSWORD};TrustServerCertificate=true"
+      CARRIER_API_KEY: ${CARRIER_API_KEY:?set CARRIER_API_KEY in .env}
   shipping-service-2-dapr:
     <<: *daprd
     profiles: [replicas]
@@ -738,6 +763,9 @@ services:
     environment:
       REPLICA_NAME: carrier-simulator
       DAPR_POC_ENV: ${DAPR_POC_ENV:-local}
+      CARRIER_API_KEY: ${CARRIER_API_KEY:?set CARRIER_API_KEY in .env}
+      CARRIER_HMAC_KEY: ${CARRIER_HMAC_KEY:?set CARRIER_HMAC_KEY in .env}
+      CarrierSim__CallbackUrls: ${CARRIER_CALLBACK_URLS:-http://order-api:8080}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       ConnectionStrings__CarrierSimDb: "Server=sqlserver;Database=CarrierSimDb;User Id=carrier_simulator;Password=${CARRIER_SIM_DB_PASSWORD};TrustServerCertificate=true"

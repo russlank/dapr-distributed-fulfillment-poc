@@ -168,15 +168,7 @@ public sealed partial class FulfillOrderWorkflow
             return await EndUnfulfilledAsync(context, log, orderId, claim, "Compensated", ReasonCodes.ReservationExpired, Money.Capture, price);
         }
 
-        var completed = await context.CallActivityAsync<StepResult>(FulfillmentWorkflow.CompleteStubFulfillmentActivity,
-            new CompleteFulfillmentRequest(orderId, context.InstanceId), OnOrderApi);
-        if (completed.Terminal)
-        {
-            return Fenced(log, context, completed.OrderStatus, claim);
-        }
-
-        context.SetCustomStatus("completed");
-        return new FulfillmentResult(FulfillmentOutcomes.Completed, completed.OrderStatus, claim.ExecutionClaims);
+        return await ShipAndDeliverAsync(context, log, orderId, claim, lines);
     }
 
     private static Task<PaymentOperationResult> PayAsync(WorkflowContext context, Guid orderId, string step, PriceQuote price, string? referenceStep,

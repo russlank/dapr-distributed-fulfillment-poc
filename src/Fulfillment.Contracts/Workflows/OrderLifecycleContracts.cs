@@ -14,6 +14,9 @@ public static class OrderLifecycleActivities
 
     /// <summary>Reads a case from SQL after a wake-up (the workflow never trusts the signal's content).</summary>
     public const string ReadInterventionCase = "ReadInterventionCase";
+
+    /// <summary>The terminal transaction of a delivered order (Completed, OrderCompleted outbox row, start request closed).</summary>
+    public const string FinalizeDelivered = "FinalizeDelivered";
 }
 
 public sealed record AdvanceFulfillmentRequest(Guid OrderId, string ToStatus);

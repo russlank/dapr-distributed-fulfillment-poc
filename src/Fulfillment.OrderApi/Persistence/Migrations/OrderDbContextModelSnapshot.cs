@@ -23,6 +23,170 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.CarrierCallbackConflict", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTime>("DetectedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<string>("DetectedBy")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ReceivedHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<string>("StoredHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("CarrierCallbackConflict", "orders");
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.CarrierCallbackInbox", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<int>("Duplicates")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("PayloadHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<DateTime>("ReceivedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<Guid>("ShipmentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ShipmentId");
+
+                    b.HasIndex("Source", "EventId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_CarrierCallbackInbox_Event");
+
+                    b.ToTable("CarrierCallbackInbox", "orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_CarrierCallbackInbox_Status", "[Status] IN ('Accepted', 'PickedUp', 'InTransit', 'Delivered', 'Exception')");
+                        });
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.CarrierStatusForward", b =>
+                {
+                    b.Property<Guid>("EventId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime?>("LeaseExpiresAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("LeaseOwner")
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<Guid?>("LeaseToken")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("NextAttemptAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<string>("Outcome")
+                        .HasMaxLength(24)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(24)");
+
+                    b.Property<DateTime?>("ProcessedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.HasKey("EventId");
+
+                    b.HasIndex("State", "NextAttemptAt");
+
+                    b.ToTable("CarrierStatusForward", "orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_CarrierStatusForward_Lease", "([LeaseOwner] IS NULL AND [LeaseExpiresAt] IS NULL AND [LeaseToken] IS NULL) OR ([LeaseOwner] IS NOT NULL AND [LeaseExpiresAt] IS NOT NULL AND [LeaseToken] IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_CarrierStatusForward_Processed", "([State] = 'Processed' AND [Outcome] IS NOT NULL AND [ProcessedAt] IS NOT NULL AND [LeaseToken] IS NULL) OR ([State] = 'Pending' AND [Outcome] IS NULL AND [ProcessedAt] IS NULL)");
+
+                            t.HasCheckConstraint("CK_CarrierStatusForward_State", "[State] IN ('Pending', 'Processed')");
+                        });
+                });
+
             modelBuilder.Entity("Fulfillment.OrderApi.Domain.ExecutionClaim", b =>
                 {
                     b.Property<long>("Id")
@@ -340,6 +504,52 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                             t.HasCheckConstraint("CK_OrderLine_LineNumber", "[LineNumber] BETWEEN 1 AND 20");
 
                             t.HasCheckConstraint("CK_OrderLine_Quantity", "[Quantity] BETWEEN 1 AND 100");
+                        });
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.OrderOutboxEntry", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(32)");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrderId", "EventType")
+                        .IsUnique()
+                        .HasDatabaseName("UX_OrderOutbox_Event");
+
+                    b.ToTable("OrderOutbox", "orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_OrderOutbox_EventType", "[EventType] IN ('OrderCompleted')");
+
+                            t.HasCheckConstraint("CK_OrderOutbox_State", "[State] IN ('Pending', 'Published')");
                         });
                 });
 
@@ -937,6 +1147,15 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                 {
                     b.HasOne("Fulfillment.OrderApi.Domain.Order", null)
                         .WithMany("Lines")
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.OrderOutboxEntry", b =>
+                {
+                    b.HasOne("Fulfillment.OrderApi.Domain.Order", null)
+                        .WithMany()
                         .HasForeignKey("OrderId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

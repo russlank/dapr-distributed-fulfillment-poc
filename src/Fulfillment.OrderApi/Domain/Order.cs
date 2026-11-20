@@ -100,6 +100,18 @@ public static class OrderReasonCodes
     /// <summary>Cancelled: the customer's cancellation was recorded before dispatch started; holds released, authorization voided.</summary>
     public const string CancellationRequested = "CancellationRequested";
 
+    /// <summary>Packing → Dispatched: the carrier accepted the shipment.</summary>
+    public const string ShipmentDispatched = "ShipmentDispatched";
+
+    /// <summary>Dispatched → AwaitingDelivery.</summary>
+    public const string DeliveryAwaited = "DeliveryAwaited";
+
+    /// <summary>AwaitingDelivery → Completed: Shipping recorded the delivery.</summary>
+    public const string Delivered = "Delivered";
+
+    /// <summary>A terminal carrier status recorded after the order was already terminal (history only).</summary>
+    public const string CarrierStatusAfterTerminal = "CarrierStatusAfterTerminal";
+
     /// <summary>The fulfillment completed (payment captured, stock consumed).</summary>
     public const string FulfillmentCompleted = "FulfillmentCompleted";
 }

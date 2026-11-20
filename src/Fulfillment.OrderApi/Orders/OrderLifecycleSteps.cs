@@ -24,6 +24,8 @@ public sealed class OrderLifecycleSteps(string connectionString, StepCheckpoint 
     {
         [OrderStatus.PaymentAuthorized] = (OrderStatus.Reserving, OrderReasonCodes.PaymentAuthorized),
         [OrderStatus.Packing] = (OrderStatus.PaymentAuthorized, OrderReasonCodes.PackingStarted),
+        [OrderStatus.Dispatched] = (OrderStatus.Packing, OrderReasonCodes.ShipmentDispatched),
+        [OrderStatus.AwaitingDelivery] = (OrderStatus.Dispatched, OrderReasonCodes.DeliveryAwaited),
     };
 
     public async Task<StepResult> AdvanceAsync(AdvanceFulfillmentRequest request, CancellationToken ct = default)
@@ -214,10 +216,57 @@ public sealed class OrderLifecycleSteps(string connectionString, StepCheckpoint 
         await history.ExecuteNonQueryAsync(ct);
     }
 
+    private static readonly OrderStatus[] Chain = [OrderStatus.Reserving, OrderStatus.PaymentAuthorized, OrderStatus.Packing, OrderStatus.Dispatched, OrderStatus.AwaitingDelivery];
+
     /// <summary>True when the order is already past <paramref name="to"/> in the forward chain.</summary>
-    private static bool IsLater(OrderStatus status, OrderStatus to) =>
-        (to == OrderStatus.PaymentAuthorized && status is OrderStatus.Packing or OrderStatus.Dispatched or OrderStatus.AwaitingDelivery)
-        || (to == OrderStatus.Packing && status is OrderStatus.Dispatched or OrderStatus.AwaitingDelivery);
+    private static bool IsLater(OrderStatus status, OrderStatus to) => Array.IndexOf(Chain, status) > Array.IndexOf(Chain, to);
+
+    /// <summary>
+    /// The terminal transaction of a delivered order: AwaitingDelivery → Completed (Delivered), the OrderCompleted
+    /// outbox row, and the start request closed, all or nothing. The outbox row exists once per order, so a repeat
+    /// finds it and changes nothing.
+    /// </summary>
+    public async Task<StepResult> FinalizeDeliveredAsync(CompleteFulfillmentRequest request, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var key = OperationKey.For(request.OrderId, "finalize", "1").Value;
+        await using var connection = await OpenAsync(ct);
+        await using var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct);
+        var (status, _) = await FulfillmentSteps.LockOrThrowAsync(connection, tx, request.OrderId, ct);
+        await using (var exists = new SqlCommand("SELECT COUNT(*) FROM orders.OrderOutbox WHERE OrderId = @o AND EventType = 'OrderCompleted'", connection, tx))
+        {
+            exists.Parameters.AddWithValue("@o", request.OrderId);
+            if ((int)(await exists.ExecuteScalarAsync(ct))! > 0)
+            {
+                await tx.CommitAsync(ct);
+                return new StepResult(StepOutcomes.AlreadyApplied, key, status.ToString());
+            }
+        }
+
+        if (OrderStatuses.IsTerminal(status))
+        {
+            await tx.CommitAsync(ct);
+            return new StepResult(StepOutcomes.AlreadyTerminal, key, status.ToString());
+        }
+
+        if (!await OrderTransitions.TryTransitionAsync(connection, tx, request.OrderId, OrderStatus.AwaitingDelivery, OrderStatus.Completed, OrderReasonCodes.Delivered,
+                checkpoint, key, ct))
+        {
+            throw new InvalidOperationException($"finalizing an order in status {status}");
+        }
+
+        await using (var outbox = new SqlCommand(
+                         "INSERT orders.OrderOutbox (OrderId, EventType, Payload, State) VALUES (@o, 'OrderCompleted', @p, 'Pending')", connection, tx))
+        {
+            outbox.Parameters.AddWithValue("@o", request.OrderId);
+            outbox.Parameters.AddWithValue("@p", $"{{\"orderId\":\"{request.OrderId}\",\"instanceId\":\"{request.InstanceId}\"}}");
+            await outbox.ExecuteNonQueryAsync(ct);
+        }
+
+        await OrderTransitions.CloseStartRequestAsync(connection, tx, request.OrderId, ct);
+        await tx.CommitAsync(ct);
+        return new StepResult(StepOutcomes.Applied, key, nameof(OrderStatus.Completed));
+    }
 
     private async Task<SqlConnection> OpenAsync(CancellationToken ct)
     {

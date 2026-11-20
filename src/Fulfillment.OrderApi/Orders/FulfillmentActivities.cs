@@ -55,3 +55,8 @@ public sealed class ReadInterventionCaseActivity(OrderLifecycleSteps steps) : Wo
 {
     public override Task<CaseResult> RunAsync(WorkflowActivityContext context, ReadCaseRequest input) => steps.ReadCaseAsync(input);
 }
+
+public sealed class FinalizeDeliveredActivity(OrderLifecycleSteps steps) : WorkflowActivity<CompleteFulfillmentRequest, StepResult>
+{
+    public override Task<StepResult> RunAsync(WorkflowActivityContext context, CompleteFulfillmentRequest input) => steps.FinalizeDeliveredAsync(input);
+}

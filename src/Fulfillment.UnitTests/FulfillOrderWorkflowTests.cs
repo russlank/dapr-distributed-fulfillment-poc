@@ -43,6 +43,11 @@ public class FulfillOrderWorkflowTests
             PaymentActivities.ExecutePayment => Paid((PaymentOperationRequest)input!),
             OrderLifecycleActivities.AdvanceFulfillment => new StepResult(StepOutcomes.Applied, "k", ((AdvanceFulfillmentRequest)input!).ToStatus),
             OrderLifecycleActivities.BeginDispatch => new BeginDispatchResult(DispatchOutcomes.Started, "Packing"),
+            Fulfillment.Contracts.Shipping.ShippingActivities.DispatchShipment => new Fulfillment.Contracts.Shipping.DispatchShipmentResult(
+                Fulfillment.Contracts.Shipping.DispatchResults.Dispatched, OrderId, AuthExpires, 1, "shipping-1"),
+            Fulfillment.Contracts.Shipping.ShippingActivities.GetShipmentStatus => new Fulfillment.Contracts.Shipping.ShipmentStatusResult(
+                OrderId, "Delivered", "Delivered", AuthExpires, false),
+            OrderLifecycleActivities.FinalizeDelivered => new StepResult(StepOutcomes.Applied, "k", "Completed"),
             _ => throw new InvalidOperationException(name),
         };
 
@@ -67,7 +72,8 @@ public class FulfillOrderWorkflowTests
         PaymentActivities.ExecutePayment, OrderLifecycleActivities.AdvanceFulfillment, OrderLifecycleActivities.AdvanceFulfillment,
         FulfillmentWorkflow.ApplyStubStepActivity, FulfillmentWorkflow.ApplyStubStepActivity, OrderLifecycleActivities.BeginDispatch,
         InventoryActivities.ExtendOrderHolds, PaymentActivities.ExecutePayment, InventoryActivities.ConsumeOrderHolds,
-        FulfillmentWorkflow.CompleteStubFulfillmentActivity,
+        Fulfillment.Contracts.Shipping.ShippingActivities.DispatchShipment, OrderLifecycleActivities.AdvanceFulfillment, OrderLifecycleActivities.AdvanceFulfillment,
+        Fulfillment.Contracts.Shipping.ShippingActivities.GetShipmentStatus, OrderLifecycleActivities.FinalizeDelivered,
     ];
 
     /// <summary>Resolutions returned one after another (the last one repeats).</summary>
@@ -111,7 +117,11 @@ public class FulfillOrderWorkflowTests
                 (InventoryActivities.ExtendOrderHolds, AppIds.InventoryService),
                 (PaymentActivities.ExecutePayment, AppIds.PaymentService),
                 (InventoryActivities.ConsumeOrderHolds, AppIds.InventoryService),
-                (FulfillmentWorkflow.CompleteStubFulfillmentActivity, AppIds.OrderApi),
+                (Fulfillment.Contracts.Shipping.ShippingActivities.DispatchShipment, AppIds.ShippingService),
+                (OrderLifecycleActivities.AdvanceFulfillment, AppIds.OrderApi),
+                (OrderLifecycleActivities.AdvanceFulfillment, AppIds.OrderApi),
+                (Fulfillment.Contracts.Shipping.ShippingActivities.GetShipmentStatus, AppIds.ShippingService),
+                (OrderLifecycleActivities.FinalizeDelivered, AppIds.OrderApi),
             ],
             context.ActivityCalls.Select(c => (c.Name, c.TargetAppId!)).ToArray());
         Assert.Equal(
@@ -185,7 +195,7 @@ public class FulfillOrderWorkflowTests
     [InlineData(FulfillmentWorkflow.RecordChecksActivity, 5)]
     [InlineData(FulfillmentWorkflow.BeginFulfillmentActivity, 6)]
     [InlineData(FulfillmentWorkflow.ApplyStubStepActivity, 12)]
-    [InlineData(FulfillmentWorkflow.CompleteStubFulfillmentActivity, 18)]
+    [InlineData(OrderLifecycleActivities.FinalizeDelivered, 22)]
     public async Task Run_StepFindsTheOrderTerminal_EndsThereWithoutFurtherSteps(string step, int calls)
     {
         var context = new FakeWorkflowContext(Instance)
@@ -443,6 +453,113 @@ public class FulfillOrderWorkflowTests
 
     private static Func<string, object?, object?> Both(params Func<string, object?, object?>[] overrides) =>
         (name, input) => overrides.Select(o => o(name, input)).FirstOrDefault(r => r is not null);
+
+    private static Fulfillment.Contracts.Shipping.ShipmentStatusResult Shipment(string? current, string? terminal, bool passed = false) =>
+        new(OrderId, current, terminal, AuthExpires, passed);
+
+    private static Func<string, object?, object?> Statuses(params Fulfillment.Contracts.Shipping.ShipmentStatusResult[] sequence)
+    {
+        var next = 0;
+        return (name, _) => name is Fulfillment.Contracts.Shipping.ShippingActivities.GetShipmentStatus or Fulfillment.Contracts.Shipping.ShippingActivities.PollCarrierStatus
+            ? sequence[Math.Min(next++, sequence.Length - 1)]
+            : null;
+    }
+
+    private static Func<string, object?, object?> Case(string kind, string action)
+    {
+        var caseId = Guid.NewGuid();
+        return (name, _) => name switch
+        {
+            OrderLifecycleActivities.OpenInterventionCase => new CaseResult(caseId, kind, CaseStates.Open, null, "ManualInterventionRequired", false, true),
+            OrderLifecycleActivities.ReadInterventionCase => new CaseResult(caseId, kind, CaseStates.Resolved, action, "AwaitingDelivery", false, false),
+            _ => null,
+        };
+    }
+
+    [Fact]
+    public async Task Run_CarrierSignalWakesTheWait_ShippingRecordDecides_ThenFinalizes()
+    {
+        var shipment = Fulfillment.Contracts.Shipping.CarrierSignals.EventName(OrderId);
+        var context = new FakeWorkflowContext(Instance)
+        {
+            ActivityResult = Results(Statuses(Shipment("InTransit", null), Shipment("Delivered", "Delivered"))),
+            Events = { [shipment] = new object() },
+        };
+
+        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.Equal(2, Names(context).Count(n => n == Fulfillment.Contracts.Shipping.ShippingActivities.GetShipmentStatus));
+        Assert.Equal(OrderLifecycleActivities.FinalizeDelivered, Names(context)[^1]);
+        Assert.Equal(new FulfillmentResult(FulfillmentOutcomes.Completed, "Completed", 1), result);
+    }
+
+    [Fact]
+    public async Task Run_DeliveryException_OpensACase_ConfirmedSuccessFinalizes()
+    {
+        var context = new FakeWorkflowContext(Instance)
+        {
+            TimersFireImmediately = true,
+            ActivityResult = Results(Both(Statuses(Shipment("Exception", "Exception")), Case(InterventionKinds.DeliveryException, CaseActions.ConfirmExternalSuccess))),
+        };
+
+        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.Equal(new OpenCaseRequest(OrderId, InterventionKinds.DeliveryException, "delivery-1",
+            $"shipment {OrderId}: current Exception, terminal Exception, deadline {AuthExpires:O}"), context.ActivityCalls.Select(c => c.Input).OfType<OpenCaseRequest>().Single());
+        Assert.Equal(OrderLifecycleActivities.FinalizeDelivered, Names(context)[^1]);
+        Assert.Equal(FulfillmentOutcomes.Completed, result.Outcome);
+    }
+
+    [Fact]
+    public async Task Run_DeliveryExceptionNotConfirmed_EndsWithoutFinalizing()
+    {
+        var context = new FakeWorkflowContext(Instance)
+        {
+            TimersFireImmediately = true,
+            ActivityResult = Results(Both(Statuses(Shipment("Exception", "Exception")), Case(InterventionKinds.DeliveryException, CaseActions.Acknowledge))),
+        };
+
+        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.DoesNotContain(OrderLifecycleActivities.FinalizeDelivered, Names(context));
+        Assert.Equal(FulfillmentOutcomes.Fenced, result.Outcome);
+    }
+
+    [Fact]
+    public async Task Run_DeadlinePassedWithoutTerminalStatus_PollsOnceThenOpensDeliveryOverdue()
+    {
+        var context = new FakeWorkflowContext(Instance)
+        {
+            TimersFireImmediately = true,
+            ActivityResult = Results(Both(Statuses(Shipment("InTransit", null, passed: true)), Case(InterventionKinds.DeliveryOverdue, CaseActions.ConfirmExternalSuccess))),
+        };
+
+        await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.Equal(1, Names(context).Count(n => n == Fulfillment.Contracts.Shipping.ShippingActivities.PollCarrierStatus));
+        Assert.Equal(InterventionKinds.DeliveryOverdue, context.ActivityCalls.Select(c => c.Input).OfType<OpenCaseRequest>().Single().Kind);
+    }
+
+    [Fact]
+    public async Task Run_DispatchUndeterminable_OpensACaseAndDispatchesAgainWithTheSameShipment()
+    {
+        var dispatches = 0;
+        var context = new FakeWorkflowContext(Instance)
+        {
+            TimersFireImmediately = true,
+            ActivityResult = Results(Both(
+                (name, _) => name == Fulfillment.Contracts.Shipping.ShippingActivities.DispatchShipment && ++dispatches == 1
+                    ? new Fulfillment.Contracts.Shipping.DispatchShipmentResult(Fulfillment.Contracts.Shipping.DispatchResults.Ambiguous, OrderId, null, 4, "shipping-1")
+                    : null,
+                Case(InterventionKinds.AmbiguousDispatch, CaseActions.ConfirmExternalFailure))),
+        };
+
+        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.Equal(2, dispatches);
+        Assert.Equal(InterventionKinds.AmbiguousDispatch, context.ActivityCalls.Select(c => c.Input).OfType<OpenCaseRequest>().Single().Kind);
+        Assert.Equal(FulfillmentOutcomes.Completed, result.Outcome);
+    }
 
     [Fact]
     public async Task Run_AuthorizationDeclined_RejectsAfterReleasing_WithoutAnyCompensatingPayment()

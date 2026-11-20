@@ -35,6 +35,13 @@ builder.Services.AddSingleton(sp =>
 });
 builder.Services.AddSingleton(sp => new OrderLifecycleSteps(orderDb, Checkpoints(sp)));
 
+// Carrier callbacks: the signed ingress (inbox + forward command) and the forwarder to Shipping.
+builder.Services.Configure<Fulfillment.OrderApi.Carrier.CarrierForwarderOptions>(builder.Configuration.GetSection(Fulfillment.OrderApi.Carrier.CarrierForwarderOptions.Section));
+builder.Services.AddHostedService(sp => new Fulfillment.OrderApi.Carrier.CarrierForwarder(orderDb, sp.GetRequiredService<Fulfillment.Messaging.SidecarInvoker>(),
+    sp.GetRequiredService<OrderLifecycleSteps>(), sp.GetRequiredService<Failpoints>(),
+    sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<Fulfillment.OrderApi.Carrier.CarrierForwarderOptions>>(),
+    sp.GetRequiredService<RuntimeIdentity>(), sp.GetRequiredService<ILogger<Fulfillment.OrderApi.Carrier.CarrierForwarder>>()));
+
 // Reviews: decisions (operator key), review steps, and the signal dispatcher that wakes workflows
 // through the workflow host's management API. Review timing follows the environment's time profile.
 builder.Services.AddOptions<ReviewOptions>()
@@ -74,6 +81,7 @@ builder.Services.AddDaprWorkflow(options =>
     options.RegisterActivity<BeginDispatchActivity>(OrderLifecycleActivities.BeginDispatch);
     options.RegisterActivity<OpenInterventionCaseActivity>(OrderLifecycleActivities.OpenInterventionCase);
     options.RegisterActivity<ReadInterventionCaseActivity>(OrderLifecycleActivities.ReadInterventionCase);
+    options.RegisterActivity<FinalizeDeliveredActivity>(OrderLifecycleActivities.FinalizeDelivered);
 });
 
 var app = builder.Build();
@@ -81,6 +89,7 @@ await OrderDbMigrations.EnsureCurrentAsync(app.Services);
 await app.Services.GetRequiredService<ProbeStore>().EnsureSchemaAsync();
 await app.Services.GetRequiredService<Failpoints>().EnsureStoreAsync();
 app.MapServiceDefaults();
+Fulfillment.OrderApi.Carrier.CarrierIngress.MapCarrierIngress(app, orderDb);
 // Every answer names the replica that produced it, so clients and scenarios can prove which
 // replica served a request instead of inferring it from the URL they used.
 var servedBy = app.Services.GetRequiredService<RuntimeIdentity>().Replica;

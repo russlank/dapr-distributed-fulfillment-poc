@@ -41,6 +41,14 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
 
     public DbSet<InterventionCase> InterventionCases => Set<InterventionCase>();
 
+    public DbSet<CarrierCallbackInbox> CarrierCallbackInbox => Set<CarrierCallbackInbox>();
+
+    public DbSet<CarrierStatusForward> CarrierStatusForwards => Set<CarrierStatusForward>();
+
+    public DbSet<CarrierCallbackConflict> CarrierCallbackConflicts => Set<CarrierCallbackConflict>();
+
+    public DbSet<OrderOutboxEntry> OrderOutbox => Set<OrderOutboxEntry>();
+
     public DbSet<SignalAttempt> SignalAttempts => Set<SignalAttempt>();
 
     public DbSet<ReviewWake> ReviewWakes => Set<ReviewWake>();
@@ -65,6 +73,7 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         ConfigureReviewDecision(modelBuilder.Entity<ReviewDecision>());
         ConfigurePendingSignal(modelBuilder.Entity<PendingSignal>());
         ConfigureSignalAttempt(modelBuilder.Entity<SignalAttempt>());
+        ConfigureCarrier(modelBuilder);
         ConfigureInterventionCase(modelBuilder.Entity<InterventionCase>());
         ConfigureReviewWake(modelBuilder.Entity<ReviewWake>());
     }
@@ -339,6 +348,67 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         attempt.HasIndex(a => a.LeaseToken).IsUnique().HasDatabaseName("UX_SignalAttempt_LeaseToken");
         attempt.HasIndex(a => new { a.SignalId, a.CalledAt }).HasDatabaseName("IX_SignalAttempt_Signal");
         attempt.HasOne<PendingSignal>().WithMany().HasForeignKey(a => a.SignalId).OnDelete(DeleteBehavior.Cascade);
+    }
+
+    private static void ConfigureCarrier(ModelBuilder modelBuilder)
+    {
+        const string statuses = "('Accepted', 'PickedUp', 'InTransit', 'Delivered', 'Exception')";
+        modelBuilder.Entity<CarrierCallbackInbox>(inbox =>
+        {
+            inbox.ToTable("CarrierCallbackInbox", t => t.HasCheckConstraint("CK_CarrierCallbackInbox_Status", $"[Status] IN {statuses}"));
+            inbox.HasKey(x => x.Id);
+            inbox.Property(x => x.Source).HasMaxLength(16).IsUnicode(false);
+            inbox.Property(x => x.PayloadHash).HasMaxLength(64).IsUnicode(false);
+            inbox.Property(x => x.Status).HasMaxLength(16).IsUnicode(false);
+            inbox.Property(x => x.OccurredAt).HasColumnType("datetime2(3)");
+            inbox.Property(x => x.ReceivedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+            inbox.HasIndex(x => new { x.Source, x.EventId }).IsUnique().HasDatabaseName("UX_CarrierCallbackInbox_Event");
+            inbox.HasIndex(x => x.ShipmentId);
+        });
+        modelBuilder.Entity<CarrierStatusForward>(f =>
+        {
+            f.ToTable("CarrierStatusForward", t =>
+            {
+                t.HasCheckConstraint("CK_CarrierStatusForward_State", "[State] IN ('Pending', 'Processed')");
+                t.HasCheckConstraint("CK_CarrierStatusForward_Processed", "([State] = 'Processed' AND [Outcome] IS NOT NULL AND [ProcessedAt] IS NOT NULL AND [LeaseToken] IS NULL) OR ([State] = 'Pending' AND [Outcome] IS NULL AND [ProcessedAt] IS NULL)");
+                t.HasCheckConstraint("CK_CarrierStatusForward_Lease",
+                    "([LeaseOwner] IS NULL AND [LeaseExpiresAt] IS NULL AND [LeaseToken] IS NULL) OR ([LeaseOwner] IS NOT NULL AND [LeaseExpiresAt] IS NOT NULL AND [LeaseToken] IS NOT NULL)");
+            });
+            f.HasKey(x => x.EventId);
+            f.Property(x => x.State).HasMaxLength(16).IsUnicode(false);
+            f.Property(x => x.Outcome).HasMaxLength(24).IsUnicode(false);
+            f.Property(x => x.NextAttemptAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+            f.Property(x => x.LeaseOwner).HasMaxLength(64).IsUnicode(false);
+            f.Property(x => x.LeaseExpiresAt).HasColumnType("datetime2(3)");
+            f.Property(x => x.LastError).HasMaxLength(200);
+            f.Property(x => x.CreatedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+            f.Property(x => x.ProcessedAt).HasColumnType("datetime2(3)");
+            f.HasIndex(x => new { x.State, x.NextAttemptAt });
+        });
+        modelBuilder.Entity<CarrierCallbackConflict>(c =>
+        {
+            c.ToTable("CarrierCallbackConflict");
+            c.HasKey(x => x.Id);
+            c.Property(x => x.StoredHash).HasMaxLength(64).IsUnicode(false);
+            c.Property(x => x.ReceivedHash).HasMaxLength(64).IsUnicode(false);
+            c.Property(x => x.DetectedBy).HasMaxLength(16).IsUnicode(false);
+            c.Property(x => x.DetectedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+        });
+        modelBuilder.Entity<OrderOutboxEntry>(o =>
+        {
+            o.ToTable("OrderOutbox", t =>
+            {
+                t.HasCheckConstraint("CK_OrderOutbox_EventType", "[EventType] IN ('OrderCompleted')");
+                t.HasCheckConstraint("CK_OrderOutbox_State", "[State] IN ('Pending', 'Published')");
+            });
+            o.HasKey(x => x.Id);
+            o.Property(x => x.EventType).HasMaxLength(32).IsUnicode(false);
+            o.Property(x => x.State).HasMaxLength(16).IsUnicode(false);
+            o.Property(x => x.CreatedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+            o.HasOne<Order>().WithMany().HasForeignKey(x => x.OrderId);
+            // One OrderCompleted per order.
+            o.HasIndex(x => new { x.OrderId, x.EventType }).IsUnique().HasDatabaseName("UX_OrderOutbox_Event");
+        });
     }
 
     private static void ConfigureInterventionCase(EntityTypeBuilder<InterventionCase> c)
