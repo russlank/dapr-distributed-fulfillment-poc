@@ -5,6 +5,26 @@ keeps the expectation that turned out wrong.
 
 ## 2026-11-20: Payment provider, payment service, hold extension
 
+### A carrier forwarding test failed once in the full suite
+
+- **Expected:** the integration test that drains the carrier forward queue
+  with its own forwarder (and a scripted Shipping) sees the `Delivered`
+  callback applied and one carrier signal written.
+- **Observed:** one failure in a full integration run (no signal row); the
+  same test class passed six times in a row on its own. The test's in-process
+  order API host also ran the real background forwarder (and the repair
+  dispatcher) against the same database. Under load, that forwarder claimed
+  the row first, held its lease while calling a sidecar that does not exist
+  in tests, and the test's drain loop ran out of iterations before the
+  lease expired.
+- **Fix:** the test host disables the carrier forwarder and the repair
+  dispatcher (`CarrierForwarder:Enabled`, the new `RepairDispatcher:Enabled`),
+  as it already did for the start and signal dispatchers. The next full run
+  passed (203/203).
+- **Lesson:** every background worker a test host starts is a competitor for
+  the rows the test drives; a new hosted service needs its switch in the test
+  host on the day it is added.
+
 ### A serializable transaction leaked into the carrier's next statement
 
 - **Expected:** the carrier simulator accepts a shipment in a serializable

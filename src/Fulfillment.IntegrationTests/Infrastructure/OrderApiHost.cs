@@ -53,6 +53,10 @@ public sealed class OrderApiHost(string connectionString, Action<IServiceCollect
         // The start dispatcher runs only in tests that enable it (it would act on every pending row).
         builder.UseSetting("StartDispatcher:Enabled", dispatcherEnabled ? "true" : "false");
         builder.UseSetting("SignalDispatcher:Enabled", "false");
+        // Tests drive the carrier forwarder and the repair dispatcher themselves; background instances would race
+        // them for the same rows (and hold leases while calling a sidecar that does not exist in tests).
+        builder.UseSetting("CarrierForwarder:Enabled", "false");
+        builder.UseSetting("RepairDispatcher:Enabled", "false");
         if (configureServices is not null)
         {
             builder.ConfigureTestServices(configureServices);

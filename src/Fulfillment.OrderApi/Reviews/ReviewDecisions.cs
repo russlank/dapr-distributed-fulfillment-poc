@@ -106,7 +106,7 @@ public sealed class ReviewDecisions(string connectionString, StepCheckpoint chec
         {
             case ReviewStates.Approved or ReviewStates.Rejected:
                 return new DecisionResult(DecisionOutcomeKind.AlreadyDecided, review.Value.Status);
-            case ReviewStates.Expired:
+            case ReviewStates.Expired or ReviewStates.Escalated:
                 return new DecisionResult(review.Value.LaterRound ? DecisionOutcomeKind.Superseded : DecisionOutcomeKind.Expired, review.Value.Status);
             case ReviewStates.Cancelled:
                 return new DecisionResult(DecisionOutcomeKind.Cancelled, review.Value.Status);

@@ -140,6 +140,9 @@ public static class ReviewStates
 
     /// <summary>The order was cancelled while the review was pending; a decision is refused.</summary>
     public const string Cancelled = "Cancelled";
+
+    /// <summary>An operator escalated the round before its deadline; the next round is open, a decision for this one is superseded.</summary>
+    public const string Escalated = "Escalated";
 }
 
 /// <summary>Why the workflow resolves a review (recorded with every resolution).</summary>

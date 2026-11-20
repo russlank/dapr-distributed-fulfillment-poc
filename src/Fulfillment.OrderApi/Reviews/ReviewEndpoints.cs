@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Fulfillment.Contracts.Reviews;
+using Fulfillment.Contracts.Workflows;
 using Fulfillment.OrderApi.Persistence;
 using Fulfillment.ServiceDefaults;
 using Microsoft.Data.SqlClient;
@@ -31,6 +32,24 @@ public static partial class ReviewEndpoints
     public static void MapReviews(this WebApplication app)
     {
         var reviews = app.MapGroup(ReviewRoutes.Reviews).RequireApiKey(ApiKeyVariable);
+        reviews.MapPost("/{reviewId:guid}/escalate", async (Guid reviewId, EscalateReviewRequest request, ReviewSteps steps, IOptions<ReviewOptions> options, CancellationToken ct) =>
+        {
+            if (request is null || !options.Value.IsOperator(request.OperatorId) || string.IsNullOrWhiteSpace(request.Reason) || request.Reason.Length > 400)
+            {
+                return Problem(400, ReviewErrorCodes.InvalidDecision, "a configured operatorId and a reason (at most 400 characters) are required");
+            }
+
+            var (result, next) = await steps.EscalateAsync(reviewId, ct);
+            return result switch
+            {
+                "Escalated" or "Replayed" when next is not null => Results.Ok(new ReviewEscalated(reviewId, next.ReviewId, next.Round, result == "Replayed")),
+                "NotFound" => Problem(404, ReviewErrorCodes.ReviewNotFound, "no such review"),
+                "NoFurtherRound" => Problem(409, ReviewErrorCodes.NoFurtherRound, "the last round cannot be escalated"),
+                ReviewStates.Expired => Problem(409, ReviewErrorCodes.ReviewExpired, "the review deadline has passed"),
+                ReviewStates.Cancelled => Problem(409, ReviewErrorCodes.ReviewCancelled, "the order was cancelled while the review was pending"),
+                _ => Problem(409, ReviewErrorCodes.ReviewAlreadyDecided, "the review was already decided"),
+            };
+        });
         reviews.MapPost("/{reviewId:guid}/decision", DecideAsync);
         reviews.MapGet("/{reviewId:guid}", GetAsync);
         reviews.MapGet("/", ListAsync);

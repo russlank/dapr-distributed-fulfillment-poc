@@ -132,6 +132,78 @@ public sealed class ReviewSteps(string connectionString, ReviewOptions options, 
     }
 
     /// <summary>
+    /// Manual escalation: a Pending round before its deadline becomes Escalated, the next round opens (fresh deadline),
+    /// and a pending signal wakes the workflow waiting for the old round; one OrderDb transaction under the order's
+    /// lock. A repeat returns the same next round. The last round cannot be escalated.
+    /// </summary>
+    public async Task<(string Result, ReviewRound? Next)> EscalateAsync(Guid reviewId, CancellationToken ct = default)
+    {
+        await using var connection = await OpenAsync(ct);
+        await using var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct);
+        Guid orderId;
+        await using (var find = new SqlCommand("SELECT OrderId FROM orders.ReviewTask WHERE ReviewId = @r", connection, tx))
+        {
+            find.Parameters.AddWithValue("@r", reviewId);
+            if (await find.ExecuteScalarAsync(ct) is not Guid found)
+            {
+                return ("NotFound", null);
+            }
+
+            orderId = found;
+        }
+
+        var (status, _) = await FulfillmentSteps.LockOrThrowAsync(connection, tx, orderId, ct);
+        var review = await ReadAsync(connection, tx, reviewId, orderId, ct);
+        if (review.Status == ReviewStates.Escalated)
+        {
+            var existing = await RoundAsync(connection, tx, orderId, review.Round + 1, ct);
+            await tx.CommitAsync(ct);
+            return ("Replayed", existing is null ? null : Round(StepOutcomes.AlreadyApplied, existing.Value, status));
+        }
+
+        if (review.Status != ReviewStates.Pending || OrderStatuses.IsTerminal(status))
+        {
+            await tx.CommitAsync(ct);
+            return (review.Status, null);
+        }
+
+        if (review.Round >= options.Rounds)
+        {
+            await tx.CommitAsync(ct);
+            return ("NoFurtherRound", null);
+        }
+
+        await using (var escalate = new SqlCommand(
+                         "UPDATE orders.ReviewTask SET Status = 'Escalated', ExpiredAt = SYSUTCDATETIME() WHERE ReviewId = @r AND Status = 'Pending' AND SYSUTCDATETIME() < DeadlineAt;",
+                         connection, tx))
+        {
+            escalate.Parameters.AddWithValue("@r", reviewId);
+            if (await escalate.ExecuteNonQueryAsync(ct) == 0)
+            {
+                await tx.CommitAsync(ct);
+                return (ReviewStates.Expired, null);
+            }
+        }
+
+        var next = await RoundAsync(connection, tx, orderId, review.Round + 1, ct) ?? await InsertRoundAsync(connection, tx, orderId, review.Round + 1, ct);
+        await using (var signal = new SqlCommand(
+                         """
+                         INSERT orders.PendingSignal (OrderId, InstanceId, EventName, CausedBy, State, Attempts)
+                         SELECT @o, @i, @n, @r, 'Pending', 0 WHERE NOT EXISTS (SELECT 1 FROM orders.PendingSignal WHERE CausedBy = @r AND EventName = @n);
+                         """, connection, tx))
+        {
+            signal.Parameters.AddWithValue("@o", orderId);
+            signal.Parameters.AddWithValue("@i", FulfillmentWorkflow.InstanceId(orderId));
+            signal.Parameters.AddWithValue("@n", ReviewSignals.EventName(reviewId));
+            signal.Parameters.AddWithValue("@r", reviewId);
+            await signal.ExecuteNonQueryAsync(ct);
+        }
+
+        await tx.CommitAsync(ct);
+        return ("Escalated", Round(StepOutcomes.Applied, next, status));
+    }
+
+    /// <summary>
     /// Expires the round if SQL time reached its deadline and it is still Pending; then opens the next
     /// round (fresh deadline) or, after the last round, rejects the order (ReviewExpired) and closes
     /// its start request. Repeats return the same result; a decided review is never expired.
@@ -143,7 +215,7 @@ public sealed class ReviewSteps(string connectionString, ReviewOptions options, 
         await using var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct);
         var (status, _) = await FulfillmentSteps.LockOrThrowAsync(connection, tx, request.OrderId, ct);
         var review = await ReadAsync(connection, tx, request.ReviewId, request.OrderId, ct);
-        if (OrderStatuses.IsTerminal(status) && review.Status != ReviewStates.Expired)
+        if (OrderStatuses.IsTerminal(status) && review.Status is not (ReviewStates.Expired or ReviewStates.Escalated))
         {
             await tx.CommitAsync(ct);
             return new ExpiryResult(ExpiryOutcomes.AlreadyTerminal, null, status.ToString());
@@ -170,7 +242,7 @@ public sealed class ReviewSteps(string connectionString, ReviewOptions options, 
             }
         }
 
-        // The round is Expired (now or by an earlier execution).
+        // The round is Expired (now or by an earlier execution) or Escalated (by an operator; its next round exists).
         if (review.Round < options.Rounds)
         {
             var next = await RoundAsync(connection, tx, request.OrderId, review.Round + 1, ct)

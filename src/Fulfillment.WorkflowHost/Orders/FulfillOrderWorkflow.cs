@@ -30,7 +30,8 @@ namespace Fulfillment.WorkflowHost.Orders;
 ///
 /// After reservation: payment authorization at the external provider (payment service), packing (simulated
 /// "stub-" steps), the cancellation point of no return, one extension of the holds, the capture, and the
-/// consumption of the holds (see FulfillOrderWorkflow.Payment.cs). Shipment does not exist yet.
+/// consumption of the holds (see FulfillOrderWorkflow.Payment.cs), then dispatch to the carrier and the wait for
+/// its terminal status (see FulfillOrderWorkflow.Shipping.cs).
 /// </summary>
 public sealed partial class FulfillOrderWorkflow : Workflow<FulfillmentInput, FulfillmentResult>
 {
@@ -163,7 +164,7 @@ public sealed partial class FulfillOrderWorkflow : Workflow<FulfillmentInput, Fu
                 return new FulfillmentResult(FulfillmentOutcomes.Fenced, resolution.OrderStatus, 0);
             }
 
-            if (resolution.State == ReviewStates.Expired || resolution.DeadlinePassed)
+            if (resolution.State is ReviewStates.Expired or ReviewStates.Escalated || resolution.DeadlinePassed)
             {
                 var expiry = await context.CallActivityAsync<ExpiryResult>(FulfillmentWorkflow.ExpireOrEscalateReviewActivity,
                     new ExpireReviewRequest(orderId, round.ReviewId), OnOrderApi);

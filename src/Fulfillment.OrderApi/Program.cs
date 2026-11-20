@@ -36,8 +36,11 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton(sp => new OrderLifecycleSteps(orderDb, Checkpoints(sp)));
 builder.Services.AddSingleton(new CancellationSteps(orderDb));
 builder.Services.AddTransient(sp => new Fulfillment.OrderApi.Interventions.InterventionResolutions(orderDb, sp.GetRequiredService<WorkflowHostClient>()));
-builder.Services.AddHostedService(sp => new Fulfillment.OrderApi.Interventions.RepairDispatcher(orderDb, sp.GetRequiredService<IServiceScopeFactory>(),
-    sp.GetRequiredService<RuntimeIdentity>(), sp.GetRequiredService<ILogger<Fulfillment.OrderApi.Interventions.RepairDispatcher>>()));
+if (builder.Configuration.GetValue("RepairDispatcher:Enabled", true))
+{
+    builder.Services.AddHostedService(sp => new Fulfillment.OrderApi.Interventions.RepairDispatcher(orderDb, sp.GetRequiredService<IServiceScopeFactory>(),
+        sp.GetRequiredService<RuntimeIdentity>(), sp.GetRequiredService<ILogger<Fulfillment.OrderApi.Interventions.RepairDispatcher>>()));
+}
 
 // Carrier callbacks: the signed ingress (inbox + forward command) and the forwarder to Shipping.
 builder.Services.Configure<Fulfillment.OrderApi.Carrier.CarrierForwarderOptions>(builder.Configuration.GetSection(Fulfillment.OrderApi.Carrier.CarrierForwarderOptions.Section));
