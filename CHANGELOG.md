@@ -4,6 +4,12 @@ Releases of the PoC; each tag `v<version>` marks a verified milestone.
 Details of a release: `docs/releases/`. What broke on the way:
 [docs/journal.md](docs/journal.md).
 
+## Unreleased (0.5.0-dev)
+
+- Development towards M4 (outbox publication, event distribution, history
+  and projections, the reconciler). Entries are added as functionality is
+  verified.
+
 ## v0.4.0: Payment, shipping, compensation, cancellation, and interventions (M3)
 
 - Payment (M3): a payment service (`PaymentDb`) against an external payment
