@@ -5,10 +5,11 @@ using Fulfillment.ClientSimulator.Runs;
 using Fulfillment.ClientSimulator.Workload;
 using Fulfillment.Contracts.Orders;
 using Fulfillment.Contracts.Reviews;
+using Fulfillment.Contracts.Workflows;
 
 namespace Fulfillment.ClientSimulator;
 
-/// <summary>Command-line surface of the client simulator (M1 customer and operator commands).</summary>
+/// <summary>Command-line surface of the client simulator (customer and operator commands).</summary>
 public static class Cli
 {
     public const string UrlsVariable = "ORDER_API_URLS";
@@ -30,6 +31,11 @@ public static class Cli
             Load(output, errors),
             Approve(output, errors),
             Inspect(output, errors),
+            Cancel(output, errors),
+            Reviews(output, errors),
+            Escalate(output, errors),
+            Resolve(output, errors),
+            Operator(output, errors),
             LegacyCommands.Identity(),
             LegacyCommands.Probe(),
         };
@@ -534,6 +540,224 @@ public static class Cli
         }
 
         return lines;
+    }
+
+    private static (List<Guid> Orders, bool Ok) OrdersFrom(ParseResult parse, Option<Guid[]> orders, Option<string?> from, List<string> problems)
+    {
+        var ids = (parse.GetValue(orders) ?? []).ToList();
+        return parse.GetValue(from) is { } file && !TryReadOrderIds(file, ids, problems) ? (ids, false) : (ids, true);
+    }
+
+    private static async Task<int> WriteAsync(RunResult result, ApiClient api, Common common, ParseResult parse, TextWriter stdout, TextWriter stderr, CancellationToken ct)
+    {
+        await ResultJson.WriteAsync(result, api.Credentials.Redactor, parse.GetValue(common.Output), stdout, stderr, ct);
+        return result.ExitCode;
+    }
+
+    private static Command Cancel(TextWriter stdout, TextWriter stderr)
+    {
+        var common = new Common();
+        var orders = new Option<Guid[]>("--order") { Description = "Order to cancel; repeat for more" };
+        var from = new Option<string?>("--from") { Description = "Cancel every order in this result file" };
+        var command = new Command("cancel", "Request cancellation of orders (CUSTOMER_API_KEY); refused once the dispatch has started") { orders, from };
+        common.AddTo(command);
+        command.SetAction(async (parse, ct) =>
+        {
+            var problems = new List<string>();
+            var (ids, ok) = OrdersFrom(parse, orders, from, problems);
+            if (ok && ids.Count == 0)
+            {
+                problems.Add("name at least one --order or --from file");
+            }
+
+            var (api, apiProblems) = common.Create(parse);
+            problems.AddRange(apiProblems);
+            if (problems.Count > 0 || api is null)
+            {
+                return await UsageAsync(stderr, problems);
+            }
+
+            return await WriteAsync(await CancelRun.RunAsync(api, ids, parse.GetValue(common.Replica), ct), api, common, parse, stdout, stderr, ct);
+        });
+        return command;
+    }
+
+    private static Command Reviews(TextWriter stdout, TextWriter stderr)
+    {
+        var common = new Common();
+        var orders = new Option<Guid[]>("--order") { Description = "Show this order's reviews; repeat for more" };
+        var from = new Option<string?>("--from") { Description = "Show the reviews of every order in this result file" };
+        var status = new Option<string?>("--status") { Description = "Only reviews with this status (for example Pending)" };
+        var command = new Command("reviews", "List reviews (OPERATOR_API_KEY): of the named orders, or all with --status") { orders, from, status };
+        common.AddTo(command);
+        command.SetAction(async (parse, ct) =>
+        {
+            var problems = new List<string>();
+            var (ids, ok) = OrdersFrom(parse, orders, from, problems);
+            if (ok && ids.Count == 0 && parse.GetValue(status) is null)
+            {
+                problems.Add("name at least one --order, --from file, or --status");
+            }
+
+            var (api, apiProblems) = common.Create(parse);
+            problems.AddRange(apiProblems);
+            if (problems.Count > 0 || api is null)
+            {
+                return await UsageAsync(stderr, problems);
+            }
+
+            return await WriteAsync(await ReviewsRun.RunAsync(api, ids, parse.GetValue(status), parse.GetValue(common.Replica), ct), api, common, parse, stdout, stderr, ct);
+        });
+        return command;
+    }
+
+    private static Command Escalate(TextWriter stdout, TextWriter stderr)
+    {
+        var common = new Common();
+        var orders = new Option<Guid[]>("--order") { Description = "Escalate this order's pending round; repeat for more" };
+        var reviews = new Option<Guid[]>("--review") { Description = "Escalate this round directly; repeat for more" };
+        var from = new Option<string?>("--from") { Description = "Escalate the pending rounds of every order in this result file" };
+        var operatorId = new Option<string>("--operator") { Description = "Simulated operator id (configured on the server)", DefaultValueFactory = _ => "operator-1" };
+        var reason = new Option<string>("--reason") { Description = "Reason (at most 400 characters)", DefaultValueFactory = _ => "escalated by the client simulator" };
+        var command = new Command("escalate", "Escalate pending review rounds before their deadline (OPERATOR_API_KEY); the next round opens")
+        {
+            orders, reviews, from, operatorId, reason,
+        };
+        common.AddTo(command);
+        command.SetAction(async (parse, ct) =>
+        {
+            var problems = new List<string>();
+            var (ids, ok) = OrdersFrom(parse, orders, from, problems);
+            var reviewIds = parse.GetValue(reviews) ?? [];
+            if (ok && ids.Count == 0 && reviewIds.Length == 0)
+            {
+                problems.Add("name at least one --order, --review, or --from file");
+            }
+
+            if (parse.GetValue(reason) is not { Length: > 0 and <= 400 })
+            {
+                problems.Add("--reason: 1-400 characters");
+            }
+
+            var (api, apiProblems) = common.Create(parse);
+            problems.AddRange(apiProblems);
+            if (problems.Count > 0 || api is null)
+            {
+                return await UsageAsync(stderr, problems);
+            }
+
+            var result = await EscalateRun.RunAsync(api, ids, reviewIds, parse.GetValue(operatorId)!, parse.GetValue(reason)!, parse.GetValue(common.Replica), ct);
+            return await WriteAsync(result, api, common, parse, stdout, stderr, ct);
+        });
+        return command;
+    }
+
+    private static Command Resolve(TextWriter stdout, TextWriter stderr)
+    {
+        var common = new Common();
+        var cases = new Option<Guid[]>("--case") { Description = "Intervention case to resolve; repeat for more" };
+        var action = new Option<string>("--action") { Description = "ConfirmExternalSuccess, ConfirmExternalFailure, or Acknowledge", Required = true };
+        action.AcceptOnlyFromAmong(CaseActions.ConfirmExternalSuccess, CaseActions.ConfirmExternalFailure, CaseActions.Acknowledge);
+        var operatorId = new Option<string>("--operator") { Description = "Simulated operator id", DefaultValueFactory = _ => "operator-1" };
+        var evidence = new Option<string>("--evidence") { Description = "What the operator checked (at most 2000 characters)", Required = true };
+        var seed = new Option<string>("--resolution-seed")
+        {
+            Description = "Part of each resolution id: the same command resolves with the same ids (a rerun is a replay)",
+            DefaultValueFactory = _ => "default",
+        };
+        var command = new Command("resolve", "Resolve intervention cases (OPERATOR_API_KEY)") { cases, action, operatorId, evidence, seed };
+        common.AddTo(command);
+        command.SetAction(async (parse, ct) =>
+        {
+            var problems = new List<string>();
+            var caseIds = parse.GetValue(cases) ?? [];
+            if (caseIds.Length == 0)
+            {
+                problems.Add("name at least one --case");
+            }
+
+            if (parse.GetValue(evidence) is not { Length: > 0 and <= 2000 })
+            {
+                problems.Add("--evidence: 1-2000 characters");
+            }
+
+            var (api, apiProblems) = common.Create(parse);
+            problems.AddRange(apiProblems);
+            if (problems.Count > 0 || api is null)
+            {
+                return await UsageAsync(stderr, problems);
+            }
+
+            var result = await ResolveRun.RunAsync(api, caseIds, parse.GetValue(action)!, parse.GetValue(operatorId)!, parse.GetValue(evidence)!, parse.GetValue(seed)!,
+                parse.GetValue(common.Replica), ct);
+            return await WriteAsync(result, api, common, parse, stdout, stderr, ct);
+        });
+        return command;
+    }
+
+    private static Command Operator(TextWriter stdout, TextWriter stderr)
+    {
+        var common = new Common();
+        var orders = new Option<Guid[]>("--order") { Description = "Order handled by the scripted operator; repeat for more" };
+        var from = new Option<string?>("--from") { Description = "Handle every order in this result file" };
+        var seed = new Option<ulong>("--seed") { Description = "Seed of the operator's choices: the same seed and orders give the same plan and decision ids", Required = true };
+        var approve = new Option<double>("--approve") { Description = "Weight of approve", DefaultValueFactory = _ => 1 };
+        var reject = new Option<double>("--reject") { Description = "Weight of reject", DefaultValueFactory = _ => 0 };
+        var escalate = new Option<double>("--escalate") { Description = "Weight of escalate (then approve the next round)", DefaultValueFactory = _ => 0 };
+        var ignore = new Option<double>("--ignore") { Description = "Weight of ignore (the deadline policy decides)", DefaultValueFactory = _ => 0 };
+        var operators = new Option<string[]>("--operators") { Description = "Operator ids to draw from (configured on the server)", DefaultValueFactory = _ => ["operator-1"] };
+        var wait = new Option<double>("--wait") { Description = "Seconds to wait for an order's review to appear", DefaultValueFactory = _ => 30 };
+        var planOnly = new Option<bool>("--plan-only") { Description = "Print the plan and its digest without sending anything" };
+        var run = new Command("run", "Run the seeded scripted operator over orders (OPERATOR_API_KEY)")
+        {
+            orders, from, seed, approve, reject, escalate, ignore, operators, wait, planOnly,
+        };
+        common.AddTo(run);
+        run.SetAction(async (parse, ct) =>
+        {
+            var problems = new List<string>();
+            var (ids, ok) = OrdersFrom(parse, orders, from, problems);
+            if (ok && ids.Count == 0)
+            {
+                problems.Add("name at least one --order or --from file");
+            }
+
+            var weights = new OperatorWeights(parse.GetValue(approve), parse.GetValue(reject), parse.GetValue(escalate), parse.GetValue(ignore));
+            if (weights.Approve < 0 || weights.Reject < 0 || weights.Escalate < 0 || weights.Ignore < 0 || !(weights.Total > 0))
+            {
+                problems.Add("--approve/--reject/--escalate/--ignore: weights at least 0, not all 0");
+            }
+
+            var ops = (parse.GetValue(operators) ?? []).SelectMany(o => o.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)).ToList();
+            if (ops.Count == 0)
+            {
+                problems.Add("--operators: at least one operator id");
+            }
+
+            if (problems.Count > 0)
+            {
+                return await UsageAsync(stderr, problems);
+            }
+
+            var plan = OperatorRun.Plan(ids, parse.GetValue(seed), weights, ops);
+            if (parse.GetValue(planOnly))
+            {
+                var printed = new { command = "operator", mode = "plan", seed = parse.GetValue(seed), weights, planDigest = OperatorRun.Digest(plan), plan };
+                await stdout.WriteLineAsync(System.Text.Json.JsonSerializer.Serialize(printed, ResultJson.Options));
+                return ExitCodes.Ok;
+            }
+
+            var (api, apiProblems) = common.Create(parse);
+            if (apiProblems.Count > 0 || api is null)
+            {
+                return await UsageAsync(stderr, apiProblems);
+            }
+
+            var result = await OperatorRun.RunAsync(api, plan, parse.GetValue(seed), TimeSpan.FromSeconds(Math.Clamp(parse.GetValue(wait), 0, 3600)),
+                parse.GetValue(common.Replica), ct);
+            return await WriteAsync(result, api, common, parse, stdout, stderr, ct);
+        });
+        return new Command("operator", "Scripted operators") { run };
     }
 
     private static bool TryReadOrderIds(string file, List<Guid> orderIds, List<string> problems)

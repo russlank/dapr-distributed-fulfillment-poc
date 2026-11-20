@@ -6,6 +6,8 @@ using Fulfillment.ClientSimulator.Runs;
 using Fulfillment.ClientSimulator.Workload;
 using Fulfillment.ComputeWorker.Checks;
 using Fulfillment.Contracts.Orders;
+using Fulfillment.Contracts.Reviews;
+using Fulfillment.Contracts.Workflows;
 using Fulfillment.OrderApi.Orders;
 using Xunit;
 
@@ -447,6 +449,13 @@ public class ApiClientTests
     [InlineData("load", "--replay")]
     [InlineData("approve")]
     [InlineData("inspect")]
+    [InlineData("cancel")]
+    [InlineData("reviews")]
+    [InlineData("escalate")]
+    [InlineData("escalate", "--order", "6f0c1b8e-3f7a-4c39-9d55-2b1a7e5f0c11", "--reason", "")]
+    [InlineData("resolve", "--action", "Acknowledge", "--evidence", "checked")]
+    [InlineData("operator", "run", "--seed", "1")]
+    [InlineData("operator", "run", "--seed", "1", "--order", "6f0c1b8e-3f7a-4c39-9d55-2b1a7e5f0c11", "--approve", "0")]
     [InlineData("single", "--url", "http://user:pw@host")]
     public async Task Cli_InvalidUse_ExitsTwo(params string[] args)
     {
@@ -460,11 +469,129 @@ public class ApiClientTests
     }
 
     [Fact]
-    public void Cli_Help_ListsTheM1Commands()
+    public void Cli_Help_ListsTheCommands()
     {
         var names = Cli.Build().Subcommands.Select(c => c.Name).ToList();
 
-        Assert.Equal(["single", "duplicates", "conflicts", "contention", "load", "approve", "inspect", "identity", "probe"], names);
+        Assert.Equal(["single", "duplicates", "conflicts", "contention", "load", "approve", "inspect", "cancel", "reviews", "escalate", "resolve", "operator", "identity", "probe"], names);
+    }
+
+    /// <summary>A tiny review server: rounds per order, decisions keyed by decision id, escalation opens round 2 once.</summary>
+    private sealed class ReviewServer
+    {
+        private readonly Dictionary<Guid, List<(Guid Id, int Round, string Status, Guid? DecisionId)>> rounds = [];
+
+        public ReviewServer(params Guid[] orders)
+        {
+            foreach (var order in orders)
+            {
+                rounds[order] = [(Guid.NewGuid(), 1, "Pending", null)];
+            }
+        }
+
+        public int Decisions { get; private set; }
+
+        public HttpResponseMessage Handle(HttpRequestMessage request, string? body)
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (request.Method == HttpMethod.Get)
+            {
+                var order = Guid.Parse(request.RequestUri.Query.Split('=')[1]);
+                var views = rounds[order].Select(r => new ReviewView(r.Id, order, "manual", r.Round, r.Status, DateTime.UtcNow, null, r.DecisionId));
+                return Json(HttpStatusCode.OK, System.Text.Json.JsonSerializer.Serialize(views, ResultJson.Options));
+            }
+
+            var reviewId = Guid.Parse(path.Split('/')[2]);
+            var (orderId, list) = rounds.Single(kv => kv.Value.Any(r => r.Id == reviewId));
+            var index = list.FindIndex(r => r.Id == reviewId);
+            var round = list[index];
+            if (path.EndsWith("/escalate", StringComparison.Ordinal))
+            {
+                var replay = round.Status == "Escalated";
+                if (!replay)
+                {
+                    list[index] = round with { Status = "Escalated" };
+                    list.Add((Guid.NewGuid(), 2, "Pending", null));
+                }
+
+                return Json(HttpStatusCode.OK, System.Text.Json.JsonSerializer.Serialize(new ReviewEscalated(reviewId, list[^1].Id, 2, replay), ResultJson.Options));
+            }
+
+            var decision = System.Text.Json.JsonSerializer.Deserialize<SubmitDecisionRequest>(body!, ResultJson.Options)!;
+            if (round.Status == "Pending")
+            {
+                Decisions++;
+                list[index] = round with { Status = decision.Outcome == "approve" ? "Approved" : "Rejected", DecisionId = decision.DecisionId };
+                return Json(HttpStatusCode.OK, System.Text.Json.JsonSerializer.Serialize(new DecisionAccepted(reviewId, decision.DecisionId, decision.Outcome, false), ResultJson.Options));
+            }
+
+            return round.DecisionId == decision.DecisionId
+                ? Json(HttpStatusCode.OK, System.Text.Json.JsonSerializer.Serialize(new DecisionAccepted(reviewId, decision.DecisionId, decision.Outcome, true), ResultJson.Options))
+                : Problem(HttpStatusCode.Conflict, ReviewErrorCodes.ReviewAlreadyDecided);
+        }
+
+        private static HttpResponseMessage Json(HttpStatusCode status, string body) => new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+    }
+
+    [Fact]
+    public async Task OperatorRun_SameSeedTwice_SecondRunIsAllReplays_NoSecondDecision()
+    {
+        var orders = Enumerable.Range(0, 12).Select(i => new Guid(i + 1, 0, 0, [0, 0, 0, 0, 0, 0, 0, (byte)i])).ToArray();
+        var server = new ReviewServer(orders);
+        using var handler = new ScriptedHandler(async (r, ct) => server.Handle(r, r.Content is null ? null : await r.Content.ReadAsStringAsync(ct)));
+        var api = Client(handler, 1, Fast);
+        var plan = OperatorRun.Plan(orders, 30, new OperatorWeights(1, 1, 1, 1), ["operator-1", "operator-2"]);
+
+        var first = await OperatorRun.RunAsync(api, plan, 30, TimeSpan.Zero, null, TestContext.Current.CancellationToken);
+        var decisions = server.Decisions;
+        var second = await OperatorRun.RunAsync(api, plan, 30, TimeSpan.Zero, null, TestContext.Current.CancellationToken);
+
+        var firstItems = (IReadOnlyList<OperatorRunRecord>)first.Items;
+        var secondItems = (IReadOnlyList<OperatorRunRecord>)second.Items;
+        Assert.Equal((ExitCodes.Ok, ExitCodes.Ok), (first.ExitCode, second.ExitCode));
+        Assert.Equal(plan.Count(c => c.Action != OperatorRun.Ignore), decisions);
+        Assert.Equal(decisions, server.Decisions);
+        Assert.All(firstItems.Where(r => r.Action != OperatorRun.Ignore), r => Assert.Equal(DecisionResults.Accepted, r.Result));
+        Assert.All(secondItems.Where(r => r.Action != OperatorRun.Ignore), r => Assert.Equal(DecisionResults.Replayed, r.Result));
+        Assert.Contains(secondItems, r => r.Action == OperatorRun.Escalate && r.Calls.Any(c => c.Result == "replayed"));
+        Assert.Equal(first.WorkloadDigest, second.WorkloadDigest);
+    }
+
+    [Fact]
+    public async Task Cancel_MapsRecordedRepeatAndRefusal()
+    {
+        var calls = 0;
+        using var handler = new ScriptedHandler(_ => ++calls switch
+        {
+            1 => new HttpResponseMessage(HttpStatusCode.Accepted) { Content = new StringContent("{\"cancellation\":\"Requested\"}", Encoding.UTF8, "application/json") },
+            2 => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"cancellation\":\"Requested\"}", Encoding.UTF8, "application/json") },
+            _ => Problem(HttpStatusCode.Conflict, OrderErrorCodes.DispatchStarted),
+        });
+        var api = Client(handler, 1, Fast);
+
+        var result = await CancelRun.RunAsync(api, [Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid()], null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["recorded", "already-requested", OrderErrorCodes.DispatchStarted], ((IReadOnlyList<OperatorCallRecord>)result.Items).Select(r => r.Result));
+        Assert.Equal(ExitCodes.ExpectationFailed, result.ExitCode);
+        Assert.All(handler.Requests, r => Assert.Equal("customer-key", r.ApiKey));
+    }
+
+    [Fact]
+    public async Task Resolve_SendsTheDerivedResolutionId_RepeatIsTheSameRequest()
+    {
+        using var handler = new ScriptedHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{\"caseId\":\"00000000-0000-0000-0000-000000000001\",\"action\":\"Acknowledge\",\"path\":\"RecordOnly\",\"replayed\":false}", Encoding.UTF8, "application/json"),
+        });
+        var api = Client(handler, 1, Fast);
+        var caseId = Guid.NewGuid();
+
+        var result = await ResolveRun.RunAsync(api, [caseId, caseId], CaseActions.Acknowledge, "operator-1", "checked", "s", null, TestContext.Current.CancellationToken);
+
+        Assert.Equal("resolved:RecordOnly", ((IReadOnlyList<OperatorCallRecord>)result.Items)[0].Result);
+        Assert.Equal(handler.Requests[0].Body, handler.Requests[1].Body);
+        Assert.Contains(ResolveRun.ResolutionId(caseId, CaseActions.Acknowledge, "operator-1", "s").ToString(), handler.Requests[0].Body!, StringComparison.Ordinal);
+        Assert.All(handler.Requests, r => Assert.Equal("operator-key", r.ApiKey));
     }
 
     private static ApiClient Client(ScriptedHandler handler, int replicas, RetryPolicy policy)
@@ -501,5 +628,65 @@ public class ApiClientTests
                 request.Headers.TryGetValues(OrderRoutes.ApiKeyHeader, out var apiKey) ? apiKey.Single() : null, body));
             return await script[Math.Min(Requests.Count, script.Length) - 1](request, cancellationToken);
         }
+    }
+}
+
+/// <summary>S30 at unit level: the seeded scripted operator's plan depends only on the seed, weights, operators, and order ids.</summary>
+public class OperatorPlanTests
+{
+    private static readonly Guid[] Orders = [.. Enumerable.Range(0, 40).Select(i => new Guid(i + 1, 7, 7, [1, 2, 3, 4, 5, 6, 7, (byte)i]))];
+
+    private static readonly OperatorWeights Mixed = new(0.4, 0.2, 0.2, 0.2);
+
+    [Fact]
+    public void Plan_SameInputsTwice_SameChoicesAndDigest()
+    {
+        var a = OperatorRun.Plan(Orders, 30, Mixed, ["operator-1", "operator-2"]);
+        var b = OperatorRun.Plan([.. Orders], 30, Mixed with { }, ["operator-1", "operator-2"]);
+
+        Assert.Equal(a, b);
+        Assert.Equal(OperatorRun.Digest(a), OperatorRun.Digest(b));
+        Assert.Equal(4, a.Select(c => c.Action).Distinct().Count());
+    }
+
+    [Fact]
+    public void Plan_ChoiceOfAnOrder_DoesNotDependOnTheOtherOrders()
+    {
+        var all = OperatorRun.Plan(Orders, 30, Mixed, ["operator-1", "operator-2"]);
+        var reversedSubset = OperatorRun.Plan([.. Orders.Skip(10).Reverse()], 30, Mixed, ["operator-1", "operator-2"]);
+
+        Assert.All(reversedSubset, c => Assert.Equal(all.Single(x => x.OrderId == c.OrderId), c));
+    }
+
+    [Fact]
+    public void Plan_OtherSeed_ChangesTheChoices()
+    {
+        Assert.NotEqual(OperatorRun.Digest(OperatorRun.Plan(Orders, 30, Mixed, ["operator-1"])), OperatorRun.Digest(OperatorRun.Plan(Orders, 31, Mixed, ["operator-1"])));
+    }
+
+    [Fact]
+    public void Plan_OnlyApproveWeight_ApprovesEverything()
+    {
+        Assert.All(OperatorRun.Plan(Orders, 5, new OperatorWeights(1, 0, 0, 0), ["operator-1"]), c => Assert.Equal(OperatorRun.Approve, c.Action));
+    }
+
+    [Fact]
+    public void Plan_GoldenInputs_KeepTheirDigestAcrossBuilds()
+    {
+        // A change here means the same seed no longer reproduces earlier operator runs. Change the plan only deliberately.
+        Assert.Equal("675b935152047a7c894771e3d10308940b0b4b5c69abda03c0b497c348478e17", OperatorRun.Digest(OperatorRun.Plan(Orders, 30, Mixed, ["operator-1", "operator-2"])));
+    }
+
+    [Fact]
+    public void ResolutionId_IsStableAndDependsOnEveryPart()
+    {
+        var caseId = Guid.Parse("6f0c1b8e-3f7a-4c39-9d55-2b1a7e5f0c11");
+        var id = ResolveRun.ResolutionId(caseId, "Acknowledge", "operator-1", "default");
+
+        Assert.Equal(id, ResolveRun.ResolutionId(caseId, "Acknowledge", "operator-1", "default"));
+        Assert.NotEqual(id, ResolveRun.ResolutionId(caseId, "ConfirmExternalFailure", "operator-1", "default"));
+        Assert.NotEqual(id, ResolveRun.ResolutionId(caseId, "Acknowledge", "operator-2", "default"));
+        Assert.NotEqual(id, ResolveRun.ResolutionId(caseId, "Acknowledge", "operator-1", "other"));
+        Assert.Equal(8, id.ToByteArray(bigEndian: true)[6] >> 4);
     }
 }
