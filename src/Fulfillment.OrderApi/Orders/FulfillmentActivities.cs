@@ -60,3 +60,12 @@ public sealed class FinalizeDeliveredActivity(OrderLifecycleSteps steps) : Workf
 {
     public override Task<StepResult> RunAsync(WorkflowActivityContext context, CompleteFulfillmentRequest input) => steps.FinalizeDeliveredAsync(input);
 }
+
+public sealed class RecordRepairOutcomeActivity(Fulfillment.OrderApi.Interventions.InterventionResolutions resolutions) : WorkflowActivity<RepairOutcomeRequest, StepResult>
+{
+    public override async Task<StepResult> RunAsync(WorkflowActivityContext context, RepairOutcomeRequest input)
+    {
+        await resolutions.RecordRepairOutcomeAsync(input, CancellationToken.None);
+        return new StepResult(StepOutcomes.Applied, null, "");
+    }
+}

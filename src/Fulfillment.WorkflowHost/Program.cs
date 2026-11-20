@@ -17,6 +17,7 @@ builder.Services.AddDaprWorkflow(options =>
 {
     options.RegisterWorkflow<RuntimeProbeWorkflow>(RuntimeProbe.WorkflowName);
     options.RegisterWorkflow<FulfillOrderWorkflow>(FulfillmentWorkflow.Name);
+    options.RegisterWorkflow<RepairOrderWorkflow>(RepairWorkflow.Name);
 });
 
 var app = builder.Build();

@@ -49,6 +49,8 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
 
     public DbSet<OrderOutboxEntry> OrderOutbox => Set<OrderOutboxEntry>();
 
+    public DbSet<Fulfillment.OrderApi.Interventions.RepairStartRequest> RepairStartRequests => Set<Fulfillment.OrderApi.Interventions.RepairStartRequest>();
+
     public DbSet<SignalAttempt> SignalAttempts => Set<SignalAttempt>();
 
     public DbSet<ReviewWake> ReviewWakes => Set<ReviewWake>();
@@ -74,6 +76,7 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         ConfigurePendingSignal(modelBuilder.Entity<PendingSignal>());
         ConfigureSignalAttempt(modelBuilder.Entity<SignalAttempt>());
         ConfigureCarrier(modelBuilder);
+        ConfigureRepair(modelBuilder);
         ConfigureInterventionCase(modelBuilder.Entity<InterventionCase>());
         ConfigureReviewWake(modelBuilder.Entity<ReviewWake>());
     }
@@ -350,6 +353,29 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         attempt.HasIndex(a => new { a.SignalId, a.CalledAt }).HasDatabaseName("IX_SignalAttempt_Signal");
         attempt.HasOne<PendingSignal>().WithMany().HasForeignKey(a => a.SignalId).OnDelete(DeleteBehavior.Cascade);
     }
+
+    private static void ConfigureRepair(ModelBuilder modelBuilder) =>
+        modelBuilder.Entity<Fulfillment.OrderApi.Interventions.RepairStartRequest>(r =>
+        {
+            r.ToTable("RepairStartRequest", t =>
+            {
+                t.HasCheckConstraint("CK_RepairStartRequest_State", "[State] IN ('Pending', 'Started', 'Closed')");
+                t.HasCheckConstraint("CK_RepairStartRequest_Lease",
+                    "([LeaseOwner] IS NULL AND [LeaseExpiresAt] IS NULL AND [LeaseToken] IS NULL) OR ([LeaseOwner] IS NOT NULL AND [LeaseExpiresAt] IS NOT NULL AND [LeaseToken] IS NOT NULL)");
+            });
+            r.HasKey(x => x.CaseId);
+            r.Property(x => x.InstanceId).HasMaxLength(80).IsUnicode(false);
+            r.Property(x => x.State).HasMaxLength(16).IsUnicode(false);
+            r.Property(x => x.NextAttemptAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+            r.Property(x => x.LeaseOwner).HasMaxLength(64).IsUnicode(false);
+            r.Property(x => x.LeaseExpiresAt).HasColumnType("datetime2(3)");
+            r.Property(x => x.LastError).HasMaxLength(200);
+            r.Property(x => x.CreatedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+            r.Property(x => x.StartedAt).HasColumnType("datetime2(3)");
+            r.Property(x => x.ClosedAt).HasColumnType("datetime2(3)");
+            r.HasOne<InterventionCase>().WithOne().HasForeignKey<Fulfillment.OrderApi.Interventions.RepairStartRequest>(x => x.CaseId);
+            r.HasIndex(x => x.InstanceId).IsUnique();
+        });
 
     private static void ConfigureCarrier(ModelBuilder modelBuilder)
     {

@@ -38,7 +38,7 @@ public sealed class WorkflowManagementPolicy
     /// The order API (start dispatcher, probes) manages the runtime probe and the fulfillment
     /// workflow. Each further workflow type is added here deliberately, with its callers.
     /// </summary>
-    public static WorkflowManagementPolicy Default { get; } = new([AppIds.OrderApi], [RuntimeProbe.WorkflowName, FulfillmentWorkflow.Name]);
+    public static WorkflowManagementPolicy Default { get; } = new([AppIds.OrderApi], [RuntimeProbe.WorkflowName, FulfillmentWorkflow.Name, RepairWorkflow.Name]);
 
     public ManagementDecision CanStart(string? caller, string workflowName, string instanceId, bool replaceTerminal)
     {

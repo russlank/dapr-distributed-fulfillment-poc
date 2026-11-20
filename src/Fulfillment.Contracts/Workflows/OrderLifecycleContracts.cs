@@ -82,3 +82,41 @@ public sealed record ReadCaseRequest(Guid CaseId);
 /// <param name="Action">The resolution action once Resolved.</param>
 /// <param name="Created">This execution opened the case (false: it existed already for this key).</param>
 public sealed record CaseResult(Guid CaseId, string Kind, string State, string? Action, string OrderStatus, bool OrderTerminal, bool Created);
+
+/// <summary>Operator resolution of an intervention case (operator key).</summary>
+public static class InterventionRoutes
+{
+    public const string Interventions = "/interventions";
+}
+
+/// <param name="ResolutionId">Caller-chosen id; a retry sends the same id and payload.</param>
+/// <param name="Evidence">Reference to what the operator checked (for example the provider record).</param>
+public sealed record ResolveCaseRequest(Guid ResolutionId, string OperatorId, string Action, string Evidence);
+
+/// <param name="Path">Signal (the waiting workflow continues), Repair (a repair workflow runs the effects), or RecordOnly.</param>
+public sealed record CaseResolved(Guid CaseId, string Action, string Path, bool Replayed);
+
+public static class CasePaths
+{
+    public const string Signal = "Signal";
+    public const string Repair = "Repair";
+    public const string RecordOnly = "RecordOnly";
+}
+
+/// <summary>The repair workflow of a resolved case whose original workflow no longer waits (repair-{orderId:N}-{caseId:N}).</summary>
+public static class RepairWorkflow
+{
+    public const string Name = "RepairOrderWorkflow";
+
+    public static string InstanceId(Guid orderId, Guid caseId) => $"repair-{orderId:N}-{caseId:N}";
+
+    /// <summary>On order-api: records the repair's outcome on its case.</summary>
+    public const string RecordRepairOutcomeActivity = "RecordRepairOutcome";
+}
+
+/// <param name="AmountMinor">The order's stored price (for a refund of the full captured amount).</param>
+public sealed record RepairInput(Guid OrderId, Guid CaseId, string Kind, string Action, long AmountMinor, string Currency);
+
+public sealed record RepairOutcomeRequest(Guid CaseId, string Outcome);
+
+public sealed record RepairResult(string Outcome, string OrderStatus);

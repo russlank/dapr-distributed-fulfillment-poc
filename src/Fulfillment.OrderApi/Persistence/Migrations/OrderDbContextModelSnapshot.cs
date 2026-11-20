@@ -1107,6 +1107,73 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Fulfillment.OrderApi.Interventions.RepairStartRequest", b =>
+                {
+                    b.Property<Guid>("CaseId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ClosedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<string>("InstanceId")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(80)");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime?>("LeaseExpiresAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("LeaseOwner")
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<Guid?>("LeaseToken")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("NextAttemptAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("StartedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.HasKey("CaseId");
+
+                    b.HasIndex("InstanceId")
+                        .IsUnique();
+
+                    b.ToTable("RepairStartRequest", "orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_RepairStartRequest_Lease", "([LeaseOwner] IS NULL AND [LeaseExpiresAt] IS NULL AND [LeaseToken] IS NULL) OR ([LeaseOwner] IS NOT NULL AND [LeaseExpiresAt] IS NOT NULL AND [LeaseToken] IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_RepairStartRequest_State", "[State] IN ('Pending', 'Started', 'Closed')");
+                        });
+                });
+
             modelBuilder.Entity("Fulfillment.OrderApi.Domain.ExecutionClaim", b =>
                 {
                     b.HasOne("Fulfillment.OrderApi.Domain.Order", null)
@@ -1238,6 +1305,15 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                     b.HasOne("Fulfillment.OrderApi.Domain.Order", null)
                         .WithOne()
                         .HasForeignKey("Fulfillment.OrderApi.Domain.WorkflowStartRequest", "OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Interventions.RepairStartRequest", b =>
+                {
+                    b.HasOne("Fulfillment.OrderApi.Domain.InterventionCase", null)
+                        .WithOne()
+                        .HasForeignKey("Fulfillment.OrderApi.Interventions.RepairStartRequest", "CaseId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

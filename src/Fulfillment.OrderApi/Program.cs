@@ -35,6 +35,9 @@ builder.Services.AddSingleton(sp =>
 });
 builder.Services.AddSingleton(sp => new OrderLifecycleSteps(orderDb, Checkpoints(sp)));
 builder.Services.AddSingleton(new CancellationSteps(orderDb));
+builder.Services.AddTransient(sp => new Fulfillment.OrderApi.Interventions.InterventionResolutions(orderDb, sp.GetRequiredService<WorkflowHostClient>()));
+builder.Services.AddHostedService(sp => new Fulfillment.OrderApi.Interventions.RepairDispatcher(orderDb, sp.GetRequiredService<IServiceScopeFactory>(),
+    sp.GetRequiredService<RuntimeIdentity>(), sp.GetRequiredService<ILogger<Fulfillment.OrderApi.Interventions.RepairDispatcher>>()));
 
 // Carrier callbacks: the signed ingress (inbox + forward command) and the forwarder to Shipping.
 builder.Services.Configure<Fulfillment.OrderApi.Carrier.CarrierForwarderOptions>(builder.Configuration.GetSection(Fulfillment.OrderApi.Carrier.CarrierForwarderOptions.Section));
@@ -83,6 +86,7 @@ builder.Services.AddDaprWorkflow(options =>
     options.RegisterActivity<OpenInterventionCaseActivity>(OrderLifecycleActivities.OpenInterventionCase);
     options.RegisterActivity<ReadInterventionCaseActivity>(OrderLifecycleActivities.ReadInterventionCase);
     options.RegisterActivity<FinalizeDeliveredActivity>(OrderLifecycleActivities.FinalizeDelivered);
+    options.RegisterActivity<RecordRepairOutcomeActivity>(RepairWorkflow.RecordRepairOutcomeActivity);
 });
 
 var app = builder.Build();
@@ -91,6 +95,7 @@ await app.Services.GetRequiredService<ProbeStore>().EnsureSchemaAsync();
 await app.Services.GetRequiredService<Failpoints>().EnsureStoreAsync();
 app.MapServiceDefaults();
 Fulfillment.OrderApi.Carrier.CarrierIngress.MapCarrierIngress(app, orderDb);
+Fulfillment.OrderApi.Interventions.InterventionEndpoints.MapInterventions(app);
 // Every answer names the replica that produced it, so clients and scenarios can prove which
 // replica served a request instead of inferring it from the URL they used.
 var servedBy = app.Services.GetRequiredService<RuntimeIdentity>().Replica;
