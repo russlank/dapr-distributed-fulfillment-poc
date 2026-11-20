@@ -15,7 +15,22 @@ public static class OrderEndpoints
         var orders = app.MapGroup(OrderRoutes.Orders).RequireApiKey(ApiKeyVariable);
         orders.MapPost("/", SubmitAsync);
         orders.MapGet("/{orderId:guid}", GetAsync);
+        orders.MapPost("/{orderId:guid}/cancel", CancelAsync);
     }
+
+    /// <summary>
+    /// Customer cancellation: 202 recorded (the order ends Cancelled at the fulfillment's next check), 200 for a repeat
+    /// or an order already Cancelled, 409 once the dispatch has started or the order is otherwise terminal, 404.
+    /// </summary>
+    private static async Task<IResult> CancelAsync(Guid orderId, CancellationSteps cancellation, CancellationToken ct) =>
+        await cancellation.RequestAsync(orderId, ct) switch
+        {
+            CancelOutcome.Recorded => Results.Accepted(value: new { orderId, cancellation = "Requested" }),
+            CancelOutcome.AlreadyRequested => Results.Ok(new { orderId, cancellation = "Requested" }),
+            CancelOutcome.DispatchStarted => Problem(409, OrderErrorCodes.DispatchStarted, "the dispatch has started; the order can no longer be cancelled"),
+            CancelOutcome.OrderTerminal => Problem(409, OrderErrorCodes.OrderTerminal, "the order is already finished"),
+            _ => Problem(404, OrderErrorCodes.OrderNotFound, "no such order"),
+        };
 
     private static async Task<IResult> SubmitAsync(HttpRequest http, OrderAcceptance acceptance, CancellationToken ct)
     {

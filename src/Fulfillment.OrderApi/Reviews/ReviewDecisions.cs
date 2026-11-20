@@ -21,6 +21,7 @@ public enum DecisionOutcomeKind
     AlreadyDecided,
     Expired,
     Superseded,
+    Cancelled,
     NotFound,
 }
 
@@ -107,6 +108,8 @@ public sealed class ReviewDecisions(string connectionString, StepCheckpoint chec
                 return new DecisionResult(DecisionOutcomeKind.AlreadyDecided, review.Value.Status);
             case ReviewStates.Expired:
                 return new DecisionResult(review.Value.LaterRound ? DecisionOutcomeKind.Superseded : DecisionOutcomeKind.Expired, review.Value.Status);
+            case ReviewStates.Cancelled:
+                return new DecisionResult(DecisionOutcomeKind.Cancelled, review.Value.Status);
         }
 
         var outcome = Stored(request.Outcome);

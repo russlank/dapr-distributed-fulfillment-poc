@@ -138,6 +138,14 @@ public sealed class FulfillmentSteps(string connectionString, string replica, St
             return new StepResult(StepOutcomes.AlreadyApplied, key, status.ToString());
         }
 
+        // A cancellation recorded before reservation ends the order here (nothing reserved, nothing paid).
+        if (status is OrderStatus.Validating or OrderStatus.AwaitingApproval
+            && await CancellationSteps.CancelIfRequestedAsync(connection, tx, request.OrderId, status, checkpoint, ct))
+        {
+            await tx.CommitAsync(ct);
+            return new StepResult(StepOutcomes.AlreadyTerminal, key, nameof(OrderStatus.Cancelled));
+        }
+
         if (status == OrderStatus.Validating)
         {
             var risk = await StoredRiskAsync(connection, tx, request.OrderId, ct);

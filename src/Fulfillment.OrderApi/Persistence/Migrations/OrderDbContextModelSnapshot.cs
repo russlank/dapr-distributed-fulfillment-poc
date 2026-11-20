@@ -795,13 +795,13 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
 
                     b.ToTable("ReviewTask", "orders", t =>
                         {
-                            t.HasCheckConstraint("CK_ReviewTask_Lifecycle", "([Status] = 'Pending' AND [DecidedAt] IS NULL AND [DecisionId] IS NULL AND [ExpiredAt] IS NULL) OR ([Status] IN ('Approved', 'Rejected') AND [DecidedAt] IS NOT NULL AND [DecisionId] IS NOT NULL AND [ExpiredAt] IS NULL) OR ([Status] = 'Expired' AND [ExpiredAt] IS NOT NULL AND [DecidedAt] IS NULL AND [DecisionId] IS NULL)");
+                            t.HasCheckConstraint("CK_ReviewTask_Lifecycle", "([Status] = 'Pending' AND [DecidedAt] IS NULL AND [DecisionId] IS NULL AND [ExpiredAt] IS NULL) OR ([Status] IN ('Approved', 'Rejected') AND [DecidedAt] IS NOT NULL AND [DecisionId] IS NOT NULL AND [ExpiredAt] IS NULL) OR ([Status] = 'Expired' AND [ExpiredAt] IS NOT NULL AND [DecidedAt] IS NULL AND [DecisionId] IS NULL) OR ([Status] = 'Cancelled' AND [DecidedAt] IS NULL AND [DecisionId] IS NULL AND [ExpiredAt] IS NULL)");
 
                             t.HasCheckConstraint("CK_ReviewTask_Purpose", "[Purpose] IN ('Approval')");
 
                             t.HasCheckConstraint("CK_ReviewTask_Round", "[Round] >= 1");
 
-                            t.HasCheckConstraint("CK_ReviewTask_Status", "[Status] IN ('Pending', 'Approved', 'Rejected', 'Expired')");
+                            t.HasCheckConstraint("CK_ReviewTask_Status", "[Status] IN ('Pending', 'Approved', 'Rejected', 'Expired', 'Cancelled')");
                         });
                 });
 

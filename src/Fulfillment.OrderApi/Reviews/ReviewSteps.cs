@@ -111,6 +111,13 @@ public sealed class ReviewSteps(string connectionString, ReviewOptions options, 
             await wake.ExecuteNonQueryAsync(ct);
         }
 
+        if (review.Status == ReviewStates.Pending && status == OrderStatus.AwaitingApproval
+            && await CancellationSteps.CancelIfRequestedAsync(connection, tx, request.OrderId, status, checkpoint, ct))
+        {
+            await tx.CommitAsync(ct);
+            return new ReviewResolution(ReviewStates.Cancelled, review.DeadlinePassed, nameof(OrderStatus.Cancelled), true);
+        }
+
         if (review.Status == ReviewStates.Rejected && status == OrderStatus.AwaitingApproval)
         {
             var key = $"{request.OrderId:N}:review-rejected:{review.Round}";

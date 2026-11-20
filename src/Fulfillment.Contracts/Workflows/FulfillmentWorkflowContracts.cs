@@ -137,6 +137,9 @@ public static class ReviewStates
     public const string Approved = "Approved";
     public const string Rejected = "Rejected";
     public const string Expired = "Expired";
+
+    /// <summary>The order was cancelled while the review was pending; a decision is refused.</summary>
+    public const string Cancelled = "Cancelled";
 }
 
 /// <summary>Why the workflow resolves a review (recorded with every resolution).</summary>

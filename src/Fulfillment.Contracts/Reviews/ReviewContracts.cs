@@ -25,6 +25,9 @@ public static class ReviewErrorCodes
     public const string ReviewAlreadyDecided = "review-already-decided";
     public const string ReviewExpired = "review-expired";
     public const string ReviewSuperseded = "review-superseded";
+
+    /// <summary>The order was cancelled while the review was pending.</summary>
+    public const string ReviewCancelled = "review-cancelled";
     public const string ReviewNotFound = "review-not-found";
 }
 

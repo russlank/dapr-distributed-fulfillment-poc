@@ -99,6 +99,7 @@ public static partial class ReviewEndpoints
             DecisionOutcomeKind.AlreadyDecided => Problem(409, ReviewErrorCodes.ReviewAlreadyDecided, "the review was already decided"),
             DecisionOutcomeKind.Superseded => Problem(409, ReviewErrorCodes.ReviewSuperseded, "the review round expired and a new round is open"),
             DecisionOutcomeKind.Expired => Problem(409, ReviewErrorCodes.ReviewExpired, "the review deadline has passed"),
+            DecisionOutcomeKind.Cancelled => Problem(409, ReviewErrorCodes.ReviewCancelled, "the order was cancelled while the review was pending"),
             _ => Problem(404, ReviewErrorCodes.ReviewNotFound, "no such review"),
         };
     }

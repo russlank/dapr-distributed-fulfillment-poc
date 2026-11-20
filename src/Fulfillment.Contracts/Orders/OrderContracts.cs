@@ -32,6 +32,14 @@ public static class OrderErrorCodes
     public const string IdempotencyKeyMissing = "idempotency-key-missing";
     public const string IdempotencyKeyInvalid = "idempotency-key-invalid";
     public const string IdempotencyKeyReused = "idempotency-key-reused";
+
+    /// <summary>Cancellation refused: the dispatch has started (the point of no return).</summary>
+    public const string DispatchStarted = "dispatch-started";
+
+    /// <summary>Cancellation refused: the order is already finished.</summary>
+    public const string OrderTerminal = "order-terminal";
+
+    public const string OrderNotFound = "order-not-found";
 }
 
 public sealed record SubmitOrderRequest(string CustomerId, IReadOnlyList<SubmitOrderLine> Lines);

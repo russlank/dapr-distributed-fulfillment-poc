@@ -34,6 +34,7 @@ builder.Services.AddSingleton(sp =>
     return new FulfillmentSteps(orderDb, sp.GetRequiredService<RuntimeIdentity>().Replica, Checkpoints(sp));
 });
 builder.Services.AddSingleton(sp => new OrderLifecycleSteps(orderDb, Checkpoints(sp)));
+builder.Services.AddSingleton(new CancellationSteps(orderDb));
 
 // Carrier callbacks: the signed ingress (inbox + forward command) and the forwarder to Shipping.
 builder.Services.Configure<Fulfillment.OrderApi.Carrier.CarrierForwarderOptions>(builder.Configuration.GetSection(Fulfillment.OrderApi.Carrier.CarrierForwarderOptions.Section));

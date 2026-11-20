@@ -92,6 +92,7 @@ public sealed partial class FulfillOrderWorkflow : Workflow<FulfillmentInput, Fu
             {
                 return review.OrderStatus == "Rejected" && review.Outcome == FulfillmentOutcomes.Rejected
                     ? review with { ExecutionClaims = claim.ExecutionClaims }
+                    : review.OrderStatus == "Cancelled" ? CancelledBeforeReservation(context, claim)
                     : Fenced(log, context, review.OrderStatus, claim);
             }
         }
@@ -99,7 +100,7 @@ public sealed partial class FulfillOrderWorkflow : Workflow<FulfillmentInput, Fu
         var begun = await context.CallActivityAsync<StepResult>(FulfillmentWorkflow.BeginFulfillmentActivity, new BeginFulfillmentRequest(orderId), OnOrderApi);
         if (begun.Terminal)
         {
-            return Fenced(log, context, begun.OrderStatus, claim);
+            return begun.OrderStatus == "Cancelled" ? CancelledBeforeReservation(context, claim) : Fenced(log, context, begun.OrderStatus, claim);
         }
 
         // Lines in SKU order (one line per SKU), each reserved whole or not at all.
@@ -271,6 +272,12 @@ public sealed partial class FulfillOrderWorkflow : Workflow<FulfillmentInput, Fu
 
     [LoggerMessage(Level = LogLevel.Information, Message = "fulfillment {InstanceId}: ended {Status} ({Reason}); holds released")]
     private static partial void LogUnfulfilled(ILogger logger, string instanceId, string status, string reason);
+
+    private static FulfillmentResult CancelledBeforeReservation(WorkflowContext context, ExecutionClaimResult claim)
+    {
+        context.SetCustomStatus("cancelled");
+        return new FulfillmentResult(FulfillmentOutcomes.Cancelled, "Cancelled", claim.ExecutionClaims);
+    }
 
     private static FulfillmentResult Fenced(ILogger log, WorkflowContext context, string status, ExecutionClaimResult claim)
     {

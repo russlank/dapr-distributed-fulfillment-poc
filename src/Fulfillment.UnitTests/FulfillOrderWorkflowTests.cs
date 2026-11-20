@@ -562,6 +562,21 @@ public class FulfillOrderWorkflowTests
     }
 
     [Fact]
+    public async Task Run_CancellationObservedWhenFulfillmentBegins_EndsCancelledWithoutReservingOrPaying()
+    {
+        var context = new FakeWorkflowContext(Instance)
+        {
+            ActivityResult = Results((name, _) => name == FulfillmentWorkflow.BeginFulfillmentActivity ? new StepResult(StepOutcomes.AlreadyTerminal, "k", "Cancelled") : null),
+        };
+
+        var result = await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+
+        Assert.Equal(FulfillmentWorkflow.BeginFulfillmentActivity, Names(context)[^1]);
+        Assert.DoesNotContain(InventoryActivities.ReserveOrderLine, Names(context));
+        Assert.Equal(new FulfillmentResult(FulfillmentOutcomes.Cancelled, "Cancelled", 1), result);
+    }
+
+    [Fact]
     public async Task Run_AuthorizationDeclined_RejectsAfterReleasing_WithoutAnyCompensatingPayment()
     {
         var context = new FakeWorkflowContext(Instance) { ActivityResult = Results(Payment(PaymentSteps.Authorize, PaymentOutcomes.Declined)) };
