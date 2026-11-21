@@ -16,8 +16,9 @@
 #   --reuse        skip stack start-up when the running stack was built from HEAD with the same
 #                  tree state and flavor (dev and --only only).
 #   --keep-awake   on Windows, keep the machine from idle sleep while the run lasts.
-#   --release-carrier-step  pace of the carrier simulator on the release stack (default 00:00:02;
-#                  `default` keeps the simulator's own 10 s). The drill stack uses its 2 s profile.
+#   --release-carrier-step  pace of the carrier simulator for the release scenarios after S00, OBS,
+#                  and ACC, which always run at the simulator's own 10 s (default 00:00:02; `default`
+#                  keeps 10 s for every step). The drill stack uses its 2 s profile.
 #
 # Results: artifacts/verify/<run>/steps.jsonl (one line per step), <phase>-<step>.log, summary.json;
 # the closing table compares each step with the previous run of the same suite. Exit 1 if a step failed.
@@ -187,6 +188,13 @@ version_check() ( # flavor: every running application replica and both simulator
   echo "$n services; expected $VERSION / $HEAD10 / $1 / $TREE"
   (( n >= 8 && bad == 0 ))
 )
+SHIPPED_PACE_STEPS="S00 OBS ACC"   # release steps that run with the carrier simulator's own pace
+set_carrier_pace() ( # applies $CARRIER_SIM_STEP to the carrier simulator (recreated only if it differs)
+  . scripts/lib.sh
+  docker compose --profile replicas up -d --no-build --no-deps carrier-simulator || exit 1
+  wait_until 90 "carrier-simulator ready" ready carrier-simulator || exit 1
+  echo "carrier-simulator: CARRIER_SIM_STEP='$(docker compose exec -T carrier-simulator printenv CARRIER_SIM_STEP)' callbacks=$(docker compose exec -T carrier-simulator printenv CarrierSim__CallbackUrls)"
+)
 stack_matches() { # flavor: the running stack was built from HEAD with this tree state and flavor
   local id; id="$(. scripts/lib.sh; http_body order-api /system/component-identity 2>/dev/null | tr -d '\r\n')"
   [[ "$id" == *"\"commit\":\"$HEAD10\""* && "$id" == *"\"treeState\":\"$TREE\""* && "$id" == *"\"buildFlavor\":\"$1\""* ]]
@@ -220,14 +228,26 @@ fi
 
 if phase_used A; then
   ( unset COMPOSE_PROJECT_NAME BUILD_FLAVOR DAPR_POC_ENV START_DISPATCHER_LEASE
-    export CARRIER_SIM_STEP="$RELEASE_CARRIER_STEP"
+    # The stack starts at the carrier simulator's own pace (10 s per status): S00, OBS, and ACC run
+    # the release time profile end to end as shipped; then the carrier switches to the fast pace.
+    export CARRIER_SIM_STEP=""
     [[ "$SUITE" == full ]] && run_step A reset-all bash scripts/reset.sh --yes
     if [[ "$SUITE" == full ]] || ! { (( REUSE )) && stack_matches release; }; then
       [[ "$SUITE" == full ]] || stop_other fulfillment-drill
       run_step A up bash scripts/stack-up.sh --replicas
       run_step A version version_check release
     else vr_log "A reusing the running release stack"; fi
-    run_phase_steps A
+    pace=default
+    for e in "${SELECTED[@]}"; do [[ "${e%%|*}" == A ]] || continue
+      id="$(cut -d'|' -f2 <<< "$e")"; cmd="$(cut -d'|' -f3- <<< "$e")"
+      want=fast; [[ " $SHIPPED_PACE_STEPS " == *" $id "* || -z "$RELEASE_CARRIER_STEP" ]] && want=default
+      if [[ "$want" != "$pace" || ( "$pace" == default && -z "${PACE_SET:-}" && "$REUSE" == 1 ) ]]; then
+        if [[ "$want" == fast ]]; then export CARRIER_SIM_STEP="$RELEASE_CARRIER_STEP"; else export CARRIER_SIM_STEP=""; fi
+        run_step A "carrier-$want" set_carrier_pace; pace=$want; PACE_SET=1
+      fi
+      # shellcheck disable=SC2086
+      run_step A "$id" $cmd
+    done
     [[ "$SUITE" == full ]] && run_step A down bash scripts/stack-down.sh
     exit $FAILED ) || FAILED=1
 fi

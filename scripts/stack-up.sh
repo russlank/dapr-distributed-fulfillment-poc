@@ -4,21 +4,24 @@
 #   --replicas  default replica counts (second order-api on 127.0.0.1:8081, ...)
 #   --scale     maximum replica counts (implies --replicas)
 #   --drill     drill images (failure injection compiled in) and DAPR_POC_ENV=drill
+requested_callbacks="${CARRIER_CALLBACK_URLS:-}"   # an explicit choice; lib.sh derives one from the running stack
 . "$(dirname "$0")/lib.sh"
 set -e
+callbacks=http://order-api:8080
 
 profiles=()
 build=(--build)
 for arg in "$@"; do
   case "$arg" in
-    --replicas) profiles+=(--profile replicas); export CARRIER_CALLBACK_URLS="${CARRIER_CALLBACK_URLS:-http://order-api:8080,http://order-api-2:8080}" ;;
-    --scale) profiles+=(--profile replicas --profile scale); export CARRIER_CALLBACK_URLS="${CARRIER_CALLBACK_URLS:-http://order-api:8080,http://order-api-2:8080}" ;;
+    --replicas) profiles+=(--profile replicas); callbacks=http://order-api:8080,http://order-api-2:8080 ;;
+    --scale) profiles+=(--profile replicas --profile scale); callbacks=http://order-api:8080,http://order-api-2:8080 ;;
     # Drill stacks are a separate Compose project with their own volumes (drill preflight checks it).
     --drill) export BUILD_FLAVOR=drill DAPR_POC_ENV=drill COMPOSE_PROJECT_NAME=fulfillment-drill ;;
     --no-build) build=() ;;
     *) die "unknown option $arg" ;;
   esac
 done
+export CARRIER_CALLBACK_URLS="${requested_callbacks:-$callbacks}"
 # Creates .env, or appends names added to .env.example since it was written.
 bash scripts/init-env.sh
 set -a; . ./.env; set +a

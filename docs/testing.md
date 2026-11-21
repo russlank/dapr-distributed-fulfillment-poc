@@ -33,18 +33,22 @@ whether the code changed since the build: rebuild (omit `--reuse`) after
 changing anything under `src/`; script changes need no rebuild.
 `--keep-awake` keeps a Windows machine from idle sleep while the run lasts.
 
-The release stack runs with `CARRIER_SIM_STEP=00:00:02`: the simulated
-carrier reports its three statuses 2 s apart instead of 10 s, so release
-scenarios that wait for completed orders do not wait 30 s per order. The
-system under test keeps its release time profile; only the external
-simulator's pace changes (`--release-carrier-step default` restores 10 s).
-The drill stack uses its own short profile throughout.
+On the release stack S00, OBS, and ACC run with the carrier simulator's own
+pace (10 s per status), so the release configuration is exercised end to end
+as shipped; the runner then recreates the carrier with
+`CARRIER_SIM_STEP=00:00:02` (step `carrier-fast`) for the remaining release
+scenarios, which only need completed orders and would otherwise wait 30 s
+per order. The system under test keeps its release time profile; only the
+external simulator's pace changes. `--release-carrier-step default` keeps
+10 s for every release step. The timing-sensitive carrier tests (callback
+anomalies, late conflicts, lost callbacks) run on the drill stack with its
+own 2 s profile, as before.
 
 Typical durations on the development laptop:
 
 | Run | Before | After |
 |---|---|---|
-| `--suite full` (64 steps, fresh volumes) | 65.3 min | 56.1 min |
+| `--suite full` (fresh volumes) | 65.3 min (65 steps) | 56.1 min (63 steps: the SQL-only switch and switch-back are part of the `S03-sqlonly` step; the same scenarios and drills) |
 | release phase of `full` (reset, start-up, 11 steps, teardown) | 23.0 min | 12.6 min |
 | drill `--replicas` phase of `full` (33 scenarios and drills) | 36.7 min | 37.3 min (unchanged within run-to-run variation) |
 | `--only release` on a stopped stack (start-up included) | - | 10.9 min |

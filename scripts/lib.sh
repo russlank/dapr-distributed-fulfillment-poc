@@ -16,6 +16,15 @@ export BUILD_FLAVOR="${BUILD_FLAVOR:-release}"
 export DAPR_POC_ENV="${DAPR_POC_ENV:-local}"
 export START_DISPATCHER_LEASE="${START_DISPATCHER_LEASE:-00:00:30}"
 export CARRIER_SIM_STEP="${CARRIER_SIM_STEP:-}"
+# stack-up.sh --replicas names both order API replicas as callback receivers; a script that starts the
+# carrier again must pass the same list, or Compose recreates it with the single default receiver.
+if [[ -z "${CARRIER_CALLBACK_URLS:-}" ]]; then
+  if docker compose ps -a --services 2>/dev/null | grep -qx order-api-2; then
+    export CARRIER_CALLBACK_URLS=http://order-api:8080,http://order-api-2:8080
+  else
+    export CARRIER_CALLBACK_URLS=http://order-api:8080
+  fi
+fi
 export GIT_COMMIT="${GIT_COMMIT:-$(git rev-parse --short=10 HEAD 2>/dev/null || echo unknown)}"
 export GIT_BRANCH="${GIT_BRANCH:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)}"
 if [[ -z "${GIT_TREE_STATE:-}" ]]; then
