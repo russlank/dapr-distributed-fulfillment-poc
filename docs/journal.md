@@ -3,6 +3,54 @@
 What broke, what surprised us, and what we changed. Newest first. Each entry
 keeps the expectation that turned out wrong.
 
+## 2026-11-21: Event distribution, projection, reconciler
+
+### A malformed event's payload reached the log
+
+- **Expected (drill R16):** dead letters are recorded with ids and reason
+  codes only; no payload appears in logs.
+- **Observed:** the log line for a malformed message carried the JSON
+  parser's error message, which quotes the start of the input
+  (`'not json r16marker…' is an invalid JSON literal`). The recorder table was
+  clean; the log was not.
+- **Fix:** the consumer logs only the exception type for unreadable messages,
+  and only the SQL error number when an event cannot be stored (some SQL
+  messages, such as truncation errors, quote values). R16 checks the logs of
+  both order API replicas for a unique marker carried in the data.
+
+### Restarting the carrier dropped a callback receiver
+
+- **Expected:** after R11 restarts the crashed carrier simulator, later drills
+  on the replicas stack still have callbacks sent to both order API replicas.
+- **Observed:** the script started the carrier again without the callback
+  list that `stack-up.sh --replicas` sets, so Compose saw a changed
+  configuration and recreated the carrier with the single default receiver.
+  The drills still passed, with half the intended receivers.
+- **Fix:** the shared script library derives the list from the running stack;
+  `stack-up.sh` chooses it by profile unless it is set explicitly.
+
+### Gap detection alone misses a lost last event
+
+- **Expected (plan):** a lost event shows as a gap, because later events of
+  the stream arrive and wait as pending.
+- **Observed (design review):** when the lost event is the stream's last one
+  (for example the delivery that completes an order), nothing arrives after
+  it, no pending row exists, and the projection lags silently.
+- **Change:** the reconciler also compares each source's highest published and
+  settled sequence per recent order with current state and requests a replay
+  for a lagging stream; the source answers through its internal heads
+  endpoint.
+
+### Marking a row published could swallow a replay
+
+- **Expected:** marking `Published` after the broker's acknowledgement is
+  idempotent and safe.
+- **Observed (design review):** a replay requested between the publication and
+  the mark would be overwritten by the mark, so the requested republication
+  never happens.
+- **Change:** every replay increments a generation counter on the row; the
+  mark applies only to the generation that was published.
+
 ## 2026-11-20: Payment provider, payment service, hold extension
 
 ### A callback for the wrong order was taken for a duplicate

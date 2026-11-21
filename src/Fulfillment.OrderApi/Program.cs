@@ -45,7 +45,9 @@ if (builder.Configuration.GetValue("RepairDispatcher:Enabled", true))
 }
 
 // Carrier callbacks: the signed ingress (inbox + forward command) and the forwarder to Shipping.
-builder.Services.Configure<Fulfillment.OrderApi.Carrier.CarrierForwarderOptions>(builder.Configuration.GetSection(Fulfillment.OrderApi.Carrier.CarrierForwarderOptions.Section));
+builder.Services.AddOptions<Fulfillment.OrderApi.Carrier.CarrierForwarderOptions>()
+    .Configure(o => Fulfillment.OrderApi.Carrier.CarrierForwarderOptions.ForEnvironment(o, Environment.GetEnvironmentVariable("DAPR_POC_ENV")))
+    .Bind(builder.Configuration.GetSection(Fulfillment.OrderApi.Carrier.CarrierForwarderOptions.Section));
 builder.Services.AddHostedService(sp => new Fulfillment.OrderApi.Carrier.CarrierForwarder(orderDb, sp.GetRequiredService<Fulfillment.Messaging.SidecarInvoker>(),
     sp.GetRequiredService<OrderLifecycleSteps>(), sp.GetRequiredService<Failpoints>(),
     sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<Fulfillment.OrderApi.Carrier.CarrierForwarderOptions>>(),
@@ -79,6 +81,15 @@ builder.Services.AddHttpClient("dapr-publish", client =>
         client.DefaultRequestHeaders.Add("dapr-api-token", token);
     }
 });
+
+// The reconciler: one leased instance checks workflows against SQL and the projection against the sources.
+builder.Services.AddOptions<Fulfillment.OrderApi.Reconciliation.ReconcilerOptions>()
+    .Configure(o => Fulfillment.OrderApi.Reconciliation.ReconcilerOptions.ForEnvironment(o, Environment.GetEnvironmentVariable("DAPR_POC_ENV")))
+    .Bind(builder.Configuration.GetSection(Fulfillment.OrderApi.Reconciliation.ReconcilerOptions.Section));
+builder.Services.AddHostedService(sp => new Fulfillment.OrderApi.Reconciliation.Reconciler(orderDb, sp.GetRequiredService<WorkflowHostClient>(),
+    sp.GetRequiredService<Fulfillment.OrderApi.Events.OutboxReplayClient>(),
+    sp.GetRequiredService<IOptions<Fulfillment.OrderApi.Reconciliation.ReconcilerOptions>>(), sp.GetRequiredService<RuntimeIdentity>(),
+    sp.GetRequiredService<ILogger<Fulfillment.OrderApi.Reconciliation.Reconciler>>()));
 
 // Durable start dispatcher: starts fulfillment workflows through the workflow host's management API.
 builder.Services.Configure<StartDispatcherOptions>(builder.Configuration.GetSection(StartDispatcherOptions.Section));

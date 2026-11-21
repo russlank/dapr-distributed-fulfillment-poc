@@ -28,6 +28,17 @@ public sealed class CarrierForwarderOptions
 
     /// <summary>UnknownShipment answers tolerated (the callback may precede Shipping's dispatch commit) before an AmbiguousDispatch case.</summary>
     public int UnknownShipmentRetries { get; set; } = 5;
+
+    public static void ForEnvironment(CarrierForwarderOptions options, string? environment)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (environment == "drill")
+        {
+            // A Shipping outage in a drill drains within seconds of the restore.
+            options.Lease = TimeSpan.FromSeconds(10);
+            options.MaxBackoff = TimeSpan.FromSeconds(10);
+        }
+    }
 }
 
 /// <summary>Failpoints of the forwarder (drill builds only; key: event id, N format).</summary>

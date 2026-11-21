@@ -17,6 +17,9 @@ public static partial class DrillControls
 
     public const string TerminatePath = "/internal/drill/fulfillment/{orderId:guid}/terminate";
 
+    /// <summary>Drill: terminates (if needed) and purges fulfill-{orderId:N}, so the instance no longer exists (a lost instance).</summary>
+    public const string PurgePath = "/internal/drill/fulfillment/{orderId:guid}/purge";
+
     public static void MapDrillControls(this WebApplication app)
     {
         ArgumentNullException.ThrowIfNull(app);
@@ -45,6 +48,33 @@ public static partial class DrillControls
             }
         });
         app.MapPost(TerminatePath, TerminateAsync);
+        app.MapPost(PurgePath, PurgeAsync);
+    }
+
+    private static async Task<IResult> PurgeAsync(Guid orderId, DaprWorkflowClient client, ILoggerFactory loggers, CancellationToken ct)
+    {
+        var instanceId = FulfillmentWorkflow.InstanceId(orderId);
+        var before = await client.GetWorkflowStateAsync(instanceId, getInputsAndOutputs: false, ct);
+        var previous = before is { Exists: true } ? before.RuntimeStatus.ToString() : "NotFound";
+        LogTerminate(loggers.CreateLogger(typeof(DrillControls)), instanceId, previous + " (purge)");
+        try
+        {
+            if (before is { Exists: true, IsWorkflowCompleted: false })
+            {
+                await client.TerminateWorkflowAsync(instanceId, "drill: purged", ct);
+                using var wait = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                wait.CancelAfter(TimeSpan.FromSeconds(30));
+                await client.WaitForWorkflowCompletionAsync(instanceId, getInputsAndOutputs: false, wait.Token);
+            }
+
+            var purged = await client.PurgeInstanceAsync(instanceId, ct);
+            var after = await client.GetWorkflowStateAsync(instanceId, getInputsAndOutputs: false, ct);
+            return Results.Ok(new { instanceId, purged, previousStatus = previous, exists = after is { Exists: true }, error = (string?)null });
+        }
+        catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            return Results.Ok(new { instanceId, purged = false, previousStatus = previous, exists = (bool?)null, error = $"{e.GetType().Name}: {e.Message}" });
+        }
     }
 
     /// <summary>

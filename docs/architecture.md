@@ -29,8 +29,8 @@ app's network namespace.
 
 Shared libraries: `Fulfillment.Contracts` (app ids, activity names and
 payloads, management API contracts, public order API contracts), `Fulfillment.Primitives` (operation
-keys), `Fulfillment.Messaging` (caller-side invocation with retries; outbox
-and inbox later), `Fulfillment.ServiceDefaults` (identity, health,
+keys), `Fulfillment.Messaging` (caller-side invocation with retries; transactional outbox, relay, and replay endpoints),
+`Fulfillment.ServiceDefaults` (identity, health,
 telemetry, sidecar-token check, test-only failpoints).
 
 Each owning role has its own SQL login with rights on its own database only.
@@ -216,7 +216,7 @@ serialized. Each step is safe to repeat:
 
 The **terminal transaction** (`FinalizeDelivered`) moves the order
 `AwaitingDelivery` → `Completed` with its history row (`Delivered`), writes
-the `OrderCompleted` row of the order outbox, and closes the start request
+the `OrderCompleted` event of the order outbox, and closes the start request
 (`Closed`, lease cleared), all or nothing. A rejection by validation closes
 the request the same way. The workflow is deterministic: no clock, random
 numbers, or I/O in its code; later steps work from earlier results in its
@@ -364,6 +364,95 @@ If the workflow host cannot be asked, nothing changes and the operator is told
 to retry (`503 workflow-state-unknown`). Repair keys differ from the original
 keys, so a repair never repeats an original effect; voiding by the
 authorization's key also prohibits a late original.
+
+## Events: Outbox, Distribution, Projection
+
+Every owning host writes its business events in the same transaction as the
+fact, into an outbox in its own database, with a sequence that is gapless per
+order and source:
+
+| Source | Outbox | Events |
+|---|---|---|
+| `orders` (order API) | `orders.OrderOutbox` | one per status-history row, with that row's sequence: `OrderStatusChanged`, and `OrderCompleted` for the transition to `Completed` (once per order) |
+| `inventory` | `inventory.Outbox` | one per hold transition: `HoldCreated`, `HoldReleased`, `HoldExpired`, `HoldConsumed`, `HoldExtended` |
+| `payments` | `payment.Outbox` | `PaymentOperationRecorded` when an operation finishes or a reconciliation replaces `Ambiguous` |
+| `shipping` | `shipping.Outbox` | `ShipmentDispatched`; `CarrierStatusRecorded` for every recorded carrier status (whatever its outcome) |
+
+A rollback removes the event with the fact; a fact without its event, or an
+event without its fact, cannot exist. Rows are never deleted.
+
+**Relay.** Every replica of an owning host runs a relay. It leases a batch of
+due `Pending` rows (`LeaseOwner`, `LeaseUntil`; rows another relay holds are
+skipped), publishes each through the Dapr sidecar to the source's topic
+(`fulfillment.<source>.v1`, CloudEvent id = event id), and marks it
+`Published` after the broker's acknowledgement. A failed publication leaves the
+row `Pending` with exponential backoff (capped); after a threshold of attempts
+it is flagged `Stalled` and still retried. A relay that dies keeps its lease
+until it expires, then another relay takes the row over. Marking is
+conditional on a generation counter, so a replay requested while a row is
+being published is not lost. Publication is therefore **at least once,
+possibly many times**: a crash between the acknowledgement and the mark, an
+expired lease, a timeout whose request did reach the broker, and a replay all
+publish an event again.
+
+**Consumer.** The order API subscribes to the four topics (each replica; the
+broker gives a message to one of them) and applies events **once per event
+id**, in one transaction per event, serialized per order and source by locking
+that stream's current-state row first:
+
+| Event | Result |
+|---|---|
+| new event id, sequence = last applied + 1 | stored in `OrderEventHistory` as `Applied`, applied to current state, and the pending successors are drained in order |
+| new event id, later sequence | stored as `Pending`; current state unchanged (a gap) |
+| same event id, same content hash | duplicate: counted, nothing else |
+| same event id, other content | dead letter `EventIdPayloadConflict`, never overwritten |
+| other event id at a known position, or at or below the last applied sequence | dead letter `SequenceConflict` |
+| unknown schema version, wrong source for its type, invalid data, unreadable message | dead letter (`UnknownSchemaVersion`, `SourceMismatch`, `InvalidPayload`, `Malformed`) |
+
+Current state (`OrderTimelineState`) has one row per order and source holding
+only the fields that source owns; it advances one sequence at a time, so it is
+always the result of the stream's contiguous prefix, whatever the arrival
+order. During a gap it lags (stale but consistent) for that order and source
+only. The overall stage shown by the timeline is computed from the rows when
+read, never stored. Gaps are derived (`OrderEventGaps`), not stored. The
+dead-letter recorder (`EventDeadLetter`) stores ids and reason codes, never
+payloads. A failure inside the consumer (for example SQL unavailable) commits
+nothing and asks the broker for redelivery; the broker retries a bounded number
+of times and then moves the message to `fulfillment.deadletter.v1`, which the
+recorder also records (`DeliveryFailed`).
+
+**Rebuild.** `scripts/ops/rebuild-timeline.sh` resets every stream to sequence 0
+and applies its history again from sequence 1 with the same apply-and-drain
+rule; the checksum of current state before and after is equal. The pure rules
+(classification, application, the combined stage, the checksum) live in
+`TimelineProjection` and are tested over every arrival order of a fixed event
+set.
+
+## Reconciler
+
+One instance across the order API replicas (SQL lease) runs a pass every
+interval (30 s; drill 5 s). It acts only through existing mechanisms: cases,
+pending signals, and outbox replay.
+
+| Check | Action |
+|---|---|
+| non-terminal order without a status change past the stage threshold, without an open case: workflow `Failed`/`Terminated` | `WorkflowFaulted` case |
+| ... workflow instance not found although started | `WorkflowMissing` case |
+| ... workflow `Completed` | `ExecutionMismatch` case (not for an order whose failed delivery was resolved without success: that case already surfaced it) |
+| ... workflow running and waiting for a review well past its deadline | a nudge: the review's own signal (a lost timer); the workflow re-reads SQL |
+| projection gap older than the gap threshold | outbox replay from the last applied sequence plus one |
+| a source has published (and settled) more of an order's events than current state shows | the same replay (a lost last event leaves no pending row) |
+| the source does not have the missing event | `ProjectionGapUnresolvable` (log, metric) and a `ProjectionGap` case; the gap is never skipped |
+
+Each order gets at most one case per kind. A resolution of a reconciler case
+takes the repair path (no workflow waits): `ConfirmExternalFailure` before the
+point of no return compensates like a payment repair (holds released, void or
+refund with the repair key) and ends the order `Compensated`
+(`WorkflowFailed`); `ConfirmExternalSuccess` of an `ExecutionMismatch` on an
+order awaiting delivery finalizes it when Shipping's own record shows the
+delivery; anything else is recorded only. Replay requests go to each owning
+host's internal `POST internal/outbox/replay` (Dapr service invocation; only the
+order API may call it) and `GET internal/outbox/heads`.
 
 ## Inventory
 

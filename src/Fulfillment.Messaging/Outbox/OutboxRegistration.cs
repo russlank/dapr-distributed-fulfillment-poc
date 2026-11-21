@@ -48,7 +48,7 @@ public static class OutboxRegistration
 
     /// <summary>
     /// <c>POST internal/outbox/replay</c> (republish an order's rows from a sequence) and
-    /// <c>GET internal/outbox/heads?since=</c> (highest published sequence per recent order), for the order API's
+    /// <c>GET internal/outbox/heads?since=&amp;settledBefore=</c> (highest settled published sequence per recent order), for the order API's
     /// reconciler only.
     /// </summary>
     public static IEndpointRouteBuilder MapOutboxEndpoints(this IEndpointRouteBuilder endpoints)
@@ -64,9 +64,9 @@ public static class OutboxRegistration
                 ? Results.BadRequest(new { errorCode = "invalid-sequence" })
                 : Results.Ok(await store.ReplayAsync(request.OrderId, request.FromSequence, ct));
         });
-        endpoints.MapGet("/" + OutboxRoutes.Heads, async (HttpContext http, DateTime since, OutboxStore store, CancellationToken ct) =>
+        endpoints.MapGet("/" + OutboxRoutes.Heads, async (HttpContext http, DateTime since, DateTime settledBefore, OutboxStore store, CancellationToken ct) =>
             FromOrderApi(http)
-                ? Results.Ok(await store.HeadsAsync(DateTime.SpecifyKind(since, DateTimeKind.Utc), ct))
+                ? Results.Ok(await store.HeadsAsync(DateTime.SpecifyKind(since, DateTimeKind.Utc), DateTime.SpecifyKind(settledBefore, DateTimeKind.Utc), ct))
                 : Results.StatusCode(StatusCodes.Status403Forbidden));
         return endpoints;
     }

@@ -20,8 +20,11 @@ dispatch starts; what cannot be decided safely becomes an intervention case
 that an operator resolves. Every business effect is keyed and stored once.
 An external client simulator submits seeded, replayable workloads,
 duplicates, contention runs, cancellations, and operator decisions over
-HTTP. Event distribution (outbox publication, projections, the reconciler)
-is not built yet. Every role runs with
+HTTP. Every business event is written in its transaction to an outbox,
+published at least once through Dapr pub/sub, and projected once per event
+id into an event history and a per-source order timeline; a reconciler
+detects failed, missing, and mismatched workflows and lagging projections
+and repairs them through cases and outbox replay. Every role runs with
 its own Dapr sidecar, reports its identity and health, and exports
 telemetry; scenario and drill scripts prove the behavior from the databases.
 

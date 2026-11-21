@@ -6,9 +6,27 @@ Details of a release: `docs/releases/`. What broke on the way:
 
 ## Unreleased (0.5.0-dev)
 
-- Development towards M4 (outbox publication, event distribution, history
-  and projections, the reconciler). Entries are added as functionality is
-  verified.
+- Event distribution (M4): every owning host writes its events in the
+  business transaction into its own outbox (gapless sequence per order and
+  source); leased relays in every replica publish them at least once through
+  Dapr pub/sub (RabbitMQ), with backoff, a `Stalled` flag, lease takeover,
+  and replay by sequence. Rows are never deleted.
+- Event history and projection: the order API applies events once per event
+  id, contiguously per order and source (early arrivals pending, drained when
+  the gap fills), counts duplicates, and records conflicts and invalid
+  messages in a dead-letter recorder (ids and reasons only); timeline,
+  checksum, rebuild, and replay endpoints; `scripts/ops/rebuild-timeline.sh`.
+- Reconciler: one leased instance opens `WorkflowFaulted`, `WorkflowMissing`,
+  and `ExecutionMismatch` cases, nudges review waits whose timer was lost, and
+  replays outbox events for projection gaps and lagging streams; repairs of
+  those cases compensate before the point of no return (`WorkflowFailed`) or
+  finalize a delivered order.
+- Carrier simulator test modes `Lost` and `LostNoPoll`; a longer drill
+  callback retry schedule; a drill profile for the carrier forwarder; a
+  `Skip` failpoint action; drill controls to purge a workflow instance and
+  to publish raw events.
+- Scenarios S01, S48 (with S43 for events); drills R12, R14, R15, R16, R23
+  (signal part), R29, R30, R32.
 - Verification runner `scripts/verify.sh`: suites `full` (milestone) and
   `dev`, step groups, stack reuse, per-step timings compared with the
   previous run. `CARRIER_SIM_STEP` paces the carrier simulator; the release

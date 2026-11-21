@@ -58,6 +58,7 @@ public static partial class EventEndpoints
             {
                 // Drill sentinel: the consumer fails on it every time, so the broker redelivers it a bounded number of
                 // times and then moves it to the dead-letter topic.
+                LogPoison(logger, e.EventId, source);
                 return Results.Json(Retry, statusCode: StatusCodes.Status500InternalServerError);
             }
 
@@ -69,8 +70,9 @@ public static partial class EventEndpoints
             }
             catch (SqlException ex)
             {
-                // A transient failure: nothing was committed; the broker redelivers.
-                LogIngestFailed(logger, e.EventId, source, ex.Message);
+                // A transient failure: nothing was committed; the broker redelivers. The error number only: some SQL
+                // messages (truncation) quote the values involved.
+                LogIngestFailed(logger, e.EventId, source, $"SQL error {ex.Number}");
                 return Results.Json(Retry, statusCode: StatusCodes.Status500InternalServerError);
             }
         });
@@ -139,7 +141,8 @@ public static partial class EventEndpoints
         }
         catch (Exception e) when (e is JsonException or NotSupportedException or ArgumentNullException or InvalidOperationException)
         {
-            return (messageId, null, e.Message);
+            // Only the exception type: a parser's message quotes the input, and payloads never reach the logs.
+            return (messageId, null, e.GetType().Name);
         }
     }
 
@@ -151,6 +154,9 @@ public static partial class EventEndpoints
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "event {EventId} {Source}: ingest failed, redelivery requested: {Error}")]
     private static partial void LogIngestFailed(ILogger logger, Guid eventId, string source, string error);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "drill poison event {EventId} refused ({Source}), redelivery requested")]
+    private static partial void LogPoison(ILogger logger, Guid eventId, string source);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "message {MessageId} ({Source}) dead-lettered: {Reason} {Detail}")]
     private static partial void LogDeadLettered(ILogger logger, string messageId, string source, string reason, string detail);

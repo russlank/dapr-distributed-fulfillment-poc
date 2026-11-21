@@ -39,7 +39,7 @@ namespace Fulfillment.CarrierSimulator.Persistence.Migrations
 
                     b.ToTable("Behavior", "carrier", t =>
                         {
-                            t.HasCheckConstraint("CK_Behavior_Mode", "Mode IN ('Auto', 'Manual')");
+                            t.HasCheckConstraint("CK_Behavior_Mode", "Mode IN ('Auto', 'Manual', 'Lost', 'LostNoPoll')");
                         });
                 });
 

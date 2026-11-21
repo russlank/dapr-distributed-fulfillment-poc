@@ -77,14 +77,16 @@ public sealed class OutboxReplayClient(OutboxStore orders, SidecarInvoker invoke
         return result.IsSuccess ? JsonSerializer.Deserialize<OutboxReplayResult>(result.Body, DaprEventPublisher.Json) : null;
     }
 
-    public async Task<IReadOnlyList<OutboxHead>?> HeadsAsync(string source, DateTime sinceUtc, CancellationToken ct)
+    public async Task<IReadOnlyList<OutboxHead>?> HeadsAsync(string source, DateTime sinceUtc, DateTime settledBeforeUtc, CancellationToken ct)
     {
         if (source == EventSources.Orders)
         {
-            return await orders.HeadsAsync(sinceUtc, ct);
+            return await orders.HeadsAsync(sinceUtc, settledBeforeUtc, ct);
         }
 
-        var result = await invoker.GetAsync(AppIdOf(source), $"{OutboxRoutes.Heads}?since={Uri.EscapeDataString(sinceUtc.ToString("O", CultureInfo.InvariantCulture))}", ct);
+        var result = await invoker.GetAsync(AppIdOf(source),
+            $"{OutboxRoutes.Heads}?since={Uri.EscapeDataString(sinceUtc.ToString("O", CultureInfo.InvariantCulture))}"
+            + $"&settledBefore={Uri.EscapeDataString(settledBeforeUtc.ToString("O", CultureInfo.InvariantCulture))}", ct);
         return result.IsSuccess ? JsonSerializer.Deserialize<List<OutboxHead>>(result.Body, DaprEventPublisher.Json) : null;
     }
 }

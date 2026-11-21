@@ -156,6 +156,44 @@ repair workflow compensates; its outcome is written to the case's
 `RepairOutcome`), or `RecordOnly`. `503 workflow-state-unknown` changed
 nothing: retry the same request.
 
+## Events and the Timeline
+
+Every business event is published from its source's outbox and projected by
+the order API (see [architecture.md](architecture.md#events-outbox-distribution-projection)).
+
+```bash
+. ./.env
+# The order's projection: per source the last applied sequence, pending events, missing sequences, fields
+curl -s http://127.0.0.1:8080/system/orders/<orderId>/timeline -H "X-Api-Key: $ADMIN_API_KEY"
+# Publish an order's events of one source again from a sequence (consumers treat repeats as duplicates)
+curl -s -X POST http://127.0.0.1:8080/system/outbox/inventory/replay -H "X-Api-Key: $ADMIN_API_KEY" \
+  -H 'content-type: application/json' -d '{"orderId":"<orderId>","fromSequence":1}'
+bash scripts/ops/rebuild-timeline.sh     # rebuild current state from history; prints both checksums
+```
+
+What to look at in SQL:
+
+| Question | Query |
+|---|---|
+| backlog of a source | `SELECT State, Stalled, COUNT(*), MAX(Attempts) FROM inventory.Outbox GROUP BY State, Stalled` (likewise `orders.OrderOutbox`, `payment.Outbox`, `shipping.Outbox`) |
+| open gaps | `SELECT * FROM orders.OrderEventGaps` |
+| dead letters | `SELECT Reason, COUNT(*) FROM orders.EventDeadLetter GROUP BY Reason` (ids and reasons only) |
+| repeated deliveries | `SELECT EventId, Duplicates FROM orders.OrderEventHistory WHERE Duplicates > 0` |
+
+A `Stalled` row is still retried; it means the broker has refused it many
+times (broker down, component misconfigured). Rows are never deleted, also not
+after publication.
+
+The reconciler (one order API replica at a time) opens `WorkflowFaulted`,
+`WorkflowMissing`, and `ExecutionMismatch` cases for orders whose workflow
+failed, vanished, or completed without finalizing; resolve them like other
+cases (`ConfirmExternalFailure` compensates before the point of no return,
+`ConfirmExternalSuccess` of a mismatch finalizes a delivered order,
+`Acknowledge` records only). It also nudges a review wait whose timer was lost,
+and replays an order's events when its projection lags; a `ProjectionGap` case
+means the source no longer has the missing event (the projection for that order
+and source stays at its last contiguous state).
+
 ## Restarting a Replica
 
 A replica is an app container plus a sidecar that joins the app's network

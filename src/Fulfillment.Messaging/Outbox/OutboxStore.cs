@@ -145,18 +145,22 @@ public sealed class OutboxStore(string connectionString, OutboxTable table)
         return new OutboxReplayResult(table.Source, orderId, fromSequence, reader.GetInt32(0), reader.GetInt32(1));
     }
 
-    /// <summary>The highest published sequence per order, for orders with a row created since <paramref name="sinceUtc"/>.</summary>
-    public async Task<IReadOnlyList<OutboxHead>> HeadsAsync(DateTime sinceUtc, CancellationToken ct)
+    /// <summary>
+    /// The highest sequence per order that was published before <paramref name="settledBeforeUtc"/> (so it had time to
+    /// arrive), for orders with a row created since <paramref name="sinceUtc"/>.
+    /// </summary>
+    public async Task<IReadOnlyList<OutboxHead>> HeadsAsync(DateTime sinceUtc, DateTime settledBeforeUtc, CancellationToken ct)
     {
         await using var connection = await OpenAsync(ct);
         await using var command = new SqlCommand(
             $"""
-            SELECT OrderId, MAX(CASE WHEN State = 'Published' THEN Sequence ELSE 0 END)
+            SELECT OrderId, MAX(CASE WHEN State = 'Published' AND PublishedAt < @settled THEN Sequence ELSE 0 END)
             FROM {table.Table}
             WHERE OrderId IN (SELECT OrderId FROM {table.Table} WHERE CreatedAt >= @since)
             GROUP BY OrderId;
             """, connection);
         command.Parameters.Add("@since", System.Data.SqlDbType.DateTime2).Value = sinceUtc;
+        command.Parameters.Add("@settled", System.Data.SqlDbType.DateTime2).Value = settledBeforeUtc;
         var heads = new List<OutboxHead>();
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))

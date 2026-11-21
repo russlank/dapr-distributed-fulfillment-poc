@@ -58,6 +58,7 @@ public sealed class OrderApiHost(string connectionString, Action<IServiceCollect
         builder.UseSetting("CarrierForwarder:Enabled", "false");
         builder.UseSetting("RepairDispatcher:Enabled", "false");
         builder.UseSetting("OutboxRelay:Enabled", "false");
+        builder.UseSetting("Reconciler:Enabled", "false");
         if (configureServices is not null)
         {
             builder.ConfigureTestServices(configureServices);

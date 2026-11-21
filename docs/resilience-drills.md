@@ -27,6 +27,8 @@ reaches the named boundary for that operation key, a conditional update sets
 - `Throw`: a transient error;
 - `AbortConnection`: an HTTP host resets the client's connection instead of
   answering; everything committed before the failpoint stays (a lost answer);
+- `Skip`: the caller drops the work it was about to do and answers as if it
+  had succeeded (a consumer acknowledges a message without storing it);
 - `Delay:<ms>`: the caller is held inside the window (for example past a
   lease expiry).
 
@@ -56,6 +58,9 @@ scoped to one drill run; unfired rows are removed by the drill's cleanup.
 | `BeforeBeginDispatchCommit` | order API, inside the point-of-no-return transaction after the order is locked (key `{orderId:N}:dispatch-start:1`); `Delay` holds the lock while a cancellation arrives |
 | `AfterForwardResponseBeforeMark` | order API carrier forwarder, after Shipping committed and answered, before the forward row is marked (key: the carrier event id, `N` format) |
 | `AfterCarrierAcceptCommitBeforeResponse` | carrier simulator, after the shipment and its callback schedule committed, before the answer (key: shipment id, `N` format) |
+| `AfterBrokerAckBeforeOutboxMarkSent` | every outbox relay (order API, inventory, payment, shipping), after the broker acknowledged a publication, before the row is marked `Published` (key: event id) |
+| `ConsumerAckWithoutApply` | order API event consumer, before an event is stored (key: `<source>:<order id>:<sequence>`); with action `Skip` the event is acknowledged but not stored, as if the delivery had been lost |
+| `FinalizeReportsTerminal` | order API, in the finalizing transaction of a delivered order (key: its operation key); with action `Skip` the step reports the order terminal without finalizing it, so the run completes while SQL stays `AwaitingDelivery` |
 
 Further boundaries arrive with the functionality they test.
 
@@ -83,6 +88,9 @@ SQL views the M3 scripts assert on.
 | `scripts/drills/sql/insert-orphan-hold.sql` | creates a `Held` hold (with its reserved units and `HoldCreated` event) that no workflow owns, as a run that died after its reservation leaves behind; refuses outside a drill database |
 | `raise_via_sidecar <order-api replica> <instance> <event>` | raises a workflow event through that replica's sidecar and the management API, as the signal dispatcher does (duplicate and early wake-ups) |
 | `POST /internal/drill/fulfillment/{orderId}/schedule` on the workflow host (`drill_schedule_fulfillment`) | schedules `fulfill-{orderId:N}` directly through the Dapr workflow API, without the management API's existence check; returns Dapr's answer. Compiled only into drill builds, mapped only in the drill environment, app token required |
+| `POST /internal/drill/fulfillment/{orderId}/purge` on the workflow host (`drill_purge_fulfillment`) | terminates (if running) and purges `fulfill-{orderId:N}`, so the instance no longer exists (a lost instance); same restrictions as above |
+| `POST /system/drill/publish/{topic}` on the order API (`drill_publish` in `scripts/scenarios/m4-lib.sh`, admin key) | publishes a body as given to an event topic through the sidecar (shuffled streams, malformed, unknown-schema, and poison events); mapped only in the drill environment. An event whose data contains `"drillPoison": true` is refused by the consumer every time (bounded redelivery, then the dead-letter topic) |
+| `PUT /carrier/test/shipments/{id}/mode/{mode}` on the carrier simulator | `Auto`, `Manual` (no automatic callbacks; script them), `Lost` (callbacks are dropped until they are dead-lettered), `LostNoPoll` (also the status query answers 503) |
 | `POST /internal/drill/fulfillment/{orderId}/terminate` on the workflow host (`drill_terminate_fulfillment`) | terminates `fulfill-{orderId:N}` and waits for it to end (a workflow that stopped without finishing its order, the case for the repair workflow); same restrictions as above |
 
 ## Lifecycle of a Drill Script
@@ -123,6 +131,17 @@ bash scripts/scenarios/S29-S31-operator-decisions.sh
 bash scripts/scenarios/S30-seeded-operators.sh
 bash scripts/scenarios/S39-cancellation-windows.sh
 bash scripts/scenarios/S40-S41-expiry-before-capture-and-consume.sh   # sets a 20 s hold lifetime itself
+# event distribution, projection, reconciler (replicas profile)
+bash scripts/scenarios/S01-happy-path-events.sh
+bash scripts/scenarios/S48-shuffled-events.sh
+bash scripts/drills/R14-broker-outage.sh
+bash scripts/drills/R15-repeated-publication.sh
+bash scripts/drills/R16-poison-events.sh
+bash scripts/drills/R32-gap-repaired-by-replay.sh
+bash scripts/drills/R23-signal-redelivery.sh
+bash scripts/drills/R12-callback-receiver-down.sh
+bash scripts/drills/R29-lost-callbacks.sh
+bash scripts/drills/R30-faulted-missing-mismatch.sh
 bash scripts/drills/R09-lost-provider-response.sh
 bash scripts/drills/R10-interrupted-compensation.sh
 bash scripts/drills/R11-carrier-crash-after-accept.sh

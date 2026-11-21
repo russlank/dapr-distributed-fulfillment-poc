@@ -49,10 +49,12 @@ public sealed partial class CallbackSender(string connectionString, CarrierOptio
         CarrierCallback callback;
         int attempts;
         bool badSignature;
+        var lost = false;
         await using (var pick = new SqlCommand(
                          """
-                         SELECT TOP (1) Id, EventId, ShipmentId, OrderId, Status, Version, OccurredAt, Attempts, BadSignature
-                         FROM carrier.Callback WITH (UPDLOCK, READPAST, ROWLOCK)
+                         SELECT TOP (1) Id, EventId, ShipmentId, OrderId, Status, Version, OccurredAt, Attempts, BadSignature,
+                                (SELECT b.Mode FROM carrier.Behavior b WHERE b.ShipmentId = c.ShipmentId)
+                         FROM carrier.Callback c WITH (UPDLOCK, READPAST, ROWLOCK)
                          WHERE State = 'Scheduled' AND DueAt <= SYSUTCDATETIME() ORDER BY DueAt, Id;
                          """, connection, tx))
         {
@@ -67,6 +69,7 @@ public sealed partial class CallbackSender(string connectionString, CarrierOptio
                 DateTime.SpecifyKind(reader.GetDateTime(6), DateTimeKind.Utc));
             attempts = reader.GetInt32(7);
             badSignature = reader.GetBoolean(8);
+            lost = !reader.IsDBNull(9) && reader.GetString(9) is "Lost" or "LostNoPoll";
         }
 
         var target = targets[(int)(Interlocked.Increment(ref sends) % targets.Length)];
@@ -77,6 +80,12 @@ public sealed partial class CallbackSender(string connectionString, CarrierOptio
         string? detail = null;
         try
         {
+            if (lost)
+            {
+                // Drill: the callback never reaches a receiver (an attempt without an answer), until it is dead-lettered.
+                throw new HttpRequestException("dropped (test mode Lost)");
+            }
+
             using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(new Uri(target), CarrierCallbackHeaders.Route))
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),

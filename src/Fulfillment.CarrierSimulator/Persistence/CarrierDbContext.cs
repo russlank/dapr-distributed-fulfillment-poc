@@ -65,7 +65,7 @@ public sealed class CarrierDbContext(DbContextOptions<CarrierDbContext> options)
 
         modelBuilder.Entity<CarrierBehavior>(b =>
         {
-            b.ToTable("Behavior", t => t.HasCheckConstraint("CK_Behavior_Mode", "Mode IN ('Auto', 'Manual')"));
+            b.ToTable("Behavior", t => t.HasCheckConstraint("CK_Behavior_Mode", "Mode IN ('Auto', 'Manual', 'Lost', 'LostNoPoll')"));
             b.HasKey(x => x.ShipmentId);
             b.Property(x => x.Mode).HasMaxLength(16).IsUnicode(false);
         });

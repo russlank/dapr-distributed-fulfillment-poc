@@ -34,14 +34,22 @@ public static class CarrierEndpoints
             return Results.Ok(outcome.Accepted);
         });
         shipments.MapGet("/{shipmentId:guid}", async (Guid shipmentId, CarrierOperations ops, CancellationToken ct) =>
-            await ops.StatusAsync(shipmentId, ct) is { } status ? Results.Ok(status) : Results.NotFound(new { error = "unknown-shipment" }));
+        {
+            // Drill: a shipment in LostNoPoll mode cannot be queried either (the carrier is unreachable for it).
+            if (Environment.GetEnvironmentVariable("DAPR_POC_ENV") == "drill" && await ops.ModeAsync(shipmentId, ct) == "LostNoPoll")
+            {
+                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            }
+
+            return await ops.StatusAsync(shipmentId, ct) is { } status ? Results.Ok(status) : Results.NotFound(new { error = "unknown-shipment" });
+        });
 
         if (Environment.GetEnvironmentVariable("DAPR_POC_ENV") == "drill")
         {
             var test = app.MapGroup("/carrier/test").RequireApiKey(CarrierRoutes.ApiKeyVariable);
             test.MapPut("/shipments/{shipmentId:guid}/mode/{mode}", async (Guid shipmentId, string mode, CarrierOperations ops, CancellationToken ct) =>
             {
-                if (mode is not ("Auto" or "Manual"))
+                if (mode is not ("Auto" or "Manual" or "Lost" or "LostNoPoll"))
                 {
                     return Results.BadRequest(new { error = "invalid-mode" });
                 }

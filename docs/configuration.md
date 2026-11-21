@@ -113,10 +113,28 @@ units each. Scenarios and drills create their own SKUs with test-only SQL
 | `CarrierSim__Step` | 10 s (2 s) | simulator: interval between the automatic PickedUp, InTransit, Delivered callbacks |
 | `CARRIER_SIM_STEP` | empty | simulator: when set to a positive `TimeSpan` (for example `00:00:02`), replaces the step above; `scripts/verify.sh` sets it on the release stack so that scenarios do not wait 30 s per delivery. It paces only the simulated carrier, not the system under test |
 | `CarrierSim__CallbackUrls` | `http://order-api:8080` | simulator: callback receivers, comma-separated, tried in turn (`CARRIER_CALLBACK_URLS`; `stack-up.sh --replicas` names both order API replicas) |
-| `CarrierSim__RetrySchedule` | `1,5,30,120,600` s (`1,2,4,8`) | simulator: retries of an unanswered callback, then dead letter |
+| `CarrierSim__RetrySchedule` | `1,5,30,120,600` s (`1,2,4,8,16,32`) | simulator: retries of an unanswered callback, then dead letter (the drill schedule outlasts a restart of every order API replica) |
 | `CarrierForwarder__Enabled`, `__PollInterval`, `__BatchSize`, `__Lease` | true, 500 ms, 10, 30 s | the order API's forwarder of accepted callbacks to Shipping |
+| `CarrierForwarder__Lease`, `__MaxBackoff` (drill) | (10 s, 10 s) | the forwarder's drill profile: a Shipping outage drains within seconds of the restore |
 | `CarrierForwarder__MaxBackoff`, `__UnknownShipmentRetries` | 1 min, 5 | retry backoff; attempts while Shipping does not know the shipment, then an `AmbiguousDispatch` case |
 | `RepairDispatcher__Enabled` | true | the order API's starter of repair workflows for resolved cases |
+
+## Events and the Reconciler
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `OutboxRelay__Enabled` | true | the outbox relay of an owning host (order API, inventory, payment, shipping) |
+| `OutboxRelay__PollInterval`, `__BatchSize` | 500 ms, 20 | relay cadence and rows leased per cycle |
+| `OutboxRelay__Lease` | 30 s (10 s) | how long a leased row is reserved for one relay; afterwards another relay takes it over |
+| `OutboxRelay__FirstBackoff`, `__MaxBackoff` | 1 s, 5 min (10 s) | backoff of a failed publication, doubling, capped |
+| `OutboxRelay__StallThreshold` | 10 (5) | attempts after which a row is flagged `Stalled` (it is still retried) |
+| `OutboxRelay__PublishTimeout` | 5 s | per publication; a timed-out publication is retried (it may have reached the broker) |
+| `Reconciler__Enabled` | true | the reconciler (one leased instance across the order API replicas) |
+| `Reconciler__Interval`, `__Lease` | 30 s, 90 s (5 s, 15 s) | pass cadence and lease |
+| `Reconciler__StageThreshold` | 5 min (20 s) | an order without a status change this long has its workflow checked |
+| `Reconciler__ReviewNudgeAfter` | 2 min (60 s) | a running review wait this long past its deadline gets a nudge |
+| `Reconciler__GapThreshold` | 1 min (10 s) | a projection gap, or a source head ahead of current state, this old is repaired by replay |
+| `Reconciler__HeadsWindow`, `__MaxOrdersPerPass` | 24 h (30 min), 200 | how far back source heads are compared; orders checked per pass |
 
 The workflow's time profile is fixed per environment: hold extension before
 the capture 30 min (drill 30 s), minimum remaining hold validity for the

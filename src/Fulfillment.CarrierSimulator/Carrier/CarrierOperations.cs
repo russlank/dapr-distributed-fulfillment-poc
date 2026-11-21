@@ -24,7 +24,9 @@ public sealed class CarrierOptions
         if (environment == "drill")
         {
             options.Step = TimeSpan.FromSeconds(2);
-            options.RetrySchedule = "1,2,4,8";
+            // About a minute in total: longer than restarting every order API replica (R12), shorter than the
+            // release schedule.
+            options.RetrySchedule = "1,2,4,8,16,32";
         }
     }
 
@@ -122,6 +124,14 @@ public sealed class CarrierOperations(string connectionString, CarrierOptions op
         await reader.DisposeAsync();
         var known = await Scalar<int>(connection, null, "SELECT COUNT(*) FROM carrier.Shipment WHERE ShipmentId = @s", ct, ("@s", shipmentId));
         return known == 0 ? null : new CarrierShipmentStatus(shipmentId, Guid.Empty, CarrierStatuses.Accepted, 0, DateTime.UtcNow);
+    }
+
+    /// <summary>The shipment's test mode (drill): Auto (default), Manual, Lost (callbacks are dropped until they are dead-lettered), or LostNoPoll (also status queries fail).</summary>
+    public async Task<string> ModeAsync(Guid shipmentId, CancellationToken ct)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(ct);
+        return await Scalar<string>(connection, null, "SELECT Mode FROM carrier.Behavior WHERE ShipmentId = @s", ct, ("@s", shipmentId)) ?? "Auto";
     }
 
     public async Task SetModeAsync(Guid shipmentId, string mode, CancellationToken ct)
