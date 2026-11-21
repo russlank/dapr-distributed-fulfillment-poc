@@ -5,6 +5,26 @@ keeps the expectation that turned out wrong.
 
 ## 2026-11-21: Event distribution, projection, reconciler
 
+### S52 failed on a log read that came back incomplete (release candidate of v0.5.0)
+
+- **Expected:** S52-B counts the signal raises in the workflow hosts' logs
+  and finds two (the raise before the dispatcher's crash and the one after
+  its lease expired).
+- **Observed:** on the release candidate's full run the count was 0, so
+  S52-B failed, while everything it checks had happened: the workflow hosts'
+  logs held both raises (half a minute apart), the workflow resolved the
+  review once after the signal, the order completed once, and the second
+  delivery found the instance terminal. The same log query afterwards
+  returned 2; S52 passed when rerun on a fresh stack of the same commit, as
+  in every earlier full run that day.
+- **Cause:** the query ran right after the scenario recreated the crashed
+  order API replica's containers, read `docker compose logs` once, and
+  discarded the command's errors, so an incomplete read counted as zero.
+- **Impact:** none on the system; the check itself was unreliable.
+- **Change (pending):** read the logs again until the expected count appears
+  within a bound, or count the raises from the signal's attempt log in SQL,
+  and do not hide the read's errors.
+
 ### A stream fell behind its own history: a swallowed deadlock let the consumer write outside its transaction
 
 - **Expected:** every event in a stream's history is applied in sequence: an
