@@ -60,5 +60,5 @@ expect S43-events "conflicting payload for 3 dead-lettered (EventIdPayloadConfli
   "$([[ "$dead" == *EventIdPayloadConflict* && "$kept" == HoldConsumed && "$fields" == *'"hold:h1":"Consumed"'* ]]; echo $?)"
 
 r="$(rebuild_timeline)"
-expect S48-rebuild "rebuild checksum equals live state" "$r" "$([[ "$r" == true\|* ]]; echo $?)"
+expect S48-rebuild "a rebuild equals live state, stream by stream" "equal|differing|streams: $r" "$([[ "$r" == true\|* ]]; echo $?)"
 scenario_finish

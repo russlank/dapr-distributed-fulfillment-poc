@@ -38,15 +38,16 @@ print((sqlnow - datetime.datetime.now(datetime.timezone.utc)).total_seconds())" 
 echo "skew $skew" > "$DRILL_DIR/clock.txt"
 
 approve_at() { # approve_at <i> <order id>
-  local i=$1 o=$2 review deadline offset
+  local i=$1 o=$2 review offset
   review="$(sql OrderDb "SELECT ReviewId FROM orders.ReviewTask WHERE OrderId = '$o' AND Round = 1")"
-  deadline="$(sql OrderDb "SELECT CONVERT(varchar(27), DeadlineAt, 126) FROM orders.ReviewTask WHERE ReviewId = '$review'")"
   offset="$(python -c "import random; random.seed($i * 104729); print(f'{random.uniform(-1.5, 1.5):.2f}')")"
-  python -c "
-import datetime, time, sys
-deadline = datetime.datetime.fromisoformat(sys.argv[1].strip()).replace(tzinfo=datetime.timezone.utc)
-target = deadline.timestamp() - float(sys.argv[2]) + float(sys.argv[3])
-time.sleep(max(0, target - time.time()))" "$deadline" "$skew" "$offset"
+  # The SQL clock steps (up to about 2 s under load), so the wait is measured by SQL itself shortly before the
+  # decision: first coarsely, then once more within the last two seconds.
+  local remaining
+  remaining="$(sql OrderDb "SELECT DATEDIFF(millisecond, SYSUTCDATETIME(), DeadlineAt) FROM orders.ReviewTask WHERE ReviewId = '$review'")"
+  python -c "import time, sys; time.sleep(max(0, (int(sys.argv[1]) + float(sys.argv[2]) * 1000) / 1000 - 2))" "$remaining" "$offset"
+  remaining="$(sql OrderDb "SELECT DATEDIFF(millisecond, SYSUTCDATETIME(), DeadlineAt) FROM orders.ReviewTask WHERE ReviewId = '$review'")"
+  python -c "import time, sys; time.sleep(max(0, (int(sys.argv[1]) + float(sys.argv[2]) * 1000) / 1000))" "$remaining" "$offset"
   local base="$ORDER_API"; (( i % 2 == 0 )) && base="$ORDER_API_2"
   echo "$i $o $review $offset $(decide "$base" "$review" approve)" > "$DRILL_DIR/decisions/$i.txt"
 }

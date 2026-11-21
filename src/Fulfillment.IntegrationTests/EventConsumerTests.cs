@@ -112,7 +112,8 @@ public sealed class EventConsumerTests(SqlServerFixture sql) : IAsyncLifetime
             }
         }
 
-        var (before, after, streams) = await consumer.RebuildAsync(Ct);
+        var (before, after, streams, mismatches) = await consumer.RebuildAsync(Ct);
+        Assert.Empty(mismatches);
         Assert.Equal(before, after);
         Assert.True(streams >= 5);
     }

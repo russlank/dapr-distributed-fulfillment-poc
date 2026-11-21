@@ -49,5 +49,5 @@ echo "$t" > "$OUT_DIR/timeline-last.json"
 expect S01-timeline "stage Completed, 0 pending, 0 dead letters per order" "$tl" "$bad"
 
 r="$(rebuild_timeline)"
-expect S01-rebuild "rebuild checksum equals live state" "equal|before|after|streams: $r" "$([[ "$r" == true\|* ]]; echo $?)"
+expect S01-rebuild "a rebuild equals live state, stream by stream" "equal|differing|streams: $r" "$([[ "$r" == true\|* ]]; echo $?)"
 scenario_finish

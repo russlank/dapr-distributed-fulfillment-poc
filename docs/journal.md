@@ -5,6 +5,34 @@ keeps the expectation that turned out wrong.
 
 ## 2026-11-21: Event distribution, projection, reconciler
 
+### The M4 run of record: two missed windows and an unsound rebuild check
+
+The full suite on `448911f` (fresh volumes) passed 72 of 75 steps. The three
+others, with what they showed; the fixes below were prepared afterwards and have
+not been run on a stack yet.
+
+- **S01 rebuild:** every order completed and converged, but the rebuild
+  compared one checksum over all 2,115 streams before and after. Events of
+  other orders were still arriving in between (earlier drills' orders and
+  replays), so the totals differed without saying whether any stream
+  diverged. **Change:** the rebuild compares each stream's rebuilt state with
+  its live state inside the stream's own transaction and reports the streams
+  that differ; the overall checksums stay informational.
+- **R24 split (window missed):** all ten approvals committed before the
+  deadline, although half were timed up to 1.4 s after it. The script measured
+  the SQL-to-local clock difference once and waited about 40 s; the SQL Server
+  clock in the WSL2 VM steps (see the clock note in the integration tests), and the measured difference across runs
+  ranged from -0.54 s to +1.46 s, more than the ±1.5 s spread. The safety checks
+  (never both approved and expired; workflow equals SQL) passed. **Change:**
+  each approval's wait is measured by SQL itself shortly before it is sent.
+- **S52-C (UNVERIFIED, window missed):** the held signal (12 s) landed while
+  the run was still finishing, so the "raise finds the instance terminal" case
+  was not reached; the outcome was still correct (one decision, applied once).
+  Since M3 the run after the timer includes payment, packing, and three carrier
+  callbacks 2 s apart, which left about 7 s of margin; the added event work
+  of M4 used it up. **Change:** the raise is held 20 s (within the dispatcher's
+  30 s lease).
+
 ### A malformed event's payload reached the log
 
 - **Expected (drill R16):** dead letters are recorded with ids and reason

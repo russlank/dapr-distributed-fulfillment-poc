@@ -80,10 +80,12 @@ public sealed class EventConsumer(string connectionString)
 
     /// <summary>
     /// Rebuild (plan 7.8 item 5): per stream, under its lock, current state returns to sequence 0 and every history
-    /// row to Pending, then history is applied from sequence 1 with the same apply-and-drain rule. Returns the
-    /// checksum before and after (equal unless live state had diverged from its history).
+    /// row to Pending, then history is applied from sequence 1 with the same apply-and-drain rule. Each stream's
+    /// rebuilt state is compared with its live state inside the same transaction, so events still arriving for
+    /// other streams do not disturb the comparison; the streams that differed are returned. The checksums over all
+    /// streams before and after are informational (they differ whenever events arrive meanwhile).
     /// </summary>
-    public async Task<(string Before, string After, int Streams)> RebuildAsync(CancellationToken ct)
+    public async Task<(string Before, string After, int Streams, IReadOnlyList<string> Mismatches)> RebuildAsync(CancellationToken ct)
     {
         var before = await ChecksumAsync(null, ct);
         var streams = new List<(Guid OrderId, string Source)>();
@@ -98,22 +100,28 @@ public sealed class EventConsumer(string connectionString)
             }
         }
 
+        var mismatches = new List<string>();
         foreach (var (orderId, source) in streams)
         {
             await using var connection = new SqlConnection(connectionString);
             await connection.OpenAsync(ct);
             await using var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct);
-            await LockStreamAsync(connection, tx, orderId, source, ct);
+            var (liveLast, liveFields) = await LockStreamAsync(connection, tx, orderId, source, ct);
             await ExecAsync(connection, tx,
                 "UPDATE orders.OrderEventHistory SET Disposition = 'Pending', AppliedAt = NULL WHERE OrderId = @o AND Source = @s", ct, ("@o", orderId), ("@s", source));
             var (last, fields, _) = await DrainAsync(connection, tx, source, orderId, 0, new SortedDictionary<string, string>(StringComparer.Ordinal), ct);
+            if (last != liveLast || TimelineProjection.Serialize(fields) != TimelineProjection.Serialize(TimelineProjection.Deserialize(liveFields)))
+            {
+                mismatches.Add($"{orderId:D}/{source}: live {liveLast} rebuilt {last}");
+            }
+
             await ExecAsync(connection, tx,
                 "UPDATE orders.OrderTimelineState SET LastAppliedSequence = @q, Fields = @f, UpdatedAt = SYSUTCDATETIME() WHERE OrderId = @o AND Source = @s", ct,
                 ("@q", last), ("@f", TimelineProjection.Serialize(fields)), ("@o", orderId), ("@s", source));
             await tx.CommitAsync(ct);
         }
 
-        return (before, await ChecksumAsync(null, ct), streams.Count);
+        return (before, await ChecksumAsync(null, ct), streams.Count, mismatches);
     }
 
     /// <summary>Checksum of current state, over all orders or the given ones.</summary>

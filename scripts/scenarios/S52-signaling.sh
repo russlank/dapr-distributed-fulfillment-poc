@@ -146,7 +146,9 @@ wait_until 60 "C: run waiting" w_c
 review="$(review_of "$C")"
 near_deadline() { [[ "$(sql OrderDb "SELECT CASE WHEN DATEDIFF(millisecond, SYSUTCDATETIME(), DeadlineAt) < 3000 THEN 1 ELSE 0 END FROM orders.ReviewTask WHERE ReviewId = '$review'")" == 1 ]]; }
 wait_until 30 "C: 3 s before the deadline" near_deadline
-arm BeforeSignalRaise C Delay:12000
+# Held 20 s (within the dispatcher's 30 s lease): the run must finish its whole fulfillment (payment, packing,
+# carrier callbacks) after the timer fired before the raise lands; 12 s left too little margin.
+arm BeforeSignalRaise C Delay:20000
 read -r status body <<< "$(decide "$(api_base)" "$review" approve)"
 c_c() { completed_once "$C"; }
 wait_until 60 "C: order completed by the timer path" c_c

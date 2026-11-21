@@ -91,8 +91,17 @@ public static partial class EventEndpoints
             Results.Ok(await reader.ReadAsync(orderId, ct)));
         admin.MapPost("/timeline/rebuild", async (EventConsumer consumer, CancellationToken ct) =>
         {
-            var (before, after, streams) = await consumer.RebuildAsync(ct);
-            return Results.Ok(new { streams, checksumBefore = before, checksumAfter = after, equal = before == after });
+            var (before, after, streams, mismatches) = await consumer.RebuildAsync(ct);
+            // equal: every stream's rebuilt state equals its live state (compared per stream under its lock).
+            return Results.Ok(new
+            {
+                streams,
+                equal = mismatches.Count == 0,
+                mismatches = mismatches.Take(20),
+                mismatchCount = mismatches.Count,
+                checksumBefore = before,
+                checksumAfter = after
+            });
         });
         admin.MapGet("/timeline/checksum", async (string? orders, EventConsumer consumer, CancellationToken ct) =>
         {

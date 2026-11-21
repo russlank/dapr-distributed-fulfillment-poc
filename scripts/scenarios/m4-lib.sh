@@ -42,10 +42,10 @@ is_converged() { converged "$1" > /dev/null; }
 timeline_of() { admin_api GET "/system/orders/$1/timeline"; }
 # checksum_of <order ids, comma-separated> -> current-state checksum
 checksum_of() { json_get "$(admin_api GET "/system/timeline/checksum?orders=$1")" checksum; }
-# rebuild_timeline -> "<equal>|<before>|<after>|<streams>"
+# rebuild_timeline -> "<equal>|<differing streams>|<streams>": equal when every stream's rebuilt state equals its live state
 rebuild_timeline() {
   local r; r="$(curl -s -m 120 -X POST "$ORDER_API/system/timeline/rebuild" -H "X-Api-Key: $ADMIN_API_KEY")"
-  printf '%s|%s|%s|%s\n' "$(json_get "$r" equal | tr A-Z a-z)" "$(json_get "$r" checksumBefore)" "$(json_get "$r" checksumAfter)" "$(json_get "$r" streams)"
+  printf '%s|%s|%s\n' "$(json_get "$r" equal | tr A-Z a-z)" "$(json_get "$r" mismatchCount)" "$(json_get "$r" streams)"
 }
 # replay_outbox <source> <order id> <from sequence> -> replay result JSON
 replay_outbox() {
