@@ -80,6 +80,11 @@ public static partial class EventEndpoints
                 LogIngestFailed(logger, e.EventId, source, $"SQL error {ex.Number}");
                 return Results.Json(Retry, statusCode: StatusCodes.Status500InternalServerError);
             }
+            catch (EventTransactionLostException)
+            {
+                LogIngestFailed(logger, e.EventId, source, "transaction ended by the server");
+                return Results.Json(Retry, statusCode: StatusCodes.Status500InternalServerError);
+            }
         });
 
         app.MapPost(DeadLetterRoute, async (HttpRequest request, EventConsumer consumer, ILoggerFactory loggers, CancellationToken ct) =>

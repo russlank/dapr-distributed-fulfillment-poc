@@ -5,7 +5,7 @@ keeps the expectation that turned out wrong.
 
 ## 2026-11-21: Event distribution, projection, reconciler
 
-### A stream fell behind its own history and replays could not repair it (cause open)
+### A stream fell behind its own history: a swallowed deadlock let the consumer write outside its transaction
 
 - **Expected:** every event in a stream's history is applied in sequence: an
   event that arrives early waits as pending and is applied as soon as the event
@@ -31,7 +31,7 @@ keeps the expectation that turned out wrong.
   later delivery could bring it forward.
 - **Impact:** the timeline is a read model; orders, holds, payments, and
   shipments are not affected. A rebuild repairs such a stream.
-- **Possible causes (none confirmed).** For the observed state, events 3 and 4
+- **Possible causes, as listed before the cause was found.** For the observed state, events 3 and 4
   must have been stored as pending while the stream stood before 2, and the
   application of 2 must then have missed them; or the stream's state must have
   been read without the serialization its lock should give.
@@ -71,6 +71,37 @@ keeps the expectation that turned out wrong.
   The cause stays open until a recurrence with these logs explains it; the
   repair warning makes a recurrence visible even when the rebuild then finds
   nothing to repair.
+- **Observed, third time (full run on `cefbc5f`, which passed):** one repair
+  warning in the kept logs, an order's inventory stream again. Its event 3 had no
+  log line of its own: on one replica, the request that stored it ended with
+  "This SqlTransaction has completed; it is no longer usable" at the commit,
+  half a millisecond after the other replica applied event 2 without finding 3
+  pending. Event 4 then found 3 pending and repaired the stream. The phase
+  logged 42 deadlock victims (SQL error 1205) and 6 such commits, each within
+  milliseconds of a deadlock.
+- **Cause (found; candidate 1).** The stream lock's `HOLDLOCK` takes key-range
+  locks on the state table's primary key, so ingests of neighbouring streams
+  deadlock with each other. SQL Server then rolls back the victim's transaction.
+  When the victim waits in the lock batch's second statement (`SELECT ... WITH
+  (UPDLOCK, ROWLOCK)`), SqlClient does not raise the error: the method returns,
+  and the following statements run on the same connection without a transaction
+  and without the lock, each committing on its own. Here it read the stream at 1
+  (event 2 not yet committed) and stored 3 as pending after event 2's drain had
+  looked. Reproduced on the drill stack with the load scenarios: of 6 deadlocks
+  in the system_health session, the 4 victims waiting for `RangeS-U` (first
+  statement) were logged as 1205 and the 2 waiting for `U` (second statement)
+  ended as completed transactions at commit. The earlier two-session probes
+  could not show this: they never made the lock statement a deadlock victim.
+- **Fix:** every statement sent inside a consumer transaction starts with `IF
+  @@TRANCOUNT = 0 THROW 51000`, so after a swallowed rollback the next statement
+  fails instead of writing; a commit that finds the transaction completed is
+  reported as a transient failure. Both ask the broker to redeliver. On the
+  drill stack with the fix: 17 deadlocks, 13 victims logged as 1205 and 4 stopped
+  by the guard (51000), matching the 13 `RangeS-U` and 4 `U` victims in the
+  deadlock graphs; no completed commits, no repair warnings. The repair on
+  delivery stays as a second line. The deadlocks themselves (transient, retried
+  by the broker) remain; making the lock take no range locks for an existing
+  stream would remove most of them.
 
 ### The M4 run of record: two missed windows and an unsound rebuild check
 

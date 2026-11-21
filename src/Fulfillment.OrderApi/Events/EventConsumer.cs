@@ -12,6 +12,12 @@ namespace Fulfillment.OrderApi.Events;
 public sealed record IngestResult(string Disposition, int LastAppliedSequence, int Drained, int Repaired = 0);
 
 /// <summary>
+/// The server ended an event transaction (a deadlock victim) without the client being told in time; nothing of it
+/// was committed. Transient: the broker redelivers.
+/// </summary>
+public sealed class EventTransactionLostException(Exception inner) : Exception("the event transaction was ended by the server", inner);
+
+/// <summary>
 /// The event consumer (plan 7.8): one transaction per event, serialized per (order, source) by locking that
 /// stream's current-state row first. Inside it the event is classified with the pure rules; a new event is
 /// stored in history (Applied when it is the next sequence, else Pending), applied, and the pending
@@ -25,6 +31,14 @@ public sealed class EventConsumer(string connectionString)
     private static readonly Counter<long> DispositionCounter = Meter.CreateCounter<long>("event_history_dispositions_total");
     private static readonly Counter<long> RepairCounter = Meter.CreateCounter<long>("event_stream_repairs_total",
         description: "pending events drained on a duplicate or early delivery (a stream had been left behind its history)");
+
+    /// <summary>
+    /// Prefixed to every statement sent inside a consumer transaction. When SQL Server picks a statement as a
+    /// deadlock victim it rolls the transaction back; SqlClient does not always raise that error (seen with the
+    /// second statement of the stream lock), and the following statements would then run without a transaction and
+    /// without the stream lock, each committing on its own. This makes such a statement fail instead.
+    /// </summary>
+    private const string InTransaction = "IF @@TRANCOUNT = 0 THROW 51000, 'event consumer: the transaction was ended by the server', 1;\n";
 
     public async Task<IngestResult> IngestAsync(string streamSource, IncomingEvent e, CancellationToken ct)
     {
@@ -71,7 +85,7 @@ public sealed class EventConsumer(string connectionString)
                 break;
         }
 
-        await tx.CommitAsync(ct);
+        await CommitAsync(tx, ct);
         DispositionCounter.Add(1, new KeyValuePair<string, object?>("disposition", disposition), new KeyValuePair<string, object?>("source", streamSource));
         if (repaired > 0)
         {
@@ -158,7 +172,7 @@ public sealed class EventConsumer(string connectionString)
             await ExecAsync(connection, tx,
                 "UPDATE orders.OrderTimelineState SET LastAppliedSequence = @q, Fields = @f, UpdatedAt = SYSUTCDATETIME() WHERE OrderId = @o AND Source = @s", ct,
                 ("@q", last), ("@f", TimelineProjection.Serialize(fields)), ("@o", orderId), ("@s", source));
-            await tx.CommitAsync(ct);
+            await CommitAsync(tx, ct);
         }
 
         return (before, await ChecksumAsync(null, ct), streams.Count, mismatches);
@@ -166,7 +180,7 @@ public sealed class EventConsumer(string connectionString)
 
     private static async Task<string> HistorySummaryAsync(SqlConnection connection, SqlTransaction tx, Guid orderId, string source, CancellationToken ct)
     {
-        await using var command = new SqlCommand(
+        await using var command = Command(
             """
             SELECT STRING_AGG(CONCAT(Sequence, ':', Disposition, ':', Type, ':', EventId, ':dup', Duplicates), ' ') WITHIN GROUP (ORDER BY Sequence)
             FROM orders.OrderEventHistory WHERE OrderId = @o AND Source = @s
@@ -201,7 +215,7 @@ public sealed class EventConsumer(string connectionString)
             return (0, "{}");
         }
 
-        await using var command = new SqlCommand(
+        await using var command = Command(
             """
             IF NOT EXISTS (SELECT 1 FROM orders.OrderTimelineState WITH (UPDLOCK, HOLDLOCK) WHERE OrderId = @o AND Source = @s)
                 INSERT orders.OrderTimelineState (OrderId, Source) VALUES (@o, @s);
@@ -223,7 +237,7 @@ public sealed class EventConsumer(string connectionString)
         {
             Guid eventId;
             string type, data;
-            await using (var next = new SqlCommand(
+            await using (var next = Command(
                              "SELECT EventId, Type, Payload FROM orders.OrderEventHistory WHERE Source = @s AND OrderId = @o AND Sequence = @q AND Disposition = 'Pending'",
                              connection, tx))
             {
@@ -267,9 +281,24 @@ public sealed class EventConsumer(string connectionString)
 
     private static string? Truncate(string? value, int length) => value is null ? null : value.Length <= length ? value : value[..length];
 
+    private static async Task CommitAsync(SqlTransaction tx, CancellationToken ct)
+    {
+        try
+        {
+            await tx.CommitAsync(ct);
+        }
+        catch (InvalidOperationException e) when (tx.Connection is null)
+        {
+            // Completed by the server (rolled back) before the commit; see InTransaction.
+            throw new EventTransactionLostException(e);
+        }
+    }
+
+    private static SqlCommand Command(string sql, SqlConnection connection, SqlTransaction tx) => new(InTransaction + sql, connection, tx);
+
     private static async Task ExecAsync(SqlConnection connection, SqlTransaction tx, string sql, CancellationToken ct, params (string Name, object Value)[] parameters)
     {
-        await using var command = new SqlCommand(sql, connection, tx);
+        await using var command = Command(sql, connection, tx);
         foreach (var (name, value) in parameters)
         {
             command.Parameters.AddWithValue(name, value);
@@ -280,7 +309,7 @@ public sealed class EventConsumer(string connectionString)
 
     private static async Task<T> ScalarAsync<T>(SqlConnection connection, SqlTransaction tx, string sql, CancellationToken ct, params (string Name, object Value)[] parameters)
     {
-        await using var command = new SqlCommand(sql, connection, tx);
+        await using var command = Command(sql, connection, tx);
         foreach (var (name, value) in parameters)
         {
             command.Parameters.AddWithValue(name, value);
