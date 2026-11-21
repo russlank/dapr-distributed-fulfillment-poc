@@ -20,7 +20,8 @@
 #                  and ACC, which always run at the simulator's own 10 s (default 00:00:02; `default`
 #                  keeps 10 s for every step). The drill stack uses its 2 s profile.
 #
-# Results: artifacts/verify/<run>/steps.jsonl (one line per step), <phase>-<step>.log, summary.json;
+# Results: artifacts/verify/<run>/steps.jsonl (one line per step), <phase>-<step>.log, summary.json,
+# <phase>-order-api-logs.txt (drill phases: the order API replicas' logs before teardown);
 # the closing table compares each step with the previous run of the same suite. Exit 1 if a step failed.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 2
@@ -224,6 +225,9 @@ bring_up() { # phase flavor stack-up args...
   run_step "$phase" up bash scripts/stack-up.sh "$@"
   run_step "$phase" version version_check "$flavor"
 }
+keep_logs() { # phase: the order API replicas' logs (event dispositions, reconciler) before the stack goes away
+  docker compose --profile replicas logs --no-color --timestamps order-api order-api-2 > "$OUT/$1-order-api-logs.txt" 2>&1 || true
+}
 run_phase_steps() { local e; for e in "${SELECTED[@]}"; do [[ "${e%%|*}" == "$1" ]] || continue
   local id cmd; id="$(cut -d'|' -f2 <<< "$e")"; cmd="$(cut -d'|' -f3- <<< "$e")"
   # shellcheck disable=SC2086
@@ -267,6 +271,7 @@ if phase_used B; then
   ( export COMPOSE_PROJECT_NAME=fulfillment-drill BUILD_FLAVOR=drill DAPR_POC_ENV=drill START_DISPATCHER_LEASE=00:00:02 CARRIER_SIM_STEP=""
     bring_up B drill --drill --replicas
     run_phase_steps B
+    keep_logs B
     [[ "$SUITE" == full ]] && run_step B down docker compose --profile replicas --profile scale down
     exit $FAILED ) || FAILED=1
 fi
@@ -278,6 +283,7 @@ if phase_used C; then
     [[ "$SUITE" == full ]] || docker compose --profile replicas --profile scale down >/dev/null 2>&1
     bring_up C drill --drill
     run_phase_steps C
+    keep_logs C
     exit $FAILED ) || FAILED=1
 fi
 

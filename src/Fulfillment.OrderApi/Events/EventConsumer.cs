@@ -4,7 +4,12 @@ using Microsoft.Data.SqlClient;
 
 namespace Fulfillment.OrderApi.Events;
 
-public sealed record IngestResult(string Disposition, int LastAppliedSequence, int Drained);
+/// <summary>
+/// <paramref name="Repaired"/>: pending successors drained on a duplicate or early delivery. Normally 0: a stream's
+/// successors are drained when the event before them is applied; a positive value means a stream had been left
+/// behind its own history and this delivery repaired it.
+/// </summary>
+public sealed record IngestResult(string Disposition, int LastAppliedSequence, int Drained, int Repaired = 0);
 
 /// <summary>
 /// The event consumer (plan 7.8): one transaction per event, serialized per (order, source) by locking that
@@ -18,6 +23,8 @@ public sealed class EventConsumer(string connectionString)
 {
     private static readonly Meter Meter = new("Fulfillment.Events");
     private static readonly Counter<long> DispositionCounter = Meter.CreateCounter<long>("event_history_dispositions_total");
+    private static readonly Counter<long> RepairCounter = Meter.CreateCounter<long>("event_stream_repairs_total",
+        description: "pending events drained on a duplicate or early delivery (a stream had been left behind its history)");
 
     public async Task<IngestResult> IngestAsync(string streamSource, IncomingEvent e, CancellationToken ct)
     {
@@ -39,13 +46,16 @@ public sealed class EventConsumer(string connectionString)
 
         var disposition = TimelineProjection.Classify(e, streamSource, storedHash, atSequence, lastApplied);
         var drained = 0;
+        var repaired = 0;
         switch (disposition)
         {
             case Dispositions.Duplicate:
                 await ExecAsync(connection, tx, "UPDATE orders.OrderEventHistory SET Duplicates = Duplicates + 1 WHERE EventId = @id", ct, ("@id", e.EventId));
+                (lastApplied, repaired) = await RepairAsync(connection, tx, streamSource, e.OrderId, lastApplied, fieldsJson, ct);
                 break;
             case Dispositions.Pending:
                 await InsertHistoryAsync(connection, tx, streamSource, e, Dispositions.Pending, ct);
+                (lastApplied, repaired) = await RepairAsync(connection, tx, streamSource, e.OrderId, lastApplied, fieldsJson, ct);
                 break;
             case Dispositions.Applied:
                 await InsertHistoryAsync(connection, tx, streamSource, e, Dispositions.Applied, ct);
@@ -63,7 +73,32 @@ public sealed class EventConsumer(string connectionString)
 
         await tx.CommitAsync(ct);
         DispositionCounter.Add(1, new KeyValuePair<string, object?>("disposition", disposition), new KeyValuePair<string, object?>("source", streamSource));
-        return new IngestResult(disposition, lastApplied, drained);
+        if (repaired > 0)
+        {
+            RepairCounter.Add(repaired, new KeyValuePair<string, object?>("source", streamSource));
+        }
+
+        return new IngestResult(disposition, lastApplied, drained, repaired);
+    }
+
+    /// <summary>
+    /// Drains pending successors of the stream's current sequence on a delivery that applied nothing itself. Such
+    /// successors should not exist (they are drained when the event before them is applied); if a stream was left
+    /// behind its history, a later delivery of any of its events (a redelivery or a replay requested by the
+    /// reconciler) brings it up to date under the same lock and rule.
+    /// </summary>
+    private static async Task<(int LastApplied, int Repaired)> RepairAsync(SqlConnection connection, SqlTransaction tx, string source, Guid orderId,
+        int lastApplied, string fieldsJson, CancellationToken ct)
+    {
+        var (last, fields, drained) = await DrainAsync(connection, tx, source, orderId, lastApplied, TimelineProjection.Deserialize(fieldsJson), ct);
+        if (drained > 0)
+        {
+            await ExecAsync(connection, tx,
+                "UPDATE orders.OrderTimelineState SET LastAppliedSequence = @q, Fields = @f, UpdatedAt = SYSUTCDATETIME() WHERE OrderId = @o AND Source = @s", ct,
+                ("@q", last), ("@f", TimelineProjection.Serialize(fields)), ("@o", orderId), ("@s", source));
+        }
+
+        return (last, drained);
     }
 
     /// <summary>Records a message that could not be read as an event, or one the broker dead-lettered (ids and reason only).</summary>

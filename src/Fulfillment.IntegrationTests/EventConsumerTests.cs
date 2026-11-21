@@ -119,6 +119,39 @@ public sealed class EventConsumerTests(SqlServerFixture sql) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AStreamLeftBehindItsHistory_IsRepairedByTheNextDuplicateOrEarlyDelivery()
+    {
+        // The state seen in a full run: sequences 3 and 4 in history as pending while the stream stood at 2, and every
+        // later delivery of 3 or 4 (replays requested by the reconciler) only counted as a duplicate.
+        foreach (var early in new[] { false, true })
+        {
+            var order = Guid.NewGuid();
+            var e = FourPartialUpdates(order);
+            await consumer.IngestAsync(EventSources.Inventory, e[0], Ct);
+            await consumer.IngestAsync(EventSources.Inventory, e[1], Ct);
+            foreach (var x in new[] { e[2], e[3] })
+            {
+                await Db.ExecuteAsync(db,
+                    """
+                    INSERT orders.OrderEventHistory (EventId, Source, OrderId, Sequence, Type, SchemaVersion, OccurredAt, PayloadHash, Payload, Disposition)
+                    VALUES (@id, 'inventory', @o, @q, @t, 1, SYSUTCDATETIME(), @h, @p, 'Pending')
+                    """, ("@id", x.EventId), ("@o", order), ("@q", x.Sequence), ("@t", x.Type), ("@h", x.PayloadHash), ("@p", x.Data));
+            }
+
+            Assert.Equal(2, await LastAppliedAsync(order));
+            var delivery = early ? Event(order, 6, EventTypes.HoldCreated, "{\"holdId\":\"c\"}") : e[2];
+            var result = await consumer.IngestAsync(EventSources.Inventory, delivery, Ct);
+
+            Assert.Equal((early ? Dispositions.Pending : Dispositions.Duplicate, 4, 2), (result.Disposition, result.LastAppliedSequence, result.Repaired));
+            Assert.Equal(4, await LastAppliedAsync(order));
+            Assert.Equal("{\"hold:a\":\"Consumed\",\"hold:b\":\"Consumed\"}",
+                await Db.ScalarAsync<string>(db, "SELECT Fields FROM orders.OrderTimelineState WHERE OrderId = @o AND Source = 'inventory'", ("@o", order)));
+            Assert.Equal(0, await Db.ScalarAsync<int>(db,
+                "SELECT COUNT(*) FROM orders.OrderEventHistory WHERE OrderId = @o AND Sequence <= 4 AND Disposition = 'Pending'", ("@o", order)));
+        }
+    }
+
+    [Fact]
     public async Task Rebuild_ReportsADivergedStreamWithBothStatesAndItsHistory_AndRestoresIt()
     {
         var order = Guid.NewGuid();

@@ -5,26 +5,72 @@ keeps the expectation that turned out wrong.
 
 ## 2026-11-21: Event distribution, projection, reconciler
 
-### Two streams differed from their rebuild once (open)
+### A stream fell behind its own history and replays could not repair it (cause open)
 
-- **Expected:** with the rebuild now comparing each stream under its own lock, a
-  rebuild after any amount of traffic reports no differing stream.
-- **Observed (full run on `54807a6`, fresh volumes):** S01's rebuild, the first
-  rebuild after the M1-M3 regression on that stack, reported 2 of 2,115 streams
-  whose live state differed from the state rebuilt from their history. Everything
-  else in S01 passed (every event in history once, applied, current state at the
-  last sequence for its three orders). The report named only the counts, and the
-  rebuild replaced the live state, so which streams and how they differed was lost.
-- **Not reproduced:** the same M1-M3 regression followed by S01 on the drill stack
-  (2,147 streams); 700 fresh streams with 2,800 events published shuffled, and
-  then with each stream's four events at the same instant, to both consumer
-  replicas (3,247 streams). Every rebuild was equal. Reading the code found no
-  writer besides the consumer and the rebuild, and every read in the consumer
-  happens after the stream's state row is locked.
-- **Change:** a differing stream is now reported with its live and rebuilt state
-  and its history (sequence, disposition, type, event id, duplicates; no
-  payloads), and the scenarios keep the whole rebuild answer, so a recurrence
-  explains itself.
+- **Expected:** every event in a stream's history is applied in sequence: an
+  event that arrives early waits as pending and is applied as soon as the event
+  before it is applied. A rebuild from history therefore equals live state,
+  stream by stream.
+- **Observed, first time (full run on `54807a6`, fresh volumes):** S01's rebuild,
+  the first rebuild after the M1-M3 regression on that stack, reported 2 of 2,115
+  streams whose live state differed from their rebuild. The report gave only the
+  counts, and the rebuild replaced the live state, so the details were lost.
+- **Not reproduced in between:** the same M1-M3 regression followed by S01 on the
+  drill stack (2,147 streams); 700 fresh streams with 2,800 events published
+  shuffled, and then with each stream's four events at the same instant, to
+  both consumer replicas (3,247 streams). A rebuild now reports a differing
+  stream with both states and its history (`00f2096`).
+- **Observed, second time (full run on `00f2096`, fresh volumes):** 1 of 2,100
+  streams, an order's inventory stream: live state at sequence 2 (both holds
+  `Held`); history held sequences 1 to 4 (the two `HoldConsumed` events 3 and 4
+  are written by one inventory transaction and arrive together); rebuilt state
+  at 4 (both `Consumed`). Events 3 and 4 had been delivered 106 and 105 more
+  times: the reconciler saw the source ahead of the stream and requested a
+  replay on every pass, and each replayed event, already in history, counted as
+  a duplicate and changed nothing. So the stream did not only fall behind; no
+  later delivery could bring it forward.
+- **Impact:** the timeline is a read model; orders, holds, payments, and
+  shipments are not affected. A rebuild repairs such a stream.
+- **Possible causes (none confirmed).** For the observed state, events 3 and 4
+  must have been stored as pending while the stream stood before 2, and the
+  application of 2 must then have missed them; or the stream's state must have
+  been read without the serialization its lock should give.
+  1. *An interrupted consumer transaction.* The drills before S01 kill
+     processes, cut connections, and stop hosts while events flow. A
+     transaction cut at its commit is all or nothing; a divergence would need
+     client code doing part of the work outside the transaction, or a pooled
+     connection reused while a transaction was still open.
+  2. *A gap in the stream lock.* Two-session probes on SQL Server
+     reproduced neither a stale read of the state row nor a lost first insert:
+     with read committed snapshot, the waiting session blocks in the lock
+     statement and then reads the committed sequence, for an existing and for
+     a new stream. The lock is correct in every interleaving tried.
+  3. *The comparison itself.* Ruled out for this occurrence: the history and
+     both states are consistent with the stream simply being behind.
+  4. *A writer outside the consumer* (a drill script, a harness reset, a
+     migration). None exists in the code.
+  Ruled out by schema or code: two events with one stream sequence (unique
+  index), conflicting producer payloads (dead-lettered without a state
+  change), writes through EF (none), an isolation level leaking through the
+  connection pool (no code sets one in the order API).
+- **What was missing to decide:** the original dispositions of 3 and 4 (the
+  rebuild reset them), their receive times (the database was reset for the next
+  phase), and the consumer's per-event log lines (the containers were removed).
+- **Changes:**
+  - every delivery that applies nothing itself (a duplicate or an early event)
+    also drains pending successors of the stream's current sequence, under the
+    same lock; a positive count is logged as a warning ("stream ... was behind
+    its history") and counted (`event_stream_repairs_total`). A redelivery or
+    a replay requested by the reconciler now repairs such a stream instead of
+    being counted as a duplicate forever;
+  - the verification runner keeps the order API replicas' logs of each drill
+    phase before the stack goes away, so a recurrence shows the order of
+    deliveries and their dispositions;
+  - a rebuild reports a differing stream with both states and its history (no
+    payloads), and the scenarios keep the whole rebuild answer.
+  The cause stays open until a recurrence with these logs explains it; the
+  repair warning makes a recurrence visible even when the rebuild then finds
+  nothing to repair.
 
 ### The M4 run of record: two missed windows and an unsound rebuild check
 

@@ -66,6 +66,11 @@ public static partial class EventEndpoints
             {
                 var result = await consumer.IngestAsync(source, e, ct);
                 LogIngested(logger, e.EventId, source, e.OrderId, e.Sequence, e.Type, result.Disposition, result.LastAppliedSequence, result.Drained);
+                if (result.Repaired > 0)
+                {
+                    LogRepaired(logger, source, e.OrderId, result.Repaired, result.LastAppliedSequence, e.EventId, result.Disposition);
+                }
+
                 return Results.Ok(Success);
             }
             catch (SqlException ex)
@@ -160,6 +165,10 @@ public static partial class EventEndpoints
 
     [LoggerMessage(Level = LogLevel.Information, Message = "event {EventId} {Source} order={OrderId} seq={Sequence} type={Type}: {Disposition} (applied up to {Last}, drained {Drained})")]
     private static partial void LogIngested(ILogger logger, Guid eventId, string source, Guid orderId, int sequence, string type, string disposition, int last, int drained);
+
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "stream {Source} order={OrderId} was behind its history: {Repaired} pending event(s) drained, now at {Last} (on event {EventId}, {Disposition})")]
+    private static partial void LogRepaired(ILogger logger, string source, Guid orderId, int repaired, int last, Guid eventId, string disposition);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "event {EventId} {Source}: ingest failed, redelivery requested: {Error}")]
     private static partial void LogIngestFailed(ILogger logger, Guid eventId, string source, string error);
