@@ -110,9 +110,14 @@ public sealed class EventConsumer(string connectionString)
             await ExecAsync(connection, tx,
                 "UPDATE orders.OrderEventHistory SET Disposition = 'Pending', AppliedAt = NULL WHERE OrderId = @o AND Source = @s", ct, ("@o", orderId), ("@s", source));
             var (last, fields, _) = await DrainAsync(connection, tx, source, orderId, 0, new SortedDictionary<string, string>(StringComparer.Ordinal), ct);
-            if (last != liveLast || TimelineProjection.Serialize(fields) != TimelineProjection.Serialize(TimelineProjection.Deserialize(liveFields)))
+            var liveNormalized = TimelineProjection.Serialize(TimelineProjection.Deserialize(liveFields));
+            var rebuiltSerialized = TimelineProjection.Serialize(fields);
+            if (last != liveLast || rebuiltSerialized != liveNormalized)
             {
-                mismatches.Add($"{orderId:D}/{source}: live {liveLast} rebuilt {last}");
+                // Enough to explain the difference afterwards (the live state is replaced below): both states and the
+                // stream's history by sequence, disposition after the rebuild, type, and event id; no payloads.
+                var history = await HistorySummaryAsync(connection, tx, orderId, source, ct);
+                mismatches.Add($"{orderId:D}/{source}: live {liveLast} {liveNormalized} rebuilt {last} {rebuiltSerialized} history {history}");
             }
 
             await ExecAsync(connection, tx,
@@ -122,6 +127,18 @@ public sealed class EventConsumer(string connectionString)
         }
 
         return (before, await ChecksumAsync(null, ct), streams.Count, mismatches);
+    }
+
+    private static async Task<string> HistorySummaryAsync(SqlConnection connection, SqlTransaction tx, Guid orderId, string source, CancellationToken ct)
+    {
+        await using var command = new SqlCommand(
+            """
+            SELECT STRING_AGG(CONCAT(Sequence, ':', Disposition, ':', Type, ':', EventId, ':dup', Duplicates), ' ') WITHIN GROUP (ORDER BY Sequence)
+            FROM orders.OrderEventHistory WHERE OrderId = @o AND Source = @s
+            """, connection, tx);
+        command.Parameters.AddWithValue("@o", orderId);
+        command.Parameters.AddWithValue("@s", source);
+        return await command.ExecuteScalarAsync(ct) as string ?? "";
     }
 
     /// <summary>Checksum of current state, over all orders or the given ones.</summary>

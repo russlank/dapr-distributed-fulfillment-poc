@@ -5,6 +5,27 @@ keeps the expectation that turned out wrong.
 
 ## 2026-11-21: Event distribution, projection, reconciler
 
+### Two streams differed from their rebuild once (open)
+
+- **Expected:** with the rebuild now comparing each stream under its own lock, a
+  rebuild after any amount of traffic reports no differing stream.
+- **Observed (full run on `54807a6`, fresh volumes):** S01's rebuild, the first
+  rebuild after the M1-M3 regression on that stack, reported 2 of 2,115 streams
+  whose live state differed from the state rebuilt from their history. Everything
+  else in S01 passed (every event in history once, applied, current state at the
+  last sequence for its three orders). The report named only the counts, and the
+  rebuild replaced the live state, so which streams and how they differed was lost.
+- **Not reproduced:** the same M1-M3 regression followed by S01 on the drill stack
+  (2,147 streams); 700 fresh streams with 2,800 events published shuffled, and
+  then with each stream's four events at the same instant, to both consumer
+  replicas (3,247 streams). Every rebuild was equal. Reading the code found no
+  writer besides the consumer and the rebuild, and every read in the consumer
+  happens after the stream's state row is locked.
+- **Change:** a differing stream is now reported with its live and rebuilt state
+  and its history (sequence, disposition, type, event id, duplicates; no
+  payloads), and the scenarios keep the whole rebuild answer, so a recurrence
+  explains itself.
+
 ### The M4 run of record: two missed windows and an unsound rebuild check
 
 The full suite on `448911f` (fresh volumes) passed 72 of 75 steps. The three

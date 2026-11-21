@@ -117,4 +117,24 @@ public sealed class EventConsumerTests(SqlServerFixture sql) : IAsyncLifetime
         Assert.Equal(before, after);
         Assert.True(streams >= 5);
     }
+
+    [Fact]
+    public async Task Rebuild_ReportsADivergedStreamWithBothStatesAndItsHistory_AndRestoresIt()
+    {
+        var order = Guid.NewGuid();
+        var e = FourPartialUpdates(order);
+        foreach (var x in e)
+        {
+            await consumer.IngestAsync(EventSources.Inventory, x, Ct);
+        }
+
+        await Db.ExecuteAsync(db, "UPDATE orders.OrderTimelineState SET LastAppliedSequence = 3, Fields = '{}' WHERE OrderId = @o", ("@o", order));
+        var (_, _, _, mismatches) = await consumer.RebuildAsync(Ct);
+
+        var report = Assert.Single(mismatches, m => m.StartsWith($"{order:D}/inventory", StringComparison.Ordinal));
+        Assert.Contains("live 3 {}", report, StringComparison.Ordinal);
+        Assert.Contains("rebuilt 4 {\"hold:a\":\"Consumed\",\"hold:b\":\"Consumed\"}", report, StringComparison.Ordinal);
+        Assert.Contains($"4:Applied:HoldConsumed:{e[3].EventId}".ToUpperInvariant(), report.ToUpperInvariant(), StringComparison.Ordinal);
+        Assert.Equal(4, await LastAppliedAsync(order));
+    }
 }

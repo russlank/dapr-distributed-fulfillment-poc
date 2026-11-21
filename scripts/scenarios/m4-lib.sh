@@ -45,6 +45,7 @@ checksum_of() { json_get "$(admin_api GET "/system/timeline/checksum?orders=$1")
 # rebuild_timeline -> "<equal>|<differing streams>|<streams>": equal when every stream's rebuilt state equals its live state
 rebuild_timeline() {
   local r; r="$(curl -s -m 120 -X POST "$ORDER_API/system/timeline/rebuild" -H "X-Api-Key: $ADMIN_API_KEY")"
+  [[ -n "${OUT_DIR:-}" ]] && printf '%s\n' "$r" >> "$OUT_DIR/rebuild.jsonl"
   printf '%s|%s|%s\n' "$(json_get "$r" equal | tr A-Z a-z)" "$(json_get "$r" mismatchCount)" "$(json_get "$r" streams)"
 }
 # replay_outbox <source> <order id> <from sequence> -> replay result JSON
