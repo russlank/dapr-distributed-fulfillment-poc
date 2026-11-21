@@ -59,7 +59,9 @@ public sealed partial class Failpoints
     /// <summary>
     /// Fires an armed failpoint once: FailFast ends the process, Throw raises a transient error,
     /// AbortConnection raises <see cref="FailpointAbortException"/> (an HTTP host resets the client's
-    /// connection: the work done so far stays, the answer is lost), Delay:&lt;ms&gt; waits.
+    /// connection: the work done so far stays, the answer is lost), Skip raises
+    /// <see cref="FailpointSkipException"/> (the caller abandons its work and reports success, for example
+    /// a consumer that acknowledges a message without storing it), Delay:&lt;ms&gt; waits.
     /// </summary>
     public async Task HitAsync(string name, string operationKey, CancellationToken ct = default)
     {
@@ -99,6 +101,8 @@ public sealed partial class Failpoints
                 throw new InvalidOperationException($"failpoint {name} fired for {operationKey}");
             case "AbortConnection":
                 throw new FailpointAbortException($"failpoint {name} fired for {operationKey}");
+            case "Skip":
+                throw new FailpointSkipException($"failpoint {name} fired for {operationKey}");
             case var delay when delay.StartsWith("Delay:", StringComparison.Ordinal)
                                 && int.TryParse(delay.AsSpan(6), System.Globalization.CultureInfo.InvariantCulture, out var milliseconds):
                 // Holds the caller inside the window, e.g. past a lease expiry.
@@ -139,6 +143,27 @@ public sealed class FailpointAbortException : Exception
     }
 
     public FailpointAbortException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>
+/// Raised by the Skip failpoint action (drill builds only): the caller drops the work it was about to do and
+/// answers as if it had succeeded, simulating a lost delivery.
+/// </summary>
+public sealed class FailpointSkipException : Exception
+{
+    public FailpointSkipException()
+    {
+    }
+
+    public FailpointSkipException(string message)
+        : base(message)
+    {
+    }
+
+    public FailpointSkipException(string message, Exception innerException)
         : base(message, innerException)
     {
     }

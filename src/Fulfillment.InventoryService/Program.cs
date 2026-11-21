@@ -1,10 +1,12 @@
 using Dapr.Workflow;
 using Fulfillment.Contracts;
 using Fulfillment.Contracts.Diagnostics;
+using Fulfillment.Contracts.Events;
 using Fulfillment.Contracts.Workflows;
 using Fulfillment.InventoryService.Diagnostics;
 using Fulfillment.InventoryService.Inventory;
 using Fulfillment.InventoryService.Persistence;
+using Fulfillment.Messaging.Outbox;
 using Fulfillment.ServiceDefaults;
 using Microsoft.Extensions.Options;
 
@@ -29,6 +31,8 @@ builder.Services.AddSingleton<IStockCoordinator>(sp =>
 builder.Services.AddSingleton(sp => new HoldSweeper(sp.GetRequiredService<InventoryOperations>(), sp.GetRequiredService<IOptions<InventoryOptions>>(),
     sp.GetRequiredService<RuntimeIdentity>(), inventoryDb, sp.GetRequiredService<ILogger<HoldSweeper>>()));
 builder.Services.AddHostedService(sp => sp.GetRequiredService<HoldSweeper>());
+builder.Services.AddOutboxRelay(builder.Configuration, inventoryDb, new OutboxTable(EventSources.Inventory, "inventory.Outbox"),
+    sp => Failpoints.Compiled ? sp.GetRequiredService<Failpoints>().HitAsync : (_, _, _) => Task.CompletedTask);
 builder.Services.AddDaprWorkflow(options =>
 {
     options.RegisterActivity<RecordProbeEffectActivity>(RuntimeProbe.EffectActivity);
@@ -46,5 +50,6 @@ await app.Services.GetRequiredService<ProbeEffectStore>().EnsureSchemaAsync();
 await app.Services.GetRequiredService<Failpoints>().EnsureStoreAsync();
 app.MapServiceDefaults();
 app.MapActorsHandlers();
+app.MapOutboxEndpoints();
 await app.RunAsync();
 return 0;

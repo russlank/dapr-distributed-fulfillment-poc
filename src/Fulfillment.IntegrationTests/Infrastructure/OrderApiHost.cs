@@ -57,6 +57,7 @@ public sealed class OrderApiHost(string connectionString, Action<IServiceCollect
         // them for the same rows (and hold leases while calling a sidecar that does not exist in tests).
         builder.UseSetting("CarrierForwarder:Enabled", "false");
         builder.UseSetting("RepairDispatcher:Enabled", "false");
+        builder.UseSetting("OutboxRelay:Enabled", "false");
         if (configureServices is not null)
         {
             builder.ConfigureTestServices(configureServices);

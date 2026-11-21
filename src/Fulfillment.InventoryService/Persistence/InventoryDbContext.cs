@@ -95,10 +95,30 @@ public sealed class ProcessedOperation
     public int Replays { get; private set; }
 }
 
-/// <summary>Write side of the inventory outbox: one row per hold transition, gapless sequence per order. Publication comes later.</summary>
+/// <summary>The inventory outbox: one row per hold transition, gapless sequence per order, published at least once by the relay.</summary>
 public sealed class OutboxEntry
 {
     public long Id { get; private set; }
+
+    public Guid EventId { get; private set; }
+
+    public int SchemaVersion { get; private set; }
+
+    public int Attempts { get; private set; }
+
+    public DateTime NextAttemptAt { get; private set; }
+
+    public string? LeaseOwner { get; private set; }
+
+    public DateTime? LeaseUntil { get; private set; }
+
+    public int Generation { get; private set; }
+
+    public bool Stalled { get; private set; }
+
+    public string? LastError { get; private set; }
+
+    public DateTime? PublishedAt { get; private set; }
 
     public Guid OrderId { get; private set; }
 
@@ -267,6 +287,24 @@ public sealed class InventoryDbContext(DbContextOptions<InventoryDbContext> opti
         outbox.Property(o => o.State).HasMaxLength(16).IsUnicode(false).HasDefaultValue("Pending");
         // Gapless per order: the next sequence is read under a range lock in the same transaction.
         outbox.HasIndex(o => new { o.OrderId, o.Sequence }).IsUnique().HasDatabaseName("UX_Outbox_Order_Sequence");
+        OutboxColumns(outbox);
+    }
+
+    /// <summary>The relay's columns (same in every owning database); defaults let the business code insert only its facts.</summary>
+    private static void OutboxColumns(EntityTypeBuilder<OutboxEntry> outbox)
+    {
+        outbox.Property(o => o.EventId).HasDefaultValueSql("NEWID()");
+        outbox.HasIndex(o => o.EventId).IsUnique().HasDatabaseName("UX_Outbox_EventId");
+        outbox.Property(o => o.SchemaVersion).HasDefaultValue(1);
+        outbox.Property(o => o.Attempts).HasDefaultValue(0);
+        outbox.Property(o => o.NextAttemptAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+        outbox.Property(o => o.LeaseOwner).HasMaxLength(64).IsUnicode(false);
+        outbox.Property(o => o.LeaseUntil).HasColumnType("datetime2(3)");
+        outbox.Property(o => o.Generation).HasDefaultValue(0);
+        outbox.Property(o => o.Stalled).HasDefaultValue(false);
+        outbox.Property(o => o.LastError).HasMaxLength(200);
+        outbox.Property(o => o.PublishedAt).HasColumnType("datetime2(3)");
+        outbox.HasIndex(o => new { o.State, o.NextAttemptAt }).HasDatabaseName("IX_Outbox_Due");
     }
 
     private static void ConfigureClosure(EntityTypeBuilder<OrderClosure> closure)

@@ -60,6 +60,7 @@ public sealed partial class OrderAcceptance(OrderDbContext db, Failpoints failpo
         var orderId = Guid.CreateVersion7();
         var order = Order.Submit(orderId, request.CustomerId, request.Lines.Select(l => (l.Sku, l.Quantity)));
         db.Orders.Add(order);
+        db.OrderOutbox.Add(OrderOutboxEntry.Accepted(orderId));
         db.IdempotencyKeys.Add(new IdempotencyKey(idempotencyKey, hash, orderId));
         db.WorkflowStartRequests.Add(WorkflowStartRequest.ForNewOrder(orderId));
         try

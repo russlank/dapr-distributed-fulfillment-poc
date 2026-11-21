@@ -161,17 +161,20 @@ public sealed partial class PaymentExecutor(string connectionString, ProviderCli
         {
             var outcome = OutcomeOf(response!);
             var code = response!.Status == ProviderStatuses.Prohibited ? "ProhibitedBy:" + response.ProhibitedBy : response.ResultCode;
+            await using var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct);
             await using var update = new SqlCommand(
                 """
                 UPDATE payment.PaymentOperation SET Outcome = @o, ResultCode = @c, AuthorizationExpiresAt = @e, FinishedBy = @r
+                OUTPUT inserted.OrderId, inserted.Kind, inserted.AmountMinor, inserted.Currency
                 WHERE OperationKey = @k AND State = 'Finished' AND Outcome = 'Ambiguous';
-                """, connection);
+                """, connection, tx);
             update.Parameters.AddWithValue("@k", key);
             update.Parameters.AddWithValue("@o", outcome);
             update.Parameters.AddWithValue("@c", (object?)code ?? DBNull.Value);
             update.Parameters.Add("@e", System.Data.SqlDbType.DateTime2).Value = (object?)response.AuthorizationExpiresAtUtc ?? DBNull.Value;
             update.Parameters.AddWithValue("@r", "reconcile:" + replica);
-            await update.ExecuteNonQueryAsync(ct);
+            await AppendRecordedAsync(connection, tx, update, key, outcome, code, ct);
+            await tx.CommitAsync(ct);
             LogFinished(logger, key, outcome, "reconciled");
         }
 
@@ -245,23 +248,51 @@ public sealed partial class PaymentExecutor(string connectionString, ProviderCli
     /// <summary>Records the outcome once; whoever finished first wins and everyone returns the stored outcome.</summary>
     private async Task<PaymentOperationResult> FinishAsync(SqlConnection connection, string key, string outcome, string? code, DateTime? expiresAt, CancellationToken ct)
     {
+        await using (var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct))
         await using (var update = new SqlCommand(
                          """
                          UPDATE payment.PaymentOperation
                          SET State = 'Finished', Outcome = @o, ResultCode = @c, AuthorizationExpiresAt = @e, FinishedAt = SYSUTCDATETIME(), FinishedBy = @r
+                         OUTPUT inserted.OrderId, inserted.Kind, inserted.AmountMinor, inserted.Currency
                          WHERE OperationKey = @k AND State = 'Pending';
-                         """, connection))
+                         """, connection, tx))
         {
             update.Parameters.AddWithValue("@k", key);
             update.Parameters.AddWithValue("@o", outcome);
             update.Parameters.AddWithValue("@c", (object?)code ?? DBNull.Value);
             update.Parameters.Add("@e", System.Data.SqlDbType.DateTime2).Value = (object?)expiresAt ?? DBNull.Value;
             update.Parameters.AddWithValue("@r", replica);
-            await update.ExecuteNonQueryAsync(ct);
+            await AppendRecordedAsync(connection, tx, update, key, outcome, code, ct);
+            await tx.CommitAsync(ct);
         }
 
         LogFinished(logger, key, outcome, code);
         return (await ReadFinishedAsync(connection, key, ct))!;
+    }
+
+    /// <summary>
+    /// Runs the outcome update and, when it changed the operation (the first finisher, or a reconciliation that
+    /// replaced Ambiguous), appends a PaymentOperationRecorded event in the same transaction.
+    /// </summary>
+    private static async Task AppendRecordedAsync(SqlConnection connection, SqlTransaction tx, SqlCommand update, string key, string outcome, string? code,
+        CancellationToken ct)
+    {
+        Guid orderId;
+        string kind, currency;
+        long amount;
+        await using (var reader = await update.ExecuteReaderAsync(ct))
+        {
+            if (!await reader.ReadAsync(ct))
+            {
+                return;
+            }
+
+            (orderId, kind, amount, currency) = (reader.GetGuid(0), reader.GetString(1), reader.GetInt64(2), reader.GetString(3));
+        }
+
+        var payload = System.Text.Json.JsonSerializer.Serialize(new { operationKey = key, kind, outcome, resultCode = code, amountMinor = amount, currency });
+        await Fulfillment.Messaging.Outbox.OutboxStore.AppendAsync(connection, tx, "payment.Outbox", orderId, Fulfillment.Contracts.Events.EventTypes.PaymentOperationRecorded,
+            payload, ct);
     }
 
     private static async Task EnsureIntentAsync(SqlConnection connection, PaymentOperationRequest request, ProviderOperationRequest p, CancellationToken ct)

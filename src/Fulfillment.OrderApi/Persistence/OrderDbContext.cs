@@ -49,6 +49,14 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
 
     public DbSet<OrderOutboxEntry> OrderOutbox => Set<OrderOutboxEntry>();
 
+    public DbSet<OrderEventHistory> OrderEventHistory => Set<OrderEventHistory>();
+
+    public DbSet<OrderTimelineState> OrderTimelineState => Set<OrderTimelineState>();
+
+    public DbSet<EventDeadLetter> EventDeadLetters => Set<EventDeadLetter>();
+
+    public DbSet<ReconcilerLease> ReconcilerLeases => Set<ReconcilerLease>();
+
     public DbSet<Fulfillment.OrderApi.Interventions.RepairStartRequest> RepairStartRequests => Set<Fulfillment.OrderApi.Interventions.RepairStartRequest>();
 
     public DbSet<SignalAttempt> SignalAttempts => Set<SignalAttempt>();
@@ -421,20 +429,92 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
             c.Property(x => x.DetectedBy).HasMaxLength(16).IsUnicode(false);
             c.Property(x => x.DetectedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
         });
+        modelBuilder.Entity<OrderEventHistory>(h =>
+        {
+            h.ToTable("OrderEventHistory", t =>
+            {
+                t.HasCheckConstraint("CK_OrderEventHistory_Sequence", "[Sequence] >= 1");
+                t.HasCheckConstraint("CK_OrderEventHistory_Disposition", "[Disposition] IN ('Applied', 'Pending')");
+                t.HasCheckConstraint("CK_OrderEventHistory_Source", "[Source] IN ('orders', 'inventory', 'payments', 'shipping')");
+                t.HasCheckConstraint("CK_OrderEventHistory_Applied", "([Disposition] = 'Applied' AND [AppliedAt] IS NOT NULL) OR ([Disposition] = 'Pending' AND [AppliedAt] IS NULL)");
+            });
+            h.HasKey(x => x.EventId);
+            h.Property(x => x.Source).HasMaxLength(16).IsUnicode(false);
+            h.Property(x => x.Type).HasMaxLength(40).IsUnicode(false);
+            h.Property(x => x.OccurredAt).HasColumnType("datetime2(3)");
+            h.Property(x => x.ReceivedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+            h.Property(x => x.PayloadHash).HasMaxLength(64).IsUnicode(false).IsFixedLength();
+            h.Property(x => x.Payload).HasMaxLength(2000);
+            h.Property(x => x.Disposition).HasMaxLength(16).IsUnicode(false);
+            h.Property(x => x.AppliedAt).HasColumnType("datetime2(3)");
+            h.Property(x => x.Duplicates).HasDefaultValue(0);
+            // One event per stream position, whatever its id.
+            h.HasIndex(x => new { x.Source, x.OrderId, x.Sequence }).IsUnique().HasDatabaseName("UX_OrderEventHistory_Stream");
+            h.HasIndex(x => new { x.Disposition, x.ReceivedAt }).HasDatabaseName("IX_OrderEventHistory_Pending");
+        });
+        modelBuilder.Entity<OrderTimelineState>(t =>
+        {
+            t.ToTable("OrderTimelineState", c =>
+            {
+                c.HasCheckConstraint("CK_OrderTimelineState_Sequence", "[LastAppliedSequence] >= 0");
+                c.HasCheckConstraint("CK_OrderTimelineState_Source", "[Source] IN ('orders', 'inventory', 'payments', 'shipping')");
+            });
+            t.HasKey(x => new { x.OrderId, x.Source });
+            t.Property(x => x.Source).HasMaxLength(16).IsUnicode(false);
+            t.Property(x => x.LastAppliedSequence).HasDefaultValue(0);
+            t.Property(x => x.Fields).HasDefaultValue("{}");
+            t.Property(x => x.UpdatedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+        });
+        modelBuilder.Entity<EventDeadLetter>(d =>
+        {
+            d.ToTable("EventDeadLetter");
+            d.HasKey(x => x.Id);
+            d.Property(x => x.MessageId).HasMaxLength(80).IsUnicode(false);
+            d.Property(x => x.Source).HasMaxLength(16).IsUnicode(false);
+            d.Property(x => x.Type).HasMaxLength(40).IsUnicode(false);
+            d.Property(x => x.Reason).HasMaxLength(40).IsUnicode(false);
+            d.Property(x => x.Topic).HasMaxLength(64).IsUnicode(false);
+            d.Property(x => x.RecordedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+            d.HasIndex(x => x.EventId).HasDatabaseName("IX_EventDeadLetter_EventId");
+        });
+        modelBuilder.Entity<ReconcilerLease>(l =>
+        {
+            l.ToTable("ReconcilerLease");
+            l.HasKey(x => x.Name);
+            l.Property(x => x.Name).HasMaxLength(32).IsUnicode(false);
+            l.Property(x => x.Owner).HasMaxLength(80).IsUnicode(false);
+            l.Property(x => x.LeaseUntil).HasColumnType("datetime2(3)");
+            l.Property(x => x.LastRunAt).HasColumnType("datetime2(3)");
+        });
         modelBuilder.Entity<OrderOutboxEntry>(o =>
         {
             o.ToTable("OrderOutbox", t =>
             {
-                t.HasCheckConstraint("CK_OrderOutbox_EventType", "[EventType] IN ('OrderCompleted')");
+                t.HasCheckConstraint("CK_OrderOutbox_EventType", "[EventType] IN ('OrderStatusChanged', 'OrderCompleted')");
                 t.HasCheckConstraint("CK_OrderOutbox_State", "[State] IN ('Pending', 'Published')");
+                t.HasCheckConstraint("CK_OrderOutbox_Sequence", "[Sequence] >= 1");
             });
             o.HasKey(x => x.Id);
+            o.Property(x => x.EventId).HasDefaultValueSql("NEWID()");
+            o.HasIndex(x => x.EventId).IsUnique().HasDatabaseName("UX_OrderOutbox_EventId");
             o.Property(x => x.EventType).HasMaxLength(32).IsUnicode(false);
-            o.Property(x => x.State).HasMaxLength(16).IsUnicode(false);
+            o.Property(x => x.SchemaVersion).HasDefaultValue(1);
+            o.Property(x => x.Payload).HasMaxLength(2000);
+            o.Property(x => x.State).HasMaxLength(16).IsUnicode(false).HasDefaultValue("Pending");
+            o.Property(x => x.Attempts).HasDefaultValue(0);
+            o.Property(x => x.NextAttemptAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+            o.Property(x => x.LeaseOwner).HasMaxLength(64).IsUnicode(false);
+            o.Property(x => x.LeaseUntil).HasColumnType("datetime2(3)");
+            o.Property(x => x.Generation).HasDefaultValue(0);
+            o.Property(x => x.Stalled).HasDefaultValue(false);
+            o.Property(x => x.LastError).HasMaxLength(200);
             o.Property(x => x.CreatedAt).HasColumnType("datetime2(3)").HasDefaultValueSql("SYSUTCDATETIME()");
+            o.Property(x => x.PublishedAt).HasColumnType("datetime2(3)");
             o.HasOne<Order>().WithMany().HasForeignKey(x => x.OrderId);
-            // One OrderCompleted per order.
-            o.HasIndex(x => new { x.OrderId, x.EventType }).IsUnique().HasDatabaseName("UX_OrderOutbox_Event");
+            // The order's history sequence, so the stream is gapless; one OrderCompleted per order.
+            o.HasIndex(x => new { x.OrderId, x.Sequence }).IsUnique().HasDatabaseName("UX_OrderOutbox_Order_Sequence");
+            o.HasIndex(x => x.OrderId).IsUnique().HasFilter("[EventType] = 'OrderCompleted'").HasDatabaseName("UX_OrderOutbox_Completed");
+            o.HasIndex(x => new { x.State, x.NextAttemptAt }).HasDatabaseName("IX_OrderOutbox_Due");
         });
     }
 

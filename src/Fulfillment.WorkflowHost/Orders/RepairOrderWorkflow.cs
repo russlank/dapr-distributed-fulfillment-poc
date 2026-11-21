@@ -1,5 +1,6 @@
 using Dapr.Workflow;
 using Fulfillment.Contracts;
+using Fulfillment.Contracts.Shipping;
 using Fulfillment.Contracts.Workflows;
 
 namespace Fulfillment.WorkflowHost.Orders;
@@ -9,8 +10,11 @@ namespace Fulfillment.WorkflowHost.Orders;
 /// Payment cases (AmbiguousPayment, CompensationExhausted): release the holds, void the authorization's key with the
 /// repair key (a void that finds a capture is followed by a refund of the capture with the repair key), end the order
 /// Compensated, record the outcome on the case. The repair keys (…:void:case-{id}) differ from the original ones, so a
-/// repair never repeats an original effect, and compensation by key also prohibits a late original. Other kinds are
-/// recorded only: what follows a failed delivery is decided outside this workflow.
+/// repair never repeats an original effect, and compensation by key also prohibits a late original.
+/// Reconciler cases: a failed or vanished workflow confirmed as a failure is compensated the same way (reason
+/// WorkflowFailed) while the order has not reached the point of no return; a completed run that left the order
+/// awaiting delivery is finalized when Shipping's own record shows the delivery. Everything else is recorded only:
+/// what follows a failed delivery, or a failure after dispatch, is decided outside this workflow.
 /// </summary>
 public sealed partial class RepairOrderWorkflow : Workflow<RepairInput, RepairResult>
 {
@@ -18,6 +22,10 @@ public sealed partial class RepairOrderWorkflow : Workflow<RepairInput, RepairRe
     private static readonly WorkflowTaskOptions OnOrderApi = new(Retry, AppIds.OrderApi);
     private static readonly WorkflowTaskOptions OnInventory = new(Retry, AppIds.InventoryService);
     private static readonly WorkflowTaskOptions OnPayment = new(Retry, AppIds.PaymentService);
+    private static readonly WorkflowTaskOptions OnShipping = new(Retry, AppIds.ShippingService);
+
+    /// <summary>Statuses before the point of no return in which compensation is still allowed.</summary>
+    private static readonly string[] Compensable = ["Submitted", "Validating", "AwaitingApproval", "Reserving", "PaymentAuthorized", "Packing", "ManualInterventionRequired"];
 
     public override async Task<RepairResult> RunAsync(WorkflowContext context, RepairInput input)
     {
@@ -26,7 +34,24 @@ public sealed partial class RepairOrderWorkflow : Workflow<RepairInput, RepairRe
         var log = context.CreateReplaySafeLogger<RepairOrderWorkflow>();
         string outcome;
         var status = "unchanged";
-        if (input.Kind is InterventionKinds.AmbiguousPayment or InterventionKinds.CompensationExhausted)
+        var workflowCase = input.Kind is InterventionKinds.WorkflowFaulted or InterventionKinds.WorkflowMissing or InterventionKinds.ExecutionMismatch;
+        if (input.Kind is InterventionKinds.ExecutionMismatch && input.Action == CaseActions.ConfirmExternalSuccess && input.OrderStatus == "AwaitingDelivery")
+        {
+            var shipment = await context.CallActivityAsync<ShipmentStatusResult>(ShippingActivities.GetShipmentStatus, new ShipmentStatusRequest(input.OrderId), OnShipping);
+            if (shipment.TerminalStatus == "Delivered")
+            {
+                var finalized = await context.CallActivityAsync<StepResult>(OrderLifecycleActivities.FinalizeDelivered,
+                    new CompleteFulfillmentRequest(input.OrderId, context.InstanceId), OnOrderApi);
+                outcome = "Finalized:" + finalized.Outcome;
+                status = finalized.OrderStatus;
+            }
+            else
+            {
+                outcome = "NotDelivered:" + (shipment.TerminalStatus ?? shipment.CurrentStatus ?? "none");
+            }
+        }
+        else if (input.Kind is InterventionKinds.AmbiguousPayment or InterventionKinds.CompensationExhausted
+                 || (workflowCase && input.Action == CaseActions.ConfirmExternalFailure && Compensable.Contains(input.OrderStatus)))
         {
             await context.CallActivityAsync<ReleaseHoldsResult>(InventoryActivities.ReleaseOrderHolds, new ReleaseHoldsRequest(input.OrderId, "Repair"), OnInventory);
             var qualifier = PaymentSteps.Repair(input.CaseId);
@@ -41,7 +66,7 @@ public sealed partial class RepairOrderWorkflow : Workflow<RepairInput, RepairRe
             }
 
             var closed = await context.CallActivityAsync<StepResult>(FulfillmentWorkflow.CloseUnfulfilledOrderActivity,
-                new CloseUnfulfilledRequest(input.OrderId, "Compensated", "PaymentFailed"), OnOrderApi);
+                new CloseUnfulfilledRequest(input.OrderId, "Compensated", workflowCase ? "WorkflowFailed" : "PaymentFailed"), OnOrderApi);
             status = closed.OrderStatus;
         }
         else

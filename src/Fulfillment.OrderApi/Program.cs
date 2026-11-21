@@ -2,9 +2,11 @@ using System.Text.RegularExpressions;
 using Dapr.Workflow;
 using Fulfillment.Contracts;
 using Fulfillment.Contracts.Diagnostics;
+using Fulfillment.Contracts.Events;
 using Fulfillment.Contracts.Orders;
 using Fulfillment.Contracts.Workflows;
 using Fulfillment.Messaging;
+using Fulfillment.Messaging.Outbox;
 using Fulfillment.OrderApi;
 using Fulfillment.OrderApi.Diagnostics;
 using Fulfillment.OrderApi.Dispatch;
@@ -60,6 +62,23 @@ builder.Services.Configure<SignalDispatcherOptions>(builder.Configuration.GetSec
 builder.Services.AddSingleton(new SignalStore(orderDb));
 builder.Services.AddTransient<IWorkflowSignaler, WorkflowHostSignaler>();
 builder.Services.AddHostedService<SignalDispatcher>();
+
+// The orders source's outbox (one event per status-history row), published at least once.
+builder.Services.AddOutboxRelay(builder.Configuration, orderDb, new OutboxTable(EventSources.Orders, "orders.OrderOutbox"),
+    sp => Failpoints.Compiled ? sp.GetRequiredService<Failpoints>().HitAsync : (_, _, _) => Task.CompletedTask);
+
+// Event consumer (history, current state per source, dead-letter recorder), timeline, and outbox replay of every source.
+builder.Services.AddSingleton(new Fulfillment.OrderApi.Events.EventConsumer(orderDb));
+builder.Services.AddSingleton(new Fulfillment.OrderApi.Events.TimelineReader(orderDb));
+builder.Services.AddTransient<Fulfillment.OrderApi.Events.OutboxReplayClient>();
+builder.Services.AddHttpClient("dapr-publish", client =>
+{
+    client.BaseAddress = new Uri($"http://127.0.0.1:{Environment.GetEnvironmentVariable("DAPR_HTTP_PORT") ?? "3500"}/");
+    if (Environment.GetEnvironmentVariable("DAPR_API_TOKEN") is { Length: > 0 } token)
+    {
+        client.DefaultRequestHeaders.Add("dapr-api-token", token);
+    }
+});
 
 // Durable start dispatcher: starts fulfillment workflows through the workflow host's management API.
 builder.Services.Configure<StartDispatcherOptions>(builder.Configuration.GetSection(StartDispatcherOptions.Section));
@@ -124,6 +143,7 @@ app.Use(async (context, next) =>
 app.MapOrders();
 app.MapReviews();
 app.MapOrderExecutionDiagnostics();
+Fulfillment.OrderApi.Events.EventEndpoints.MapEvents(app);
 
 // Runtime probe (operational diagnostic, admin key): exercises execution claim, cross-app
 // activities, durable timer, and keyed effects end to end. Not business functionality.

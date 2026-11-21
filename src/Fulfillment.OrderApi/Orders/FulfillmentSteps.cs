@@ -284,7 +284,7 @@ public sealed class FulfillmentSteps(string connectionString, string replica, St
         };
         if (request.ReasonCode is not (OrderReasonCodes.InsufficientStock or OrderReasonCodes.ReservationExpired or OrderReasonCodes.ReservationFailed
             or OrderReasonCodes.PaymentDeclined or OrderReasonCodes.PaymentProviderUnavailable or OrderReasonCodes.PaymentCaptureFailed
-            or OrderReasonCodes.PaymentFailed or OrderReasonCodes.CancellationRequested))
+            or OrderReasonCodes.PaymentFailed or OrderReasonCodes.CancellationRequested or OrderReasonCodes.WorkflowFailed))
         {
             throw new ArgumentException($"unknown reason {request.ReasonCode}", nameof(request));
         }
@@ -299,8 +299,11 @@ public sealed class FulfillmentSteps(string connectionString, string replica, St
             return new StepResult(status == target ? StepOutcomes.AlreadyApplied : StepOutcomes.AlreadyTerminal, key, status.ToString());
         }
 
-        // From any status of a running fulfillment after reservation began, including a case wait.
-        if (status is not (OrderStatus.Reserving or OrderStatus.PaymentAuthorized or OrderStatus.Packing or OrderStatus.ManualInterventionRequired)
+        // From any status of a running fulfillment after reservation began, including a case wait; a repair of a failed
+        // or vanished workflow also from the statuses before reservation (nothing was reserved or charged yet).
+        var before = request.ReasonCode == OrderReasonCodes.WorkflowFailed
+                     && status is OrderStatus.Submitted or OrderStatus.Validating or OrderStatus.AwaitingApproval;
+        if (!(before || status is OrderStatus.Reserving or OrderStatus.PaymentAuthorized or OrderStatus.Packing or OrderStatus.ManualInterventionRequired)
             || !await OrderTransitions.TryTransitionAsync(connection, tx, request.OrderId, status, target, request.ReasonCode, checkpoint, key, ct))
         {
             throw new InvalidOperationException($"closing an unfulfilled order in status {status}");

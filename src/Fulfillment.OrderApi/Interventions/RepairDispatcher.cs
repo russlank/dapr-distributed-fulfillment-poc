@@ -80,7 +80,8 @@ public sealed partial class RepairDispatcher(string connectionString, IServiceSc
                          WHERE r.State = 'Pending' AND r.NextAttemptAt <= SYSUTCDATETIME() AND (r.LeaseExpiresAt IS NULL OR r.LeaseExpiresAt < SYSUTCDATETIME());
                          SELECT c.CaseId, c.OrderId, c.InstanceId, c.Token, k.Kind, k.ResolutionAction,
                                 ISNULL((SELECT TotalMinor FROM orders.OrderCheck WHERE OrderId = c.OrderId AND CheckName = 'price'), 0),
-                                ISNULL((SELECT Currency FROM orders.OrderCheck WHERE OrderId = c.OrderId AND CheckName = 'price'), 'EUR')
+                                ISNULL((SELECT Currency FROM orders.OrderCheck WHERE OrderId = c.OrderId AND CheckName = 'price'), 'EUR'),
+                                (SELECT Status FROM orders.[Order] WHERE OrderId = c.OrderId)
                          FROM @c c JOIN orders.InterventionCase k ON k.CaseId = c.CaseId;
                          """, connection))
         {
@@ -91,7 +92,8 @@ public sealed partial class RepairDispatcher(string connectionString, IServiceSc
                 return false;
             }
 
-            input = new RepairInput(reader.GetGuid(1), reader.GetGuid(0), reader.GetString(4), reader.GetString(5), reader.GetInt64(6), reader.GetString(7));
+            input = new RepairInput(reader.GetGuid(1), reader.GetGuid(0), reader.GetString(4), reader.GetString(5), reader.GetInt64(6), reader.GetString(7),
+                reader.GetString(8));
             instanceId = reader.GetString(2);
             token = reader.GetGuid(3);
         }

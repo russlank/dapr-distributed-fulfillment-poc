@@ -1,6 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
+using Fulfillment.Contracts.Events;
 using Fulfillment.Contracts.Shipping;
+using Fulfillment.Messaging.Outbox;
 using Microsoft.Data.SqlClient;
 
 namespace Fulfillment.ShippingService.Shipping;
@@ -39,6 +42,8 @@ public sealed class ShippingOptions
 /// </summary>
 public sealed partial class ShippingOperations(string connectionString, HttpClient carrier, ShippingOptions options, string replica, ILogger<ShippingOperations> logger)
 {
+    private const string OutboxTableName = "shipping.Outbox";
+
     /// <summary>The shipment id of an order: deterministic, so every retry and run asks the carrier with the same key.</summary>
     public static Guid ShipmentIdOf(Guid orderId) => orderId;
 
@@ -75,12 +80,24 @@ public sealed partial class ShippingOperations(string connectionString, HttpClie
             LogDispatch(logger, shipmentId, sends, answer, detail);
             if (accepted is not null)
             {
-                await Exec(connection,
-                    """
-                    UPDATE shipping.Shipment SET State = 'Dispatched', CarrierAcceptedAt = SYSUTCDATETIME(),
-                        DeliveryDeadlineAt = DATEADD(millisecond, @d, SYSUTCDATETIME())
-                    WHERE ShipmentId = @s AND State <> 'Dispatched';
-                    """, ct, ("@s", shipmentId), ("@d", (int)options.DeliveryDeadline.TotalMilliseconds));
+                await using (var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct))
+                {
+                    var changed = await ScalarAsync<int>(connection, tx,
+                        """
+                        UPDATE shipping.Shipment SET State = 'Dispatched', CarrierAcceptedAt = SYSUTCDATETIME(),
+                            DeliveryDeadlineAt = DATEADD(millisecond, @d, SYSUTCDATETIME())
+                        WHERE ShipmentId = @s AND State <> 'Dispatched';
+                        SELECT @@ROWCOUNT;
+                        """, ct, ("@s", shipmentId), ("@d", (int)options.DeliveryDeadline.TotalMilliseconds));
+                    if (changed == 1)
+                    {
+                        await OutboxStore.AppendAsync(connection, tx, OutboxTableName, request.OrderId, EventTypes.ShipmentDispatched,
+                            JsonSerializer.Serialize(new { shipmentId, parcels = request.Parcels }), ct);
+                    }
+
+                    await tx.CommitAsync(ct);
+                }
+
                 return (await DispatchedAsync(connection, shipmentId, ct))!;
             }
 
@@ -272,6 +289,11 @@ public sealed partial class ShippingOperations(string connectionString, HttpClie
             VALUES (@e, @s, @o, @st, @v, @at, @src, @h, @out, 0);
             """, ct, ("@e", e.EventId), ("@s", e.ShipmentId), ("@o", e.OrderId), ("@st", e.Status), ("@v", e.Version), ("@at", e.OccurredAtUtc), ("@src", e.Source),
             ("@h", e.PayloadHash), ("@out", result));
+        // Every recorded carrier status is an event of the shipment's order (a mismatched callback names another order;
+        // the shipment's own stream records that it arrived).
+        await OutboxStore.AppendAsync(connection, tx, OutboxTableName, Guid.Parse(orderOfShipment), EventTypes.CarrierStatusRecorded,
+            JsonSerializer.Serialize(new { carrierEventId = e.EventId, shipmentId = e.ShipmentId, status = e.Status, version = e.Version, outcome = result, source = e.Source }),
+            ct);
         if (result is CarrierStatusOutcomes.Applied or CarrierStatusOutcomes.TerminalApplied)
         {
             await Exec(connection, tx,

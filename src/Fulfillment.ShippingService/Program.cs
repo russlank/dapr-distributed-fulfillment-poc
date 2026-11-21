@@ -1,6 +1,8 @@
 using Dapr.Workflow;
 using Fulfillment.Contracts;
+using Fulfillment.Contracts.Events;
 using Fulfillment.Contracts.Shipping;
+using Fulfillment.Messaging.Outbox;
 using Fulfillment.ServiceDefaults;
 using Fulfillment.ShippingService.Persistence;
 using Fulfillment.ShippingService.Shipping;
@@ -29,6 +31,8 @@ builder.Services.AddHttpClient("carrier", http =>
 }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { ConnectTimeout = shippingOptions.RequestTimeout / 2 });
 builder.Services.AddSingleton(sp => new ShippingOperations(shippingDb, sp.GetRequiredService<IHttpClientFactory>().CreateClient("carrier"), shippingOptions,
     sp.GetRequiredService<RuntimeIdentity>().Replica, sp.GetRequiredService<ILogger<ShippingOperations>>()));
+builder.Services.AddOutboxRelay(builder.Configuration, shippingDb, new OutboxTable(EventSources.Shipping, "shipping.Outbox"),
+    sp => Failpoints.Compiled ? sp.GetRequiredService<Failpoints>().HitAsync : (_, _, _) => Task.CompletedTask);
 builder.Services.AddDaprWorkflow(options =>
 {
     options.RegisterActivity<DispatchShipmentActivity>(ShippingActivities.DispatchShipment);
@@ -38,7 +42,9 @@ builder.Services.AddDaprWorkflow(options =>
 
 var app = builder.Build();
 await ShippingDbMigrations.EnsureCurrentAsync(shippingDb);
+await app.Services.GetRequiredService<Failpoints>().EnsureStoreAsync();
 app.MapServiceDefaults();
+app.MapOutboxEndpoints();
 
 // Reached only through the sidecar (the app token is required on /internal/ routes).
 app.MapPost(ShippingRoutes.CarrierStatus, async (CarrierStatusIngest ingest, ShippingOperations operations, CancellationToken ct) =>

@@ -45,6 +45,18 @@ public static class InterventionKinds
     public const string DeliveryException = "DeliveryException";
     public const string DeliveryOverdue = "DeliveryOverdue";
     public const string CompensationExhausted = "CompensationExhausted";
+
+    /// <summary>Opened by the reconciler: the order is not terminal, but its workflow failed or was terminated.</summary>
+    public const string WorkflowFaulted = "WorkflowFaulted";
+
+    /// <summary>Opened by the reconciler: the order was started, but its workflow instance does not exist.</summary>
+    public const string WorkflowMissing = "WorkflowMissing";
+
+    /// <summary>Opened by the reconciler: the workflow completed, but the order is not terminal (missing finalization).</summary>
+    public const string ExecutionMismatch = "ExecutionMismatch";
+
+    /// <summary>Opened by the reconciler: a projection gap whose missing event the source does not have.</summary>
+    public const string ProjectionGap = "ProjectionGap";
 }
 
 public static class CaseStates
@@ -115,7 +127,8 @@ public static class RepairWorkflow
 }
 
 /// <param name="AmountMinor">The order's stored price (for a refund of the full captured amount).</param>
-public sealed record RepairInput(Guid OrderId, Guid CaseId, string Kind, string Action, long AmountMinor, string Currency);
+/// <param name="OrderStatus">The order's status when the repair was started (decides whether compensation is still allowed).</param>
+public sealed record RepairInput(Guid OrderId, Guid CaseId, string Kind, string Action, long AmountMinor, string Currency, string? OrderStatus = null);
 
 public sealed record RepairOutcomeRequest(Guid CaseId, string Outcome);
 

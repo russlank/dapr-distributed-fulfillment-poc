@@ -1,3 +1,5 @@
+using Fulfillment.Contracts.Events;
+using Fulfillment.Messaging.Outbox;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 
@@ -23,6 +25,7 @@ public sealed class PaymentDbContext(DbContextOptions<PaymentDbContext> options)
     {
         ArgumentNullException.ThrowIfNull(modelBuilder);
         modelBuilder.HasDefaultSchema(Schema);
+        OutboxModel.Configure(modelBuilder, [EventTypes.PaymentOperationRecorded]);
 
         modelBuilder.Entity<PaymentOperation>(op =>
         {

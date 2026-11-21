@@ -201,20 +201,8 @@ public sealed class OrderLifecycleSteps(string connectionString, StepCheckpoint 
             orderStatus.ToString(), OrderStatuses.IsTerminal(orderStatus), false);
     }
 
-    internal static async Task AppendHistoryAsync(SqlConnection connection, SqlTransaction tx, Guid orderId, OrderStatus from, OrderStatus to, string reason, CancellationToken ct)
-    {
-        await using var history = new SqlCommand(
-            """
-            INSERT orders.OrderStatusHistory (OrderId, Sequence, FromStatus, ToStatus, ReasonCode)
-            SELECT @o, ISNULL(MAX(Sequence), 0) + 1, @from, @to, @reason
-            FROM orders.OrderStatusHistory WITH (UPDLOCK, HOLDLOCK) WHERE OrderId = @o;
-            """, connection, tx);
-        history.Parameters.AddWithValue("@o", orderId);
-        history.Parameters.AddWithValue("@from", from.ToString());
-        history.Parameters.AddWithValue("@to", to.ToString());
-        history.Parameters.AddWithValue("@reason", reason);
-        await history.ExecuteNonQueryAsync(ct);
-    }
+    internal static Task AppendHistoryAsync(SqlConnection connection, SqlTransaction tx, Guid orderId, OrderStatus from, OrderStatus to, string reason, CancellationToken ct) =>
+        OrderEvents.AppendHistoryAndEventAsync(connection, tx, orderId, from, to, reason, ct);
 
     private static readonly OrderStatus[] Chain = [OrderStatus.Reserving, OrderStatus.PaymentAuthorized, OrderStatus.Packing, OrderStatus.Dispatched, OrderStatus.AwaitingDelivery];
 
@@ -222,10 +210,12 @@ public sealed class OrderLifecycleSteps(string connectionString, StepCheckpoint 
     private static bool IsLater(OrderStatus status, OrderStatus to) => Array.IndexOf(Chain, status) > Array.IndexOf(Chain, to);
 
     /// <summary>
-    /// The terminal transaction of a delivered order: AwaitingDelivery → Completed (Delivered), the OrderCompleted
-    /// outbox row, and the start request closed, all or nothing. The outbox row exists once per order, so a repeat
-    /// finds it and changes nothing.
+    /// The terminal transaction of a delivered order: AwaitingDelivery → Completed (Delivered) with its history row
+    /// and OrderCompleted event, and the start request closed, all or nothing. The event exists once per order, so a
+    /// repeat finds it and changes nothing.
     /// </summary>
+    public const string DrillFinalizeReportsTerminal = "FinalizeReportsTerminal";
+
     public async Task<StepResult> FinalizeDeliveredAsync(CompleteFulfillmentRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -249,18 +239,22 @@ public sealed class OrderLifecycleSteps(string connectionString, StepCheckpoint 
             return new StepResult(StepOutcomes.AlreadyTerminal, key, status.ToString());
         }
 
+        try
+        {
+            // Drill (R30 C): the step reports the order terminal without finalizing it, so the run completes while
+            // SQL stays AwaitingDelivery, the mismatch the reconciler must find.
+            await checkpoint(DrillFinalizeReportsTerminal, key, ct);
+        }
+        catch (Fulfillment.ServiceDefaults.FailpointSkipException)
+        {
+            await tx.RollbackAsync(ct);
+            return new StepResult(StepOutcomes.AlreadyTerminal, key, status.ToString());
+        }
+
         if (!await OrderTransitions.TryTransitionAsync(connection, tx, request.OrderId, OrderStatus.AwaitingDelivery, OrderStatus.Completed, OrderReasonCodes.Delivered,
                 checkpoint, key, ct))
         {
             throw new InvalidOperationException($"finalizing an order in status {status}");
-        }
-
-        await using (var outbox = new SqlCommand(
-                         "INSERT orders.OrderOutbox (OrderId, EventType, Payload, State) VALUES (@o, 'OrderCompleted', @p, 'Pending')", connection, tx))
-        {
-            outbox.Parameters.AddWithValue("@o", request.OrderId);
-            outbox.Parameters.AddWithValue("@p", $"{{\"orderId\":\"{request.OrderId}\",\"instanceId\":\"{request.InstanceId}\"}}");
-            await outbox.ExecuteNonQueryAsync(ct);
         }
 
         await OrderTransitions.CloseStartRequestAsync(connection, tx, request.OrderId, ct);

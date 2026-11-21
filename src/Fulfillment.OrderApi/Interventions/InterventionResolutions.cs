@@ -49,6 +49,13 @@ public sealed class InterventionResolutions(string connectionString, WorkflowHos
         [InterventionKinds.DeliveryException] = [CaseActions.ConfirmExternalSuccess, CaseActions.ConfirmExternalFailure, CaseActions.Acknowledge],
         [InterventionKinds.DeliveryOverdue] = [CaseActions.ConfirmExternalSuccess, CaseActions.ConfirmExternalFailure, CaseActions.Acknowledge],
         [InterventionKinds.CarrierTerminalConflict] = [CaseActions.Acknowledge],
+
+        // Reconciler cases: confirm the failure (compensate if still allowed), confirm success after checking the external
+        // record (a mismatch with a delivered shipment is finalized), or acknowledge (record only).
+        [InterventionKinds.WorkflowFaulted] = [CaseActions.ConfirmExternalFailure, CaseActions.Acknowledge],
+        [InterventionKinds.WorkflowMissing] = [CaseActions.ConfirmExternalFailure, CaseActions.Acknowledge],
+        [InterventionKinds.ExecutionMismatch] = [CaseActions.ConfirmExternalSuccess, CaseActions.ConfirmExternalFailure, CaseActions.Acknowledge],
+        [InterventionKinds.ProjectionGap] = [CaseActions.Acknowledge],
     };
 
     public async Task<ResolveOutcome> ResolveAsync(Guid caseId, ResolveCaseRequest request, CancellationToken ct)

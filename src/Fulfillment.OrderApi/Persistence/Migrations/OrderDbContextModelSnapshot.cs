@@ -187,6 +187,62 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.EventDeadLetter", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<Guid?>("EventId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("MessageId")
+                        .HasMaxLength(80)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(80)");
+
+                    b.Property<Guid?>("OrderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(40)");
+
+                    b.Property<DateTime>("RecordedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<int?>("Sequence")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Source")
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<string>("Topic")
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<string>("Type")
+                        .HasMaxLength(40)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(40)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EventId")
+                        .HasDatabaseName("IX_EventDeadLetter_EventId");
+
+                    b.ToTable("EventDeadLetter", "orders");
+                });
+
             modelBuilder.Entity("Fulfillment.OrderApi.Domain.ExecutionClaim", b =>
                 {
                     b.Property<long>("Id")
@@ -480,6 +536,88 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.OrderEventHistory", b =>
+                {
+                    b.Property<Guid>("EventId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("AppliedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("Disposition")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<int>("Duplicates")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("PayloadHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("char(64)")
+                        .IsFixedLength();
+
+                    b.Property<DateTime>("ReceivedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<int>("SchemaVersion")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(40)");
+
+                    b.HasKey("EventId");
+
+                    b.HasIndex("Disposition", "ReceivedAt")
+                        .HasDatabaseName("IX_OrderEventHistory_Pending");
+
+                    b.HasIndex("Source", "OrderId", "Sequence")
+                        .IsUnique()
+                        .HasDatabaseName("UX_OrderEventHistory_Stream");
+
+                    b.ToTable("OrderEventHistory", "orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_OrderEventHistory_Applied", "([Disposition] = 'Applied' AND [AppliedAt] IS NOT NULL) OR ([Disposition] = 'Pending' AND [AppliedAt] IS NULL)");
+
+                            t.HasCheckConstraint("CK_OrderEventHistory_Disposition", "[Disposition] IN ('Applied', 'Pending')");
+
+                            t.HasCheckConstraint("CK_OrderEventHistory_Sequence", "[Sequence] >= 1");
+
+                            t.HasCheckConstraint("CK_OrderEventHistory_Source", "[Source] IN ('orders', 'inventory', 'payments', 'shipping')");
+                        });
+                });
+
             modelBuilder.Entity("Fulfillment.OrderApi.Domain.OrderLine", b =>
                 {
                     b.Property<Guid>("OrderId")
@@ -515,10 +653,20 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
 
+                    b.Property<int>("Attempts")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
                     b.Property<DateTime>("CreatedAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("datetime2(3)")
                         .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<Guid>("EventId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier")
+                        .HasDefaultValueSql("NEWID()");
 
                     b.Property<string>("EventType")
                         .IsRequired()
@@ -526,28 +674,83 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                         .IsUnicode(false)
                         .HasColumnType("varchar(32)");
 
+                    b.Property<int>("Generation")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("LeaseOwner")
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<DateTime?>("LeaseUntil")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<DateTime>("NextAttemptAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
                     b.Property<Guid>("OrderId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Payload")
                         .IsRequired()
-                        .HasColumnType("nvarchar(max)");
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<DateTime?>("PublishedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<int>("SchemaVersion")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("Stalled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(false);
 
                     b.Property<string>("State")
                         .IsRequired()
+                        .ValueGeneratedOnAdd()
                         .HasMaxLength(16)
                         .IsUnicode(false)
-                        .HasColumnType("varchar(16)");
+                        .HasColumnType("varchar(16)")
+                        .HasDefaultValue("Pending");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("OrderId", "EventType")
+                    b.HasIndex("EventId")
                         .IsUnique()
-                        .HasDatabaseName("UX_OrderOutbox_Event");
+                        .HasDatabaseName("UX_OrderOutbox_EventId");
+
+                    b.HasIndex("OrderId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_OrderOutbox_Completed")
+                        .HasFilter("[EventType] = 'OrderCompleted'");
+
+                    b.HasIndex("OrderId", "Sequence")
+                        .IsUnique()
+                        .HasDatabaseName("UX_OrderOutbox_Order_Sequence");
+
+                    b.HasIndex("State", "NextAttemptAt")
+                        .HasDatabaseName("IX_OrderOutbox_Due");
 
                     b.ToTable("OrderOutbox", "orders", t =>
                         {
-                            t.HasCheckConstraint("CK_OrderOutbox_EventType", "[EventType] IN ('OrderCompleted')");
+                            t.HasCheckConstraint("CK_OrderOutbox_EventType", "[EventType] IN ('OrderStatusChanged', 'OrderCompleted')");
+
+                            t.HasCheckConstraint("CK_OrderOutbox_Sequence", "[Sequence] >= 1");
 
                             t.HasCheckConstraint("CK_OrderOutbox_State", "[State] IN ('Pending', 'Published')");
                         });
@@ -600,6 +803,42 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                             t.HasCheckConstraint("CK_OrderStatusHistory_Sequence", "[Sequence] >= 1");
 
                             t.HasCheckConstraint("CK_OrderStatusHistory_ToStatus", "[ToStatus] IN ('Submitted', 'Validating', 'Reserving', 'PaymentAuthorized', 'Packing', 'AwaitingApproval', 'Dispatched', 'AwaitingDelivery', 'Completed', 'Rejected', 'Cancelled', 'Compensated', 'ManualInterventionRequired')");
+                        });
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.OrderTimelineState", b =>
+                {
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Source")
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<string>("Fields")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("nvarchar(max)")
+                        .HasDefaultValue("{}");
+
+                    b.Property<int>("LastAppliedSequence")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.HasKey("OrderId", "Source");
+
+                    b.ToTable("OrderTimelineState", "orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_OrderTimelineState_Sequence", "[LastAppliedSequence] >= 0");
+
+                            t.HasCheckConstraint("CK_OrderTimelineState_Source", "[Source] IN ('orders', 'inventory', 'payments', 'shipping')");
                         });
                 });
 
@@ -693,6 +932,29 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
 
                             t.HasCheckConstraint("CK_PendingSignal_State", "[State] IN ('Pending', 'Forwarded', 'Discarded', 'Stuck')");
                         });
+                });
+
+            modelBuilder.Entity("Fulfillment.OrderApi.Domain.ReconcilerLease", b =>
+                {
+                    b.Property<string>("Name")
+                        .HasMaxLength(32)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(32)");
+
+                    b.Property<DateTime?>("LastRunAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<DateTime?>("LeaseUntil")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("Owner")
+                        .HasMaxLength(80)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(80)");
+
+                    b.HasKey("Name");
+
+                    b.ToTable("ReconcilerLease", "orders");
                 });
 
             modelBuilder.Entity("Fulfillment.OrderApi.Domain.ReviewDecision", b =>

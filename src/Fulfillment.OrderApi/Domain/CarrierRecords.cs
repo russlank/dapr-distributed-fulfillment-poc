@@ -72,18 +72,55 @@ public sealed class CarrierCallbackConflict
     public DateTime DetectedAt { get; private set; }
 }
 
-/// <summary>Business events of the order written in the same transaction as the fact (write side; publication arrives later).</summary>
+/// <summary>
+/// The order's events (source <c>orders</c>), written in the same transaction as the fact: one per status-history
+/// row, with the history row's sequence (gapless per order). Published at least once by the relay.
+/// </summary>
 public sealed class OrderOutboxEntry
 {
     public long Id { get; private set; }
 
+    public Guid EventId { get; private set; }
+
     public Guid OrderId { get; private set; }
 
+    public int Sequence { get; private set; }
+
     public string EventType { get; private set; } = "";
+
+    public int SchemaVersion { get; private set; }
 
     public string Payload { get; private set; } = "";
 
     public string State { get; private set; } = "";
 
+    public int Attempts { get; private set; }
+
+    public DateTime NextAttemptAt { get; private set; }
+
+    public string? LeaseOwner { get; private set; }
+
+    public DateTime? LeaseUntil { get; private set; }
+
+    public int Generation { get; private set; }
+
+    public bool Stalled { get; private set; }
+
+    public string? LastError { get; private set; }
+
     public DateTime CreatedAt { get; private set; }
+
+    public DateTime? PublishedAt { get; private set; }
+
+    /// <summary>The event of an order's first status (acceptance), saved with the order.</summary>
+    public static OrderOutboxEntry Accepted(Guid orderId) => new()
+    {
+        EventId = Guid.CreateVersion7(),
+        OrderId = orderId,
+        Sequence = 1,
+        EventType = Fulfillment.Contracts.Events.EventTypes.OrderStatusChanged,
+        SchemaVersion = 1,
+        Payload = Orders.OrderEvents.Payload(null, OrderStatus.Submitted, OrderReasonCodes.Accepted),
+        State = "Pending",
+    };
 }

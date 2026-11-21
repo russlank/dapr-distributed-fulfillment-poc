@@ -88,6 +88,9 @@ public static class OrderReasonCodes
     /// <summary>Compensated after an intervention case confirmed that the payment did not happen, or a case resolution ended the order.</summary>
     public const string PaymentFailed = "PaymentFailed";
 
+    /// <summary>Compensated by a repair after the order's workflow failed or vanished before the point of no return.</summary>
+    public const string WorkflowFailed = "WorkflowFailed";
+
     /// <summary>A non-terminal order waits for an intervention case.</summary>
     public const string InterventionRequired = "InterventionRequired";
 

@@ -1,7 +1,9 @@
 using Dapr.Workflow;
 using Fulfillment.Contracts;
+using Fulfillment.Contracts.Events;
 using Fulfillment.Contracts.Payments;
 using Fulfillment.Contracts.Workflows;
+using Fulfillment.Messaging.Outbox;
 using Fulfillment.PaymentService.Payments;
 using Fulfillment.PaymentService.Persistence;
 using Fulfillment.ServiceDefaults;
@@ -35,6 +37,8 @@ builder.Services.AddHttpClient<ProviderClient>(http =>
 });
 builder.Services.AddSingleton(sp => new PaymentExecutor(paymentDb, sp.GetRequiredService<ProviderClient>(), paymentOptions,
     sp.GetRequiredService<RuntimeIdentity>().Replica, sp.GetRequiredService<ILogger<PaymentExecutor>>()));
+builder.Services.AddOutboxRelay(builder.Configuration, paymentDb, new OutboxTable(EventSources.Payments, "payment.Outbox"),
+    sp => Failpoints.Compiled ? sp.GetRequiredService<Failpoints>().HitAsync : (_, _, _) => Task.CompletedTask);
 builder.Services.AddDaprWorkflow(options =>
 {
     options.RegisterActivity<ExecutePaymentOperationActivity>(PaymentActivities.ExecutePayment);
@@ -43,6 +47,8 @@ builder.Services.AddDaprWorkflow(options =>
 
 var app = builder.Build();
 await PaymentDbMigrations.EnsureCurrentAsync(paymentDb);
+await app.Services.GetRequiredService<Failpoints>().EnsureStoreAsync();
 app.MapServiceDefaults();
+app.MapOutboxEndpoints();
 await app.RunAsync();
 return 0;

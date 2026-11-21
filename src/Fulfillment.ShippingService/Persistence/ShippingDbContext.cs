@@ -1,3 +1,5 @@
+using Fulfillment.Contracts.Events;
+using Fulfillment.Messaging.Outbox;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 
@@ -24,6 +26,7 @@ public sealed class ShippingDbContext(DbContextOptions<ShippingDbContext> option
     {
         ArgumentNullException.ThrowIfNull(modelBuilder);
         modelBuilder.HasDefaultSchema(Schema);
+        OutboxModel.Configure(modelBuilder, [EventTypes.ShipmentDispatched, EventTypes.CarrierStatusRecorded]);
         const string statuses = "('Accepted', 'PickedUp', 'InTransit', 'Delivered', 'Exception')";
 
         modelBuilder.Entity<Shipment>(s =>

@@ -73,19 +73,7 @@ public static class OrderTransitions
         }
 
         await checkpoint(StepCheckpoints.AfterStatusUpdate, operationKey, ct);
-        await using (var history = new SqlCommand(
-                         """
-                         INSERT orders.OrderStatusHistory (OrderId, Sequence, FromStatus, ToStatus, ReasonCode)
-                         SELECT @o, ISNULL(MAX(Sequence), 0) + 1, @from, @to, @reason
-                         FROM orders.OrderStatusHistory WITH (UPDLOCK, HOLDLOCK) WHERE OrderId = @o;
-                         """, connection, tx))
-        {
-            history.Parameters.AddWithValue("@o", orderId);
-            history.Parameters.AddWithValue("@from", from.ToString());
-            history.Parameters.AddWithValue("@to", to.ToString());
-            history.Parameters.AddWithValue("@reason", reasonCode);
-            await history.ExecuteNonQueryAsync(ct);
-        }
+        await OrderEvents.AppendHistoryAndEventAsync(connection, tx, orderId, from, to, reasonCode, ct);
 
         await checkpoint(StepCheckpoints.AfterHistoryInsert, operationKey, ct);
         return true;
