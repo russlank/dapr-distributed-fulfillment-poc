@@ -44,7 +44,11 @@ Typical durations on the development laptop:
 
 | Run | Before | After |
 |---|---|---|
-| release phase (11 steps, start-up included) | 23.0 min | 10.9 min |
+| `--suite full` (64 steps, fresh volumes) | 65.3 min | 56.1 min |
+| release phase of `full` (reset, start-up, 11 steps, teardown) | 23.0 min | 12.6 min |
+| drill `--replicas` phase of `full` (33 scenarios and drills) | 36.7 min | 37.3 min (unchanged within run-to-run variation) |
+| `--only release` on a stopped stack (start-up included) | - | 10.9 min |
+| `--only m3 --reuse` (17 scenarios and drills) | - | 13.6 min (sum of the steps in the full run) |
 | fulfillment recovery check (REC) | 166 s | 123 s (the diagnostic call during the outage is bounded to 10 s) |
 | `--only smoke --reuse` (S02, S04, S13, S29, S39) | - | 2.0 min |
 
