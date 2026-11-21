@@ -55,6 +55,7 @@ Details: [docs/getting-started.md](docs/getting-started.md).
 | [docs/versions.md](docs/versions.md) | pinned versions and observed Dapr runtime behavior |
 | [docs/journal.md](docs/journal.md) | what broke and what changed because of it |
 | [CHANGELOG.md](CHANGELOG.md) | releases |
+| [docs/releases/v0.5.0.md](docs/releases/v0.5.0.md) | M4 release: event distribution, history, reconciler, verified guarantees, limitations |
 | [docs/releases/v0.4.0.md](docs/releases/v0.4.0.md) | M3 release: payment, shipping, interventions, verified guarantees, limitations |
 | [docs/releases/v0.3.0.md](docs/releases/v0.3.0.md) | M2 release: inventory, verified guarantees, limitations |
 | [docs/releases/v0.2.0.md](docs/releases/v0.2.0.md) | M1 release: capabilities, verified guarantees, limitations |

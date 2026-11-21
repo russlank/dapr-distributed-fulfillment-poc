@@ -4,7 +4,7 @@ Releases of the PoC; each tag `v<version>` marks a verified milestone.
 Details of a release: `docs/releases/`. What broke on the way:
 [docs/journal.md](docs/journal.md).
 
-## Unreleased (0.5.0-dev)
+## v0.5.0: Reliable event distribution, history, and recovery (M4)
 
 - Event distribution (M4): every owning host writes its events in the
   business transaction into its own outbox (gapless sequence per order and
@@ -31,6 +31,13 @@ Details of a release: `docs/releases/`. What broke on the way:
   `dev`, step groups, stack reuse, per-step timings compared with the
   previous run. `CARRIER_SIM_STEP` paces the carrier simulator; the release
   stack's scenarios use 2 s and take about half the time.
+- The event consumer refuses to run a statement once SQL Server has ended
+  its transaction (a deadlock victim the client was not told about), and a
+  duplicate or early delivery repairs a stream left behind its history
+  (warning, `event_stream_repairs_total`); a rebuild compares every stream
+  with its live state and reports a differing one with its history; the
+  runner keeps the order API logs of each drill phase.
+- Limitations and deferred work: [docs/releases/v0.5.0.md](docs/releases/v0.5.0.md).
 
 ## v0.4.0: Payment, shipping, compensation, cancellation, and interventions (M3)
 
