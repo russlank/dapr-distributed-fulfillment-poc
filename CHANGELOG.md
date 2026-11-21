@@ -4,6 +4,12 @@ Releases of the PoC; each tag `v<version>` marks a verified milestone.
 Details of a release: `docs/releases/`. What broke on the way:
 [docs/journal.md](docs/journal.md).
 
+## Unreleased (0.6.0-dev)
+
+- Development towards M5 (alerts and dashboards, scaling experiments,
+  workflow versioning and upgrades). Entries are added as functionality is
+  verified.
+
 ## v0.5.0: Reliable event distribution, history, and recovery (M4)
 
 - Event distribution (M4): every owning host writes its events in the
