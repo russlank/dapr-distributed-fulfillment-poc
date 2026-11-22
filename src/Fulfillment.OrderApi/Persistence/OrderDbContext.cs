@@ -522,7 +522,9 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
     {
         c.ToTable("InterventionCase", t =>
         {
-            t.HasCheckConstraint("CK_InterventionCase_State", "[State] IN ('Open', 'Reconciling', 'Resolved', 'Abandoned')");
+            t.HasCheckConstraint("CK_InterventionCase_State", "[State] IN ('Open', 'Reconciling', 'Escalated', 'Resolved', 'Abandoned')");
+            t.HasCheckConstraint("CK_InterventionCase_Escalation",
+                "([EscalationId] IS NULL AND [EscalatedAt] IS NULL AND [State] <> 'Escalated') OR ([EscalationId] IS NOT NULL AND [EscalatedAt] IS NOT NULL AND [State] IN ('Escalated', 'Resolved'))");
             t.HasCheckConstraint("CK_InterventionCase_Kind",
                 "[Kind] IN ('AmbiguousPayment', 'AmbiguousDispatch', 'CarrierTerminalConflict', 'DeliveryException', 'DeliveryOverdue', 'CompensationExhausted', 'WorkflowFaulted', 'WorkflowMissing', 'ExecutionMismatch', 'SignalStuck', 'ProjectionGap')");
             t.HasCheckConstraint("CK_InterventionCase_Resolution",
@@ -543,6 +545,9 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         c.Property(x => x.ResolutionPath).HasMaxLength(16).IsUnicode(false);
         c.Property(x => x.ResolutionEvidence).HasMaxLength(2000);
         c.Property(x => x.ResolvedBy).HasMaxLength(64).IsUnicode(false);
+        c.Property(x => x.EscalationEvidence).HasMaxLength(2000);
+        c.Property(x => x.EscalatedBy).HasMaxLength(64).IsUnicode(false);
+        c.Property(x => x.EscalatedAt).HasColumnType("datetime2(3)");
         c.Property(x => x.ResolvedAt).HasColumnType("datetime2(3)");
         c.Property(x => x.RepairOutcome).HasMaxLength(64).IsUnicode(false);
         c.HasOne<Order>().WithMany().HasForeignKey(x => x.OrderId);

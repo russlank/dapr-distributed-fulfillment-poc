@@ -130,6 +130,62 @@ public sealed class InterventionTests(SqlServerFixture sql) : IAsyncLifetime
             ("@o", orderId)));
     }
 
+    private async Task<(Guid Order, Guid Case)> OpenDeliveryCaseAsync()
+    {
+        using var response = await Orders.SubmitAsync(client, Orders.NewKey(), Orders.Body(Orders.NewCustomer("cases"), ("SKU-1", 1)), Ct);
+        var orderId = (await Orders.AcceptedAsync(response)).OrderId;
+        await Fulfilling.EnterFulfillmentAsync(Fulfilling.Steps(db), orderId, Ct);
+        foreach (var to in new[] { "PaymentAuthorized", "Packing", "Dispatched", "AwaitingDelivery" })
+        {
+            await lifecycle.AdvanceAsync(new AdvanceFulfillmentRequest(orderId, to), Ct);
+        }
+
+        var opened = await lifecycle.OpenCaseAsync(new OpenCaseRequest(orderId, InterventionKinds.DeliveryOverdue, "delivery-1", "overdue, poll failed"), Ct);
+        return (orderId, opened.CaseId);
+    }
+
+    [Theory]
+    [InlineData("Running", 1)]
+    [InlineData("Missing", 0)]
+    public async Task DeliveryFailureConfirmed_EscalatesTheOrder_CaseStaysOpenUntilTheBusinessResolutionIsRecorded(string workflowStatus, int signals)
+    {
+        var (order, caseId) = await OpenDeliveryCaseAsync();
+        var resolutions = Resolutions(workflowStatus);
+        var confirm = Resolve(CaseActions.ConfirmExternalFailure);
+
+        var acknowledgeWhileOpen = await resolutions.ResolveAsync(caseId, Resolve(CaseActions.Acknowledge), Ct);
+        var escalated = await resolutions.ResolveAsync(caseId, confirm, Ct);
+        var replay = await resolutions.ResolveAsync(caseId, confirm, Ct);
+        var successAfterwards = await resolutions.ResolveAsync(caseId, Resolve(), Ct);
+        var seenByTheWorkflow = await lifecycle.ReadCaseAsync(new ReadCaseRequest(caseId), Ct);
+
+        Assert.Equal(ResolveOutcomeKind.InvalidAction, acknowledgeWhileOpen.Kind);
+        Assert.Equal((ResolveOutcomeKind.Resolved, CasePaths.Escalate), (escalated.Kind, escalated.Resolved!.Path));
+        Assert.Equal((ResolveOutcomeKind.Replayed, CasePaths.Escalate), (replay.Kind, replay.Resolved!.Path));
+        Assert.Equal(ResolveOutcomeKind.InvalidAction, successAfterwards.Kind);
+        Assert.Equal((CaseStates.Escalated, "Escalated", true), (seenByTheWorkflow.State, seenByTheWorkflow.OrderStatus, seenByTheWorkflow.OrderTerminal));
+        Assert.Equal($"Escalated|DeliveryFailed|Closed|Escalated|operator-1||{signals}|0|1", await Db.ScalarAsync<string>(db,
+            """
+            SELECT CONCAT(o.Status, '|',
+              (SELECT TOP 1 ReasonCode FROM orders.OrderStatusHistory WHERE OrderId = @o ORDER BY Sequence DESC), '|',
+              (SELECT State FROM orders.WorkflowStartRequest WHERE OrderId = @o), '|', c.State, '|', c.EscalatedBy, '|', c.ResolutionAction, '|',
+              (SELECT COUNT(*) FROM orders.PendingSignal WHERE OrderId = @o AND EventName = @n), '|', (SELECT COUNT(*) FROM orders.RepairStartRequest WHERE CaseId = c.CaseId), '|',
+              (SELECT COUNT(*) FROM orders.OrderOutbox x WHERE x.OrderId = @o AND x.Sequence = (SELECT MAX(Sequence) FROM orders.OrderStatusHistory WHERE OrderId = @o)))
+            FROM orders.InterventionCase c JOIN orders.[Order] o ON o.OrderId = c.OrderId WHERE c.CaseId = @c
+            """, ("@o", order), ("@n", InterventionSignals.EventName(caseId)), ("@c", caseId)));
+
+        var settled = await resolutions.ResolveAsync(caseId, new ResolveCaseRequest(Guid.NewGuid(), "operator-2", CaseActions.Acknowledge, "refunded outside the system, ticket 42"), Ct);
+        var lateReplay = await resolutions.ResolveAsync(caseId, confirm, Ct);
+
+        Assert.Equal((ResolveOutcomeKind.Resolved, CasePaths.RecordOnly), (settled.Kind, settled.Resolved!.Path));
+        Assert.Equal(ResolveOutcomeKind.Replayed, lateReplay.Kind);
+        Assert.Equal("Escalated|Resolved|Acknowledge|RecordOnly|operator-1|operator-2", await Db.ScalarAsync<string>(db,
+            """
+            SELECT CONCAT(o.Status, '|', c.State, '|', c.ResolutionAction, '|', c.ResolutionPath, '|', c.EscalatedBy, '|', c.ResolvedBy)
+            FROM orders.InterventionCase c JOIN orders.[Order] o ON o.OrderId = c.OrderId WHERE c.CaseId = @c
+            """, ("@c", caseId)));
+    }
+
     [Fact]
     public async Task Resolve_WorkflowHostUnreachable_LeavesTheCaseOpen()
     {

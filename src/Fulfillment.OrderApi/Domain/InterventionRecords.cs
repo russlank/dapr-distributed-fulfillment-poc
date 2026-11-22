@@ -22,7 +22,7 @@ public sealed class InterventionCase
 
     public string Kind { get; private set; }
 
-    /// <summary>Open, Reconciling, Resolved, or Abandoned.</summary>
+    /// <summary>Open, Reconciling, Escalated (a confirmed delivery failure awaiting its business resolution), Resolved, or Abandoned.</summary>
     public string State { get; private set; }
 
     /// <summary>Idempotency key of the opening step: a repeated activity returns the same case.</summary>
@@ -51,4 +51,13 @@ public sealed class InterventionCase
 
     /// <summary>Outcome reported by the repair workflow (Repair path only).</summary>
     public string? RepairOutcome { get; private set; }
+
+    /// <summary>The resolution id of the operator's confirmation that escalated the case (Escalated and later).</summary>
+    public Guid? EscalationId { get; private set; }
+
+    public string? EscalationEvidence { get; private set; }
+
+    public string? EscalatedBy { get; private set; }
+
+    public DateTime? EscalatedAt { get; private set; }
 }

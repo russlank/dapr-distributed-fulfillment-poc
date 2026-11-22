@@ -82,8 +82,8 @@ public sealed partial class FulfillOrderWorkflow
                     return await FinalizeAsync(context, log, orderId, claim);
                 }
 
-                // Any other resolution is recorded on the case; what happens to the order after a failed delivery is
-                // decided outside this run.
+                // A confirmed failure escalates the order (terminal) in the resolution's transaction, so the fence above
+                // ends the run; this branch only remains for a resolution recorded before escalation existed.
                 context.SetCustomStatus($"delivery-unresolved:{caseKind}");
                 return new FulfillmentResult(FulfillmentOutcomes.Fenced, resolved.OrderStatus, claim.ExecutionClaims);
             }

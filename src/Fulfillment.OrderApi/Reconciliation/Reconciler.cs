@@ -143,12 +143,12 @@ public sealed partial class Reconciler(string connectionString, WorkflowHostClie
                 SELECT TOP (@n) o.OrderId, o.Status
                 FROM orders.[Order] o
                 JOIN orders.WorkflowStartRequest r ON r.OrderId = o.OrderId
-                WHERE o.Status NOT IN ('Completed', 'Rejected', 'Compensated', 'Cancelled')
+                WHERE o.Status NOT IN ('Completed', 'Rejected', 'Compensated', 'Cancelled', 'Escalated')
                   AND r.State <> 'Pending'
                   AND (SELECT MAX(h.OccurredAt) FROM orders.OrderStatusHistory h WHERE h.OrderId = o.OrderId) < DATEADD(millisecond, -@stage, SYSUTCDATETIME())
                   AND NOT EXISTS (SELECT 1 FROM orders.InterventionCase c WHERE c.OrderId = o.OrderId AND c.State IN ('Open', 'Reconciling'))
-                  -- A failed delivery resolved without success ends the run while the order awaits delivery (no business
-                  -- end yet): it is already surfaced by its case, not a mismatch.
+                  -- Before escalation existed, a failed delivery resolved without success ended the run while the order
+                  -- awaited delivery; such orders are surfaced by their case, not a mismatch. (Now the order is Escalated.)
                   AND NOT EXISTS (SELECT 1 FROM orders.InterventionCase c WHERE c.OrderId = o.OrderId AND c.State = 'Resolved'
                                   AND c.Kind IN ('DeliveryException', 'DeliveryOverdue'))
                 ORDER BY o.OrderId;

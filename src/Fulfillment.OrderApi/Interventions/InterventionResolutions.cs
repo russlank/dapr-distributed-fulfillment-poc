@@ -36,6 +36,11 @@ public sealed record ResolveOutcome(ResolveOutcomeKind Kind, CaseResolved? Resol
 /// the repair workflow runs the effects with repair operation keys.</item>
 /// <item>RecordOnly: a case on a terminal order (for example a conflicting carrier status after completion).</item>
 /// </list>
+/// A delivery case (DeliveryException, DeliveryOverdue) is not resolved by ConfirmExternalFailure but escalated: the
+/// automated lifecycle ends (the order becomes Escalated, terminal, its start request closed; a waiting workflow is
+/// woken and stops at the fence) while the case stays Escalated, discoverable, until a person records the business
+/// resolution with Acknowledge (RecordOnly). Nothing is refunded, reshipped, or restocked automatically. An open
+/// delivery case cannot be acknowledged: leaving it open is the way to keep waiting for evidence.
 /// Whether the workflow is running is asked from the workflow host before the transaction; a repeated resolution id
 /// returns the stored resolution.
 /// </summary>
@@ -46,8 +51,8 @@ public sealed class InterventionResolutions(string connectionString, WorkflowHos
         [InterventionKinds.AmbiguousPayment] = [CaseActions.ConfirmExternalSuccess, CaseActions.ConfirmExternalFailure],
         [InterventionKinds.CompensationExhausted] = [CaseActions.ConfirmExternalSuccess, CaseActions.ConfirmExternalFailure, CaseActions.Acknowledge],
         [InterventionKinds.AmbiguousDispatch] = [CaseActions.ConfirmExternalSuccess, CaseActions.ConfirmExternalFailure],
-        [InterventionKinds.DeliveryException] = [CaseActions.ConfirmExternalSuccess, CaseActions.ConfirmExternalFailure, CaseActions.Acknowledge],
-        [InterventionKinds.DeliveryOverdue] = [CaseActions.ConfirmExternalSuccess, CaseActions.ConfirmExternalFailure, CaseActions.Acknowledge],
+        [InterventionKinds.DeliveryException] = [CaseActions.ConfirmExternalSuccess, CaseActions.ConfirmExternalFailure],
+        [InterventionKinds.DeliveryOverdue] = [CaseActions.ConfirmExternalSuccess, CaseActions.ConfirmExternalFailure],
         [InterventionKinds.CarrierTerminalConflict] = [CaseActions.Acknowledge],
 
         // Reconciler cases: confirm the failure (compensate if still allowed), confirm success after checking the external
@@ -57,6 +62,11 @@ public sealed class InterventionResolutions(string connectionString, WorkflowHos
         [InterventionKinds.ExecutionMismatch] = [CaseActions.ConfirmExternalSuccess, CaseActions.ConfirmExternalFailure, CaseActions.Acknowledge],
         [InterventionKinds.ProjectionGap] = [CaseActions.Acknowledge],
     };
+
+    /// <summary>The business resolution of an escalated case is recorded, never acted on.</summary>
+    private static readonly string[] OnEscalated = [CaseActions.Acknowledge];
+
+    private static bool IsDelivery(string kind) => kind is InterventionKinds.DeliveryException or InterventionKinds.DeliveryOverdue;
 
     public async Task<ResolveOutcome> ResolveAsync(Guid caseId, ResolveCaseRequest request, CancellationToken ct)
     {
@@ -87,6 +97,14 @@ public sealed class InterventionResolutions(string connectionString, WorkflowHos
         await using var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct);
         await OrderTransitions.LockAsync(connection, tx, known.Value.OrderId, ct);
         var current = (await ReadAsync(connection, tx, caseId, ct))!.Value;
+        if (current.EscalationId == request.ResolutionId)
+        {
+            await tx.CommitAsync(ct);
+            return request.Action == CaseActions.ConfirmExternalFailure
+                ? new ResolveOutcome(ResolveOutcomeKind.Replayed, new CaseResolved(caseId, CaseActions.ConfirmExternalFailure, CasePaths.Escalate, true))
+                : new ResolveOutcome(ResolveOutcomeKind.ResolutionIdReused);
+        }
+
         if (current.State == CaseStates.Resolved)
         {
             await tx.CommitAsync(ct);
@@ -100,13 +118,21 @@ public sealed class InterventionResolutions(string connectionString, WorkflowHos
             return new ResolveOutcome(ResolveOutcomeKind.AlreadyResolved, new CaseResolved(caseId, current.Action!, current.Path!, false));
         }
 
-        if (!Allowed.TryGetValue(current.Kind, out var actions) || !actions.Contains(request.Action))
+        var actions = current.State == CaseStates.Escalated ? OnEscalated : Allowed.GetValueOrDefault(current.Kind);
+        if (actions is null || !actions.Contains(request.Action))
         {
             await tx.RollbackAsync(ct);
             return new ResolveOutcome(ResolveOutcomeKind.InvalidAction);
         }
 
         var orderStatus = Enum.Parse<OrderStatus>(current.OrderStatus);
+        if (IsDelivery(current.Kind) && request.Action == CaseActions.ConfirmExternalFailure && !OrderStatuses.IsTerminal(orderStatus))
+        {
+            await EscalateAsync(connection, tx, caseId, current.OrderId, orderStatus, request, running, ct);
+            await tx.CommitAsync(ct);
+            return new ResolveOutcome(ResolveOutcomeKind.Resolved, new CaseResolved(caseId, request.Action, CasePaths.Escalate, false));
+        }
+
         var path = current.ResumeStatus is null || OrderStatuses.IsTerminal(orderStatus) ? CasePaths.RecordOnly
             : running ? CasePaths.Signal
             : CasePaths.Repair;
@@ -114,7 +140,7 @@ public sealed class InterventionResolutions(string connectionString, WorkflowHos
             """
             UPDATE orders.InterventionCase SET State = 'Resolved', ResolutionAction = @a, ResolutionPath = @p, ResolutionId = @rid,
                 ResolutionEvidence = LEFT(@e, 2000), ResolvedBy = LEFT(@by, 64), ResolvedAt = SYSUTCDATETIME()
-            WHERE CaseId = @c AND State IN ('Open', 'Reconciling');
+            WHERE CaseId = @c AND State IN ('Open', 'Reconciling', 'Escalated');
             """, ct, ("@a", request.Action), ("@p", path), ("@rid", request.ResolutionId), ("@e", request.Evidence), ("@by", request.OperatorId), ("@c", caseId));
 
         if (path == CasePaths.Signal)
@@ -126,12 +152,7 @@ public sealed class InterventionResolutions(string connectionString, WorkflowHos
                     OrderReasonCodes.InterventionResolved, StepCheckpoints.None, $"{caseId:N}:resolved", ct);
             }
 
-            await Exec(connection, tx,
-                """
-                INSERT orders.PendingSignal (OrderId, InstanceId, EventName, CausedBy, State, Attempts)
-                SELECT @o, @i, @n, @rid, 'Pending', 0 WHERE NOT EXISTS (SELECT 1 FROM orders.PendingSignal WHERE CausedBy = @rid AND EventName = @n);
-                """, ct, ("@o", current.OrderId), ("@i", FulfillmentWorkflow.InstanceId(current.OrderId)), ("@n", InterventionSignals.EventName(caseId)),
-                ("@rid", request.ResolutionId));
+            await SignalAsync(connection, tx, caseId, current.OrderId, request.ResolutionId, ct);
         }
         else if (path == CasePaths.Repair)
         {
@@ -145,6 +166,40 @@ public sealed class InterventionResolutions(string connectionString, WorkflowHos
         await tx.CommitAsync(ct);
         return new ResolveOutcome(ResolveOutcomeKind.Resolved, new CaseResolved(caseId, request.Action, path, false));
     }
+
+    /// <summary>
+    /// A confirmed delivery failure, in the resolution's transaction: the case becomes Escalated with the operator's
+    /// confirmation, the order Escalated (DeliveryFailed; history row and event), its start request closed, and a
+    /// running workflow is woken so that it stops at the fence instead of waiting for its next re-read.
+    /// </summary>
+    private static async Task EscalateAsync(SqlConnection connection, SqlTransaction tx, Guid caseId, Guid orderId, OrderStatus orderStatus,
+        ResolveCaseRequest request, bool running, CancellationToken ct)
+    {
+        await Exec(connection, tx,
+            """
+            UPDATE orders.InterventionCase SET State = 'Escalated', EscalationId = @rid, EscalationEvidence = LEFT(@e, 2000),
+                EscalatedBy = LEFT(@by, 64), EscalatedAt = SYSUTCDATETIME()
+            WHERE CaseId = @c AND State IN ('Open', 'Reconciling');
+            """, ct, ("@rid", request.ResolutionId), ("@e", request.Evidence), ("@by", request.OperatorId), ("@c", caseId));
+        if (!await OrderTransitions.TryTransitionAsync(connection, tx, orderId, orderStatus, OrderStatus.Escalated, OrderReasonCodes.DeliveryFailed,
+                StepCheckpoints.None, $"{caseId:N}:escalated", ct))
+        {
+            throw new InvalidOperationException($"escalating an order that left {orderStatus} under its lock");
+        }
+
+        await OrderTransitions.CloseStartRequestAsync(connection, tx, orderId, ct);
+        if (running)
+        {
+            await SignalAsync(connection, tx, caseId, orderId, request.ResolutionId, ct);
+        }
+    }
+
+    private static Task SignalAsync(SqlConnection connection, SqlTransaction tx, Guid caseId, Guid orderId, Guid resolutionId, CancellationToken ct) =>
+        Exec(connection, tx,
+            """
+            INSERT orders.PendingSignal (OrderId, InstanceId, EventName, CausedBy, State, Attempts)
+            SELECT @o, @i, @n, @rid, 'Pending', 0 WHERE NOT EXISTS (SELECT 1 FROM orders.PendingSignal WHERE CausedBy = @rid AND EventName = @n);
+            """, ct, ("@o", orderId), ("@i", FulfillmentWorkflow.InstanceId(orderId)), ("@n", InterventionSignals.EventName(caseId)), ("@rid", resolutionId));
 
     /// <summary>Records the repair workflow's outcome on its case (once).</summary>
     public async Task RecordRepairOutcomeAsync(RepairOutcomeRequest request, CancellationToken ct)
@@ -160,7 +215,8 @@ public sealed class InterventionResolutions(string connectionString, WorkflowHos
             """, ct, ("@out", request.Outcome), ("@c", request.CaseId));
     }
 
-    private readonly record struct CaseRow(Guid OrderId, string Kind, string State, string? ResumeStatus, string OrderStatus, Guid? ResolutionId, string? Action, string? Path);
+    private readonly record struct CaseRow(Guid OrderId, string Kind, string State, string? ResumeStatus, string OrderStatus, Guid? ResolutionId, string? Action, string? Path,
+        Guid? EscalationId);
 
     private async Task<CaseRow?> ReadAsync(Guid caseId, CancellationToken ct)
     {
@@ -173,14 +229,15 @@ public sealed class InterventionResolutions(string connectionString, WorkflowHos
     {
         await using var read = new SqlCommand(
             """
-            SELECT c.OrderId, c.Kind, c.State, c.ResumeStatus, o.Status, c.ResolutionId, c.ResolutionAction, c.ResolutionPath
+            SELECT c.OrderId, c.Kind, c.State, c.ResumeStatus, o.Status, c.ResolutionId, c.ResolutionAction, c.ResolutionPath, c.EscalationId
             FROM orders.InterventionCase c JOIN orders.[Order] o ON o.OrderId = c.OrderId WHERE c.CaseId = @c;
             """, connection, tx);
         read.Parameters.AddWithValue("@c", caseId);
         await using var reader = await read.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct)
             ? new CaseRow(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetString(4),
-                reader.IsDBNull(5) ? null : reader.GetGuid(5), reader.IsDBNull(6) ? null : reader.GetString(6), reader.IsDBNull(7) ? null : reader.GetString(7))
+                reader.IsDBNull(5) ? null : reader.GetGuid(5), reader.IsDBNull(6) ? null : reader.GetString(6), reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.IsDBNull(8) ? null : reader.GetGuid(8))
             : null;
     }
 

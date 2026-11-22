@@ -148,12 +148,15 @@ Or with the client simulator: `resolve --case <caseId> --action ... --evidence .
 | `AmbiguousPayment` | the provider's record for the operation key in the case | `ConfirmExternalSuccess` (it committed) or `ConfirmExternalFailure` (it did not); the workflow reads the provider again either way and acts on its record |
 | `CompensationExhausted` | why the void, refund, or release failed (the attempts) | fix the cause, then `ConfirmExternalFailure` to compensate again, or `ConfirmExternalSuccess`/`Acknowledge` if it was done outside |
 | `AmbiguousDispatch` | the carrier's record for the shipment id (= order id) | `ConfirmExternalSuccess` dispatches again with the same id (a replay at the carrier) |
-| `DeliveryException`, `DeliveryOverdue` | the carrier status | `ConfirmExternalSuccess` completes the order; any other resolution is recorded, what happens next is decided outside the system |
+| `DeliveryException`, `DeliveryOverdue` | the carrier status | `ConfirmExternalSuccess` completes the order; `ConfirmExternalFailure` (the delivery failed) ends it `Escalated` and keeps the case open as `Escalated`; while the outcome is uncertain, leave the case open (it cannot be acknowledged) |
+| an `Escalated` case | Shipping's and the provider's records; what was settled outside the system (refund, reshipment, loss) | `Acknowledge` with that settlement as evidence (record only); the order stays `Escalated` |
 | `CarrierTerminalConflict` | Shipping's history for the shipment | `Acknowledge` (record only) |
 
 The answer names the path: `Signal` (the workflow continues), `Repair` (a
 repair workflow compensates; its outcome is written to the case's
-`RepairOutcome`), or `RecordOnly`. `503 workflow-state-unknown` changed
+`RepairOutcome`), `Escalate` (a confirmed delivery failure), or `RecordOnly`.
+Escalated cases waiting for their business resolution:
+`sql OrderDb "SELECT CaseId, OrderId, Kind, EscalatedBy, EscalatedAt, EscalationEvidence FROM orders.InterventionCase WHERE State = 'Escalated'"`. `503 workflow-state-unknown` changed
 nothing: retry the same request.
 
 ## Events and the Timeline

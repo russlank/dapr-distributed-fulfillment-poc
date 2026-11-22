@@ -247,6 +247,7 @@ exception, or an overdue delivery opens a case.
 | `Rejected` | validation, a rejected review, the final expiry of a review, a line no warehouse can serve (`InsufficientStock`), or a declined authorization (`PaymentDeclined`) |
 | `Compensated` | the order's holds were released and its payment voided or refunded: a reservation failed for good (`ReservationFailed`), a hold expired before it was consumed (`ReservationExpired`), the provider could not be reached (`PaymentProviderUnavailable`), the capture was refused (`PaymentCaptureFailed`), or a repair compensated it (`PaymentFailed`) |
 | `Cancelled` | a customer cancellation recorded before the point of no return (`CancellationRequested`) |
+| `Escalated` | an operator confirmed that a delivery failed (`DeliveryFailed`): the automated lifecycle ends, payment and stock stay as they are, and the escalated case stays open until a person records the business resolution |
 
 ## Payment
 
@@ -357,6 +358,7 @@ transaction resolves the case and takes exactly one path:
 | Path | When | What follows |
 |---|---|---|
 | `Signal` | the original workflow is running (asked of the workflow host) | the order goes back to its status, and a pending signal wakes the workflow, which re-reads the case and continues (after a payment case it first reconciles with the provider) |
+| `Escalate` | `ConfirmExternalFailure` on a `DeliveryException` or `DeliveryOverdue` case of a non-terminal order | the case becomes `Escalated` (not resolved) with the operator's confirmation; the order becomes `Escalated` (terminal, start request closed); a running workflow is woken and stops at the fence. Nothing is refunded, reshipped, or restocked automatically; `Acknowledge` later records the business resolution (`RecordOnly`) |
 | `Repair` | no workflow waits (terminated, failed, missing) | a repair start request; a repair dispatcher starts `RepairOrderWorkflow` (`repair-{order}-{case}`): for payment cases it releases the holds, voids with its own repair key (refunds if the authorization was captured), ends the order `Compensated`, and records the outcome on the case |
 | `RecordOnly` | the order is terminal | the resolution is recorded; nothing else |
 
@@ -438,7 +440,7 @@ pending signals, and outbox replay.
 |---|---|
 | non-terminal order without a status change past the stage threshold, without an open case: workflow `Failed`/`Terminated` | `WorkflowFaulted` case |
 | ... workflow instance not found although started | `WorkflowMissing` case |
-| ... workflow `Completed` | `ExecutionMismatch` case (not for an order whose failed delivery was resolved without success: that case already surfaced it) |
+| ... workflow `Completed` | `ExecutionMismatch` case (not for an order left awaiting delivery by a delivery case resolved before escalation existed: that case already surfaced it) |
 | ... workflow running and waiting for a review well past its deadline | a nudge: the review's own signal (a lost timer); the workflow re-reads SQL |
 | projection gap older than the gap threshold | outbox replay from the last applied sequence plus one |
 | a source has published (and settled) more of an order's events than current state shows | the same replay (a lost last event leaves no pending row) |

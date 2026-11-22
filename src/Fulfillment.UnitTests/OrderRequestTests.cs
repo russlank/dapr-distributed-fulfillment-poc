@@ -152,6 +152,7 @@ public class OrderModelTests
     [InlineData(OrderStatus.Rejected, true)]
     [InlineData(OrderStatus.Cancelled, true)]
     [InlineData(OrderStatus.Compensated, true)]
+    [InlineData(OrderStatus.Escalated, true)]
     [InlineData(OrderStatus.Submitted, false)]
     [InlineData(OrderStatus.AwaitingDelivery, false)]
     [InlineData(OrderStatus.ManualInterventionRequired, false)]

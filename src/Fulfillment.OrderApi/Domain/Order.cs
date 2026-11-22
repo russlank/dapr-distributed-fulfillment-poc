@@ -16,13 +16,19 @@ public enum OrderStatus
     Cancelled,
     Compensated,
     ManualInterventionRequired,
+
+    /// <summary>
+    /// Terminal for the automated lifecycle after a confirmed delivery failure: payment and stock stay as they are, and
+    /// the order's escalated intervention case stays discoverable until a person records the business resolution.
+    /// </summary>
+    Escalated,
 }
 
 public static class OrderStatuses
 {
     /// <summary>Terminal for the fulfillment execution: a terminal order is never started or run again.</summary>
     public static bool IsTerminal(OrderStatus status) =>
-        status is OrderStatus.Completed or OrderStatus.Rejected or OrderStatus.Cancelled or OrderStatus.Compensated;
+        status is OrderStatus.Completed or OrderStatus.Rejected or OrderStatus.Cancelled or OrderStatus.Compensated or OrderStatus.Escalated;
 }
 
 /// <summary>Reason codes of status changes (closed code domain).</summary>
@@ -111,6 +117,12 @@ public static class OrderReasonCodes
 
     /// <summary>AwaitingDelivery → Completed: Shipping recorded the delivery.</summary>
     public const string Delivered = "Delivered";
+
+    /// <summary>
+    /// → Escalated: an operator confirmed that the delivery failed; the business resolution (for example a refund or a
+    /// reshipment arranged outside the system) is recorded on the escalated case.
+    /// </summary>
+    public const string DeliveryFailed = "DeliveryFailed";
 
     /// <summary>A terminal carrier status recorded after the order was already terminal (history only).</summary>
     public const string CarrierStatusAfterTerminal = "CarrierStatusAfterTerminal";

@@ -327,6 +327,21 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                         .HasColumnType("uniqueidentifier")
                         .HasDefaultValueSql("NEWSEQUENTIALID()");
 
+                    b.Property<DateTime?>("EscalatedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("EscalatedBy")
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<string>("EscalationEvidence")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<Guid?>("EscalationId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("Evidence")
                         .IsRequired()
                         .HasMaxLength(2000)
@@ -408,13 +423,15 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                         {
                             t.HasCheckConstraint("CK_InterventionCase_Action", "[ResolutionAction] IS NULL OR [ResolutionAction] IN ('ConfirmExternalSuccess', 'ConfirmExternalFailure', 'Acknowledge')");
 
+                            t.HasCheckConstraint("CK_InterventionCase_Escalation", "([EscalationId] IS NULL AND [EscalatedAt] IS NULL AND [State] <> 'Escalated') OR ([EscalationId] IS NOT NULL AND [EscalatedAt] IS NOT NULL AND [State] IN ('Escalated', 'Resolved'))");
+
                             t.HasCheckConstraint("CK_InterventionCase_Kind", "[Kind] IN ('AmbiguousPayment', 'AmbiguousDispatch', 'CarrierTerminalConflict', 'DeliveryException', 'DeliveryOverdue', 'CompensationExhausted', 'WorkflowFaulted', 'WorkflowMissing', 'ExecutionMismatch', 'SignalStuck', 'ProjectionGap')");
 
                             t.HasCheckConstraint("CK_InterventionCase_Path", "[ResolutionPath] IS NULL OR [ResolutionPath] IN ('Signal', 'Repair', 'RecordOnly')");
 
                             t.HasCheckConstraint("CK_InterventionCase_Resolution", "([State] = 'Resolved' AND [ResolutionAction] IS NOT NULL AND [ResolutionPath] IS NOT NULL AND [ResolvedAt] IS NOT NULL) OR ([State] <> 'Resolved' AND [ResolutionAction] IS NULL AND [ResolutionPath] IS NULL AND [ResolvedAt] IS NULL)");
 
-                            t.HasCheckConstraint("CK_InterventionCase_State", "[State] IN ('Open', 'Reconciling', 'Resolved', 'Abandoned')");
+                            t.HasCheckConstraint("CK_InterventionCase_State", "[State] IN ('Open', 'Reconciling', 'Escalated', 'Resolved', 'Abandoned')");
                         });
                 });
 
@@ -461,7 +478,7 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                         {
                             t.HasCheckConstraint("CK_Order_CancelOrDispatch", "[CancelRequestedAt] IS NULL OR [DispatchStartedAt] IS NULL");
 
-                            t.HasCheckConstraint("CK_Order_Status", "[Status] IN ('Submitted', 'Validating', 'Reserving', 'PaymentAuthorized', 'Packing', 'AwaitingApproval', 'Dispatched', 'AwaitingDelivery', 'Completed', 'Rejected', 'Cancelled', 'Compensated', 'ManualInterventionRequired')");
+                            t.HasCheckConstraint("CK_Order_Status", "[Status] IN ('Submitted', 'Validating', 'Reserving', 'PaymentAuthorized', 'Packing', 'AwaitingApproval', 'Dispatched', 'AwaitingDelivery', 'Completed', 'Rejected', 'Cancelled', 'Compensated', 'ManualInterventionRequired', 'Escalated')");
                         });
                 });
 
@@ -802,7 +819,7 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                         {
                             t.HasCheckConstraint("CK_OrderStatusHistory_Sequence", "[Sequence] >= 1");
 
-                            t.HasCheckConstraint("CK_OrderStatusHistory_ToStatus", "[ToStatus] IN ('Submitted', 'Validating', 'Reserving', 'PaymentAuthorized', 'Packing', 'AwaitingApproval', 'Dispatched', 'AwaitingDelivery', 'Completed', 'Rejected', 'Cancelled', 'Compensated', 'ManualInterventionRequired')");
+                            t.HasCheckConstraint("CK_OrderStatusHistory_ToStatus", "[ToStatus] IN ('Submitted', 'Validating', 'Reserving', 'PaymentAuthorized', 'Packing', 'AwaitingApproval', 'Dispatched', 'AwaitingDelivery', 'Completed', 'Rejected', 'Cancelled', 'Compensated', 'ManualInterventionRequired', 'Escalated')");
                         });
                 });
 

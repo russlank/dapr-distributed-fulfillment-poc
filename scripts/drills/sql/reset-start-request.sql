@@ -14,7 +14,7 @@ IF OBJECT_ID('drill.StartRequestBackup') IS NULL
         StartedAt datetime2(3) NULL, ClosedAt datetime2(3) NULL, LastErrorCode varchar(64) NULL,
         NextAttemptAt datetime2(3) NOT NULL, ResetAt datetime2(3) NOT NULL DEFAULT SYSUTCDATETIME());
 DECLARE @o uniqueidentifier = '$(OrderId)';
-IF NOT EXISTS (SELECT 1 FROM orders.[Order] WITH (UPDLOCK) WHERE OrderId = @o AND Status IN ('Completed', 'Rejected', 'Cancelled', 'Compensated'))
+IF NOT EXISTS (SELECT 1 FROM orders.[Order] WITH (UPDLOCK) WHERE OrderId = @o AND Status IN ('Completed', 'Rejected', 'Cancelled', 'Compensated', 'Escalated'))
     THROW 50002, 'refused: the order does not exist or is not terminal', 1;
 IF NOT EXISTS (SELECT 1 FROM orders.WorkflowStartRequest WITH (UPDLOCK) WHERE OrderId = @o AND State = 'Closed')
     THROW 50003, 'refused: the start request is not Closed', 1;

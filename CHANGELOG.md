@@ -9,6 +9,14 @@ Details of a release: `docs/releases/`. What broke on the way:
 - Development towards M5 (alerts and dashboards, scaling experiments,
   workflow versioning and upgrades). Entries are added as functionality is
   verified.
+- A confirmed delivery failure ends the order in the new terminal status
+  `Escalated` (reason `DeliveryFailed`) instead of leaving it awaiting
+  delivery: `ConfirmExternalFailure` on a `DeliveryException` or
+  `DeliveryOverdue` case escalates the case (it stays open, with the
+  operator's confirmation) and closes the automated lifecycle; `Acknowledge`
+  later records the business resolution. Nothing is refunded, reshipped, or
+  restocked automatically; an open delivery case can no longer be
+  acknowledged. Drill R29 covers it.
 
 ## v0.5.0: Reliable event distribution, history, and recovery (M4)
 

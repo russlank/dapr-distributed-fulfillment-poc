@@ -63,6 +63,9 @@ public static class CaseStates
 {
     public const string Open = "Open";
     public const string Reconciling = "Reconciling";
+
+    /// <summary>A confirmed delivery failure: the order is terminal (Escalated); a person still records the business resolution.</summary>
+    public const string Escalated = "Escalated";
     public const string Resolved = "Resolved";
     public const string Abandoned = "Abandoned";
 }
@@ -105,7 +108,8 @@ public static class InterventionRoutes
 /// <param name="Evidence">Reference to what the operator checked (for example the provider record).</param>
 public sealed record ResolveCaseRequest(Guid ResolutionId, string OperatorId, string Action, string Evidence);
 
-/// <param name="Path">Signal (the waiting workflow continues), Repair (a repair workflow runs the effects), or RecordOnly.</param>
+/// <param name="Path">Signal (the waiting workflow continues), Repair (a repair workflow runs the effects), RecordOnly, or Escalate
+/// (a confirmed delivery failure ended the order Escalated; the case stays open for its business resolution).</param>
 public sealed record CaseResolved(Guid CaseId, string Action, string Path, bool Replayed);
 
 public static class CasePaths
@@ -113,6 +117,9 @@ public static class CasePaths
     public const string Signal = "Signal";
     public const string Repair = "Repair";
     public const string RecordOnly = "RecordOnly";
+
+    /// <summary>Answer of a confirmed delivery failure (never stored as a resolution path: the case is not resolved yet).</summary>
+    public const string Escalate = "Escalate";
 }
 
 /// <summary>The repair workflow of a resolved case whose original workflow no longer waits (repair-{orderId:N}-{caseId:N}).</summary>

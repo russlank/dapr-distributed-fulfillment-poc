@@ -193,7 +193,7 @@ public static class TimelineProjection
     {
         ArgumentNullException.ThrowIfNull(bySource);
         var status = bySource.TryGetValue(EventSources.Orders, out var orders) ? orders.GetValueOrDefault("status") : null;
-        if (status is "Completed" or "Rejected" or "Compensated" or "Cancelled")
+        if (status is "Completed" or "Rejected" or "Compensated" or "Cancelled" or "Escalated")
         {
             return status;
         }
