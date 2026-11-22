@@ -1,0 +1,120 @@
+{
+ "uid": "f-drill-journal",
+ "title": "(f) Failure-drill journal",
+ "tags": [
+  "fulfillment"
+ ],
+ "schemaVersion": 39,
+ "editable": false,
+ "refresh": "10s",
+ "time": {
+  "from": "now-1h",
+  "to": "now"
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "timeseries",
+   "title": "Firing alerts",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 0
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "ALERTS{alertstate=\"firing\"}",
+     "legendFormat": "{{alertname}} {{source}}{{kind}}",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "type": "timeseries",
+   "title": "Reconciler actions",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 0
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (action) (increase(reconciler_actions_total[5m]))",
+     "legendFormat": "{{action}}",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "type": "timeseries",
+   "title": "Stream repairs / fence rejections (5m)",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum(increase(event_stream_repairs_total[5m]))",
+     "legendFormat": "stream repairs",
+     "datasource": {
+      "type": "prometheus"
+     }
+    },
+    {
+     "refId": "B",
+     "expr": "sum(increase(fence_rejections_total[5m]))",
+     "legendFormat": "fence rejections",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "type": "timeseries",
+   "title": "Provider requests by result",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (result) (rate(provider_requests_total[1m]))",
+     "legendFormat": "{{result}}",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  }
+ ]
+}

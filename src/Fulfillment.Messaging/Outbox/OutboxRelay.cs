@@ -30,6 +30,12 @@ public sealed class OutboxRelayOptions
     /// <summary>Per publication; a publication that times out may still have reached the broker (it is retried).</summary>
     public TimeSpan PublishTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
+    /// <summary>A pending row older than this counts as aging (metric <c>outbox_aging</c>, alert OutboxAging).</summary>
+    public TimeSpan AgingThreshold { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>How often the outbox depth is read for the metrics.</summary>
+    public TimeSpan HealthInterval { get; set; } = TimeSpan.FromSeconds(15);
+
     public static void ForEnvironment(OutboxRelayOptions options, string? environment)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -38,6 +44,8 @@ public sealed class OutboxRelayOptions
             options.Lease = TimeSpan.FromSeconds(10);
             options.MaxBackoff = TimeSpan.FromSeconds(10);
             options.StallThreshold = 5;
+            options.AgingThreshold = TimeSpan.FromSeconds(15);
+            options.HealthInterval = TimeSpan.FromSeconds(5);
         }
     }
 }
@@ -90,6 +98,38 @@ public sealed partial class OutboxRelay(OutboxStore store, DaprEventPublisher pu
     private static readonly Meter Meter = new("Fulfillment.Outbox");
     private static readonly Counter<long> Published = Meter.CreateCounter<long>("outbox_published_total");
     private static readonly Counter<long> Failed = Meter.CreateCounter<long>("outbox_publish_failures_total");
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, OutboxHealth> Health = new();
+
+    static OutboxRelay()
+    {
+        Meter.CreateObservableGauge("outbox_pending", () => Measure(h => h.Pending), description: "pending outbox rows per source");
+        Meter.CreateObservableGauge("outbox_aging", () => Measure(h => h.Aging), description: "pending outbox rows older than the aging threshold per source");
+        Meter.CreateObservableGauge("outbox_stalled", () => Measure(h => h.Stalled), description: "stalled outbox rows per source (still retried)");
+    }
+
+    private static IEnumerable<Measurement<int>> Measure(Func<OutboxHealth, int> value) =>
+        Health.Select(h => new Measurement<int>(value(h.Value), new KeyValuePair<string, object?>("source", h.Key)));
+
+    private DateTime nextHealth = DateTime.MinValue;
+
+    /// <summary>Reads the outbox depth for the metrics when due; a failure only leaves the last values.</summary>
+    private async Task RefreshHealthAsync(CancellationToken ct)
+    {
+        if (DateTime.UtcNow < nextHealth)
+        {
+            return;
+        }
+
+        nextHealth = DateTime.UtcNow + options.HealthInterval;
+        try
+        {
+            Health[store.Table.Source] = await store.HealthAsync(options.AgingThreshold, ct);
+        }
+        catch (Microsoft.Data.SqlClient.SqlException)
+        {
+            // Reported by the cycle's own failure handling when SQL is down.
+        }
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -103,6 +143,7 @@ public sealed partial class OutboxRelay(OutboxStore store, DaprEventPublisher pu
             var worked = false;
             try
             {
+                await RefreshHealthAsync(stoppingToken);
                 worked = await RunOnceAsync(stoppingToken) > 0;
             }
             catch (Exception e) when (e is not OperationCanceledException || !stoppingToken.IsCancellationRequested)

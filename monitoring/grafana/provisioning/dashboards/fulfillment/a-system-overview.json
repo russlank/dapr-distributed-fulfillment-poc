@@ -1,0 +1,160 @@
+{
+ "uid": "a-system-overview",
+ "title": "(a) System overview",
+ "tags": [
+  "fulfillment"
+ ],
+ "schemaVersion": 39,
+ "editable": false,
+ "refresh": "10s",
+ "time": {
+  "from": "now-1h",
+  "to": "now"
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "timeseries",
+   "title": "Firing alerts",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 0
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "count by (alertname) (ALERTS{alertstate=\"firing\"})",
+     "legendFormat": "{{alertname}}",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "type": "timeseries",
+   "title": "Requests per service",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 0
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (exported_job) (rate(http_server_request_duration_seconds_count[1m]))",
+     "legendFormat": "{{exported_job}}",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "type": "timeseries",
+   "title": "Workflow executions (Dapr)",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (status) (rate(dapr_runtime_workflow_execution_count[1m]))",
+     "legendFormat": "{{status}}",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "type": "timeseries",
+   "title": "Active intervention cases",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max by (kind, state) (intervention_cases_active)",
+     "legendFormat": "{{kind}} {{state}}",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 5,
+   "type": "timeseries",
+   "title": "Outbox pending per source",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 16
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max by (source) (outbox_pending)",
+     "legendFormat": "{{source}}",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 6,
+   "type": "timeseries",
+   "title": "Scrape targets up",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 16
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (job) (up)",
+     "legendFormat": "{{job}}",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,184 @@
+{
+ "uid": "d-outbox-messaging",
+ "title": "(d) Outbox and messaging",
+ "tags": [
+  "fulfillment"
+ ],
+ "schemaVersion": 39,
+ "editable": false,
+ "refresh": "10s",
+ "time": {
+  "from": "now-1h",
+  "to": "now"
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "timeseries",
+   "title": "Outbox pending / aging / stalled per source",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 0
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max by (source) (outbox_pending)",
+     "legendFormat": "{{source}} pending",
+     "datasource": {
+      "type": "prometheus"
+     }
+    },
+    {
+     "refId": "B",
+     "expr": "max by (source) (outbox_aging)",
+     "legendFormat": "{{source}} aging",
+     "datasource": {
+      "type": "prometheus"
+     }
+    },
+    {
+     "refId": "C",
+     "expr": "max by (source) (outbox_stalled)",
+     "legendFormat": "{{source}} stalled",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "type": "timeseries",
+   "title": "Published / failed per second",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 0
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (source) (rate(outbox_published_total[1m]))",
+     "legendFormat": "{{source}} published",
+     "datasource": {
+      "type": "prometheus"
+     }
+    },
+    {
+     "refId": "B",
+     "expr": "sum by (source) (rate(outbox_publish_failures_total[1m]))",
+     "legendFormat": "{{source}} failed",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "type": "timeseries",
+   "title": "Event dispositions",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (disposition) (rate(event_history_dispositions_total[1m]))",
+     "legendFormat": "{{disposition}}",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "type": "timeseries",
+   "title": "Dead letters (recent) / projection gaps aging / stream repairs",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(event_dead_letters_recent)",
+     "legendFormat": "dead letters",
+     "datasource": {
+      "type": "prometheus"
+     }
+    },
+    {
+     "refId": "B",
+     "expr": "max(projection_gaps_aging)",
+     "legendFormat": "gaps aging",
+     "datasource": {
+      "type": "prometheus"
+     }
+    },
+    {
+     "refId": "C",
+     "expr": "sum(increase(event_stream_repairs_total[5m]))",
+     "legendFormat": "repairs (5m)",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 5,
+   "type": "timeseries",
+   "title": "Broker publish / delivery (Dapr)",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 16
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (success) (rate(dapr_component_pubsub_egress_count[1m]))",
+     "legendFormat": "egress success={{success}}",
+     "datasource": {
+      "type": "prometheus"
+     }
+    },
+    {
+     "refId": "B",
+     "expr": "sum by (process_status) (rate(dapr_component_pubsub_ingress_count[1m]))",
+     "legendFormat": "ingress {{process_status}}",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  }
+ ]
+}

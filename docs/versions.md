@@ -31,6 +31,7 @@ Added for the solution foundation (pinned 2026-11-18, same rule):
 | OpenTelemetry Collector contrib | `otel/opentelemetry-collector-contrib:0.163.2` | 2026-10-21 | |
 | Jaeger | `jaegertracing/jaeger:2.22.0` | 2026-10-06 | query API under `/api/v3` |
 | Prometheus | `prom/prometheus:v3.15.1` | 2026-10-21 | |
+| Alertmanager | `prom/alertmanager:v0.28.1` | 2025-03-07 | pinned 2026-11-23 (M5 alerting) |
 | Grafana | `grafana/grafana:13.3.0` | 2026-10-27 | |
 | Toxiproxy | `ghcr.io/shopify/toxiproxy:2.13.0` | 2026-10-14 | |
 

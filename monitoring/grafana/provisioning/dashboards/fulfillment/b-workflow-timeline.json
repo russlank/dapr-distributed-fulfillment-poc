@@ -1,0 +1,192 @@
+{
+ "uid": "b-workflow-timeline",
+ "title": "(b) Workflow timeline",
+ "tags": [
+  "fulfillment"
+ ],
+ "schemaVersion": 39,
+ "editable": false,
+ "refresh": "10s",
+ "time": {
+  "from": "now-1h",
+  "to": "now"
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "timeseries",
+   "title": "Start attempts by result",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 0
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (result) (rate(workflow_start_attempts_total[1m]))",
+     "legendFormat": "{{result}}",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "type": "timeseries",
+   "title": "Start requests aging / fence rejections",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 0
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(start_requests_aging)",
+     "legendFormat": "aging",
+     "datasource": {
+      "type": "prometheus"
+     }
+    },
+    {
+     "refId": "B",
+     "expr": "sum (rate(fence_rejections_total[1m]))",
+     "legendFormat": "fence rejections/s",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "type": "timeseries",
+   "title": "Signal attempts by result",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (result) (rate(workflow_signal_attempts_total[1m]))",
+     "legendFormat": "{{result}}",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "type": "timeseries",
+   "title": "Pending signals aging by kind / oldest age (s)",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max by (kind) (pending_signals_aging)",
+     "legendFormat": "{{kind}}",
+     "datasource": {
+      "type": "prometheus"
+     }
+    },
+    {
+     "refId": "B",
+     "expr": "max(pending_signals_oldest_age_seconds)",
+     "legendFormat": "oldest age",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 5,
+   "type": "timeseries",
+   "title": "Workflow and activity latency p95 (Dapr)",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 16
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(dapr_runtime_workflow_execution_latency_bucket[5m])))",
+     "legendFormat": "workflow",
+     "datasource": {
+      "type": "prometheus"
+     }
+    },
+    {
+     "refId": "B",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(dapr_runtime_workflow_activity_execution_latency_bucket[5m])))",
+     "legendFormat": "activity",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 6,
+   "type": "timeseries",
+   "title": "Scheduling latency p95 / lock wait p95 (Dapr)",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 16
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(dapr_runtime_workflow_scheduling_latency_bucket[5m])))",
+     "legendFormat": "scheduling",
+     "datasource": {
+      "type": "prometheus"
+     }
+    },
+    {
+     "refId": "B",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(dapr_runtime_workflow_lock_wait_bucket[5m])))",
+     "legendFormat": "lock wait",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  }
+ ]
+}

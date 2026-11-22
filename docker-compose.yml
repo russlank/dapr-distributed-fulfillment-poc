@@ -20,6 +20,8 @@ x-app-env: &app-env
   DAPR_POC_ENV: ${DAPR_POC_ENV:-local}
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
   OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+  # Metrics every 5 s (the SDK default is 60 s), so dashboards and alerts follow drills closely.
+  OTEL_METRIC_EXPORT_INTERVAL: "5000"
 
 x-build-args: &build-args
   BUILD_FLAVOR: ${BUILD_FLAVOR:-release}
@@ -154,9 +156,19 @@ services:
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=2d"]
     volumes:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
     ports:
       - "127.0.0.1:9095:9090"
     mem_limit: 256m
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager"]
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "127.0.0.1:9093:9093"
+    mem_limit: 64m
 
   grafana:
     image: grafana/grafana:13.3.0
@@ -769,6 +781,7 @@ services:
       CARRIER_SIM_STEP: ${CARRIER_SIM_STEP:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_METRIC_EXPORT_INTERVAL: "5000"
       ConnectionStrings__CarrierSimDb: "Server=sqlserver;Database=CarrierSimDb;User Id=carrier_simulator;Password=${CARRIER_SIM_DB_PASSWORD};TrustServerCertificate=true"
     ports:
       - "127.0.0.1:8090:8080"
@@ -788,6 +801,7 @@ services:
       PROVIDER_API_KEY: ${PROVIDER_API_KEY:?set PROVIDER_API_KEY in .env}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_METRIC_EXPORT_INTERVAL: "5000"
       ConnectionStrings__PaymentProviderSimDb: "Server=sqlserver;Database=PaymentProviderSimDb;User Id=payment_provider_sim;Password=${PAYMENT_PROVIDER_SIM_DB_PASSWORD};TrustServerCertificate=true"
     ports:
       - "127.0.0.1:8091:8080"

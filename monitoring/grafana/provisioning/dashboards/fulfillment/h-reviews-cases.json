@@ -1,0 +1,112 @@
+{
+ "uid": "h-reviews-cases",
+ "title": "(h) Reviews, decisions, deadlines, and intervention cases",
+ "tags": [
+  "fulfillment"
+ ],
+ "schemaVersion": 39,
+ "editable": false,
+ "refresh": "10s",
+ "time": {
+  "from": "now-1h",
+  "to": "now"
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "timeseries",
+   "title": "Review signals aging",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 0
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(pending_signals_aging{kind=\"review\"})",
+     "legendFormat": "review",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "type": "timeseries",
+   "title": "Active cases by kind and state",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 0
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max by (kind, state) (intervention_cases_active)",
+     "legendFormat": "{{kind}} {{state}}",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "type": "timeseries",
+   "title": "Reconciler nudges and cases",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (action) (increase(reconciler_actions_total{action=~\"Nudge|WorkflowFaulted|WorkflowMissing|ExecutionMismatch\"}[5m]))",
+     "legendFormat": "{{action}}",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "type": "timeseries",
+   "title": "Intervention signals aging",
+   "datasource": {
+    "type": "prometheus"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max(pending_signals_aging{kind=\"intervention\"})",
+     "legendFormat": "intervention",
+     "datasource": {
+      "type": "prometheus"
+     }
+    }
+   ]
+  }
+ ]
+}

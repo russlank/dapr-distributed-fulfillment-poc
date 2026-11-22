@@ -14,6 +14,9 @@ public sealed record OutboxTable(string Source, string Table)
     public string Topic => EventSources.TopicOf(Source);
 }
 
+/// <summary>Pending rows, pending rows older than the aging threshold, and stalled rows of one outbox.</summary>
+public sealed record OutboxHealth(int Pending, int Aging, int Stalled);
+
 public sealed record OutboxRow(long Id, Guid EventId, Guid OrderId, int Sequence, string EventType, int SchemaVersion, string Payload, DateTime CreatedAtUtc,
     int Attempts, int Generation);
 
@@ -169,6 +172,23 @@ public sealed class OutboxStore(string connectionString, OutboxTable table)
         }
 
         return heads;
+    }
+
+    /// <summary>Depth of the outbox: pending rows, pending rows older than <paramref name="aging"/> (by SQL time), and stalled rows.</summary>
+    public async Task<OutboxHealth> HealthAsync(TimeSpan aging, CancellationToken ct)
+    {
+        await using var connection = await OpenAsync(ct);
+        await using var command = new SqlCommand(
+            $"""
+            SELECT COUNT(*),
+                   COUNT(CASE WHEN CreatedAt < DATEADD(millisecond, -@ms, SYSUTCDATETIME()) THEN 1 END),
+                   COUNT(CASE WHEN Stalled = 1 THEN 1 END)
+            FROM {table.Table} WHERE State = 'Pending';
+            """, connection);
+        command.Parameters.AddWithValue("@ms", (int)aging.TotalMilliseconds);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        await reader.ReadAsync(ct);
+        return new OutboxHealth(reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2));
     }
 
     private async Task<SqlConnection> OpenAsync(CancellationToken ct)

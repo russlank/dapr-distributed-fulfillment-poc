@@ -14,6 +14,10 @@ namespace Fulfillment.CarrierSimulator.Carrier;
 /// </summary>
 public sealed partial class CallbackSender(string connectionString, CarrierOptions options, IHttpClientFactory http, ILogger<CallbackSender> logger) : BackgroundService
 {
+    private static readonly System.Diagnostics.Metrics.Meter Meter = new("Fulfillment.CarrierSimulator");
+    private static readonly System.Diagnostics.Metrics.Counter<long> DeadLettered = Meter.CreateCounter<long>("carrier_callbacks_dead_lettered_total",
+        description: "callbacks the carrier gave up on after its retries");
+
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly string[] targets = options.CallbackUrls.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     private readonly int[] retries = [.. options.RetrySchedule.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => int.Parse(s, CultureInfo.InvariantCulture))];
@@ -116,6 +120,11 @@ public sealed partial class CallbackSender(string connectionString, CarrierOptio
             """, ct, ("@a", attempts), ("@c", (object?)code ?? DBNull.Value), ("@answered", answered), ("@dead", deadLetter), ("@next", next), ("@id", id),
             ("@e", callback.EventId), ("@t", target), ("@d", (object?)(detail is { Length: > 400 } d ? d[..400] : detail) ?? DBNull.Value));
         await tx.CommitAsync(ct);
+        if (deadLetter)
+        {
+            DeadLettered.Add(1);
+        }
+
         LogSent(logger, callback.EventId, callback.ShipmentId, callback.Status, callback.Version, attempts, code);
         return true;
     }

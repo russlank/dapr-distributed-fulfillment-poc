@@ -25,6 +25,9 @@ public sealed class InventoryOptions
 
     public bool SweeperEnabled { get; set; } = true;
 
+    /// <summary>A hold still Held this long after its expiry was not swept in time (metric <c>holds_overdue</c>, alert ReservationHoldsLeaking).</summary>
+    public TimeSpan HoldOverdueGrace { get; set; } = TimeSpan.FromMinutes(5);
+
     /// <summary>Defaults of the environment; INVENTORY_HOLD_TTL (a TimeSpan, e.g. 00:00:20), when set, overrides the TTL (drills lower it per run).</summary>
     public static void ForEnvironment(InventoryOptions options, string? environment, string? holdTtl = null)
     {
@@ -34,6 +37,7 @@ public sealed class InventoryOptions
             options.HoldTtl = TimeSpan.FromSeconds(60);
             options.SweepInterval = TimeSpan.FromSeconds(2);
             options.SweeperLease = TimeSpan.FromSeconds(6);
+            options.HoldOverdueGrace = TimeSpan.FromSeconds(15);
         }
 
         if (!string.IsNullOrWhiteSpace(holdTtl))

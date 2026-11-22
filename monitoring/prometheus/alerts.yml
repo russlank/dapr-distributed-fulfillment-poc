@@ -1,0 +1,109 @@
+# Alert rules (runbook per alert: docs/operations.md, "Alerts"). Thresholds are applied by the services that
+# report the gauges (per time profile), so every gauge rule asks only for a value above zero. Each service replica
+# reports the same OrderDb or outbox state, so gauge rules take the maximum across replicas. Counter rules also
+# fire for a counter series that appears for the first time (an OTel counter has no series before its first
+# increment, which increase() cannot see). No ids are labels.
+groups:
+  - name: fulfillment
+    interval: 5s
+    rules:
+      - alert: StartRequestBacklogAging
+        expr: max(start_requests_aging) > 0
+        for: 10s
+        labels: { severity: warning }
+        annotations: { summary: "Accepted orders wait for their workflow start longer than the backlog age" }
+
+      - alert: PendingSignalAging
+        expr: max by (kind) (pending_signals_aging) > 0
+        for: 10s
+        labels: { severity: warning }
+        annotations: { summary: "Workflow signals wait for delivery longer than the backlog age" }
+
+      - alert: ReviewSignalBacklog
+        expr: max(pending_signals_aging{kind="review"}) > 0
+        for: 10s
+        labels: { severity: warning }
+        annotations: { summary: "Review decisions are not reaching their workflows" }
+
+      - alert: CarrierForwardBacklogAging
+        expr: max(carrier_forwards_aging) > 0
+        for: 10s
+        labels: { severity: warning }
+        annotations: { summary: "Accepted carrier callbacks wait to be forwarded to Shipping" }
+
+      - alert: OutboxAging
+        expr: max by (source) (outbox_aging) > 0
+        for: 10s
+        labels: { severity: warning }
+        annotations: { summary: "Outbox rows of {{ $labels.source }} wait for publication longer than the aging threshold" }
+
+      - alert: OutboxStalled
+        expr: max by (source) (outbox_stalled) > 0
+        for: 10s
+        labels: { severity: critical }
+        annotations: { summary: "Outbox rows of {{ $labels.source }} keep failing (still retried)" }
+
+      - alert: DeadLetterNotEmpty
+        expr: max(event_dead_letters_recent) > 0
+        labels: { severity: warning }
+        annotations: { summary: "Events were dead-lettered recently" }
+
+      - alert: InterventionCaseOpen
+        expr: max by (kind, state) (intervention_cases_active) > 0
+        for: 10s
+        labels: { severity: info }
+        annotations: { summary: "{{ $labels.kind }} cases are {{ $labels.state }} and wait for an operator" }
+
+      - alert: WorkflowFaulted
+        expr: max(intervention_cases_active{kind="WorkflowFaulted"}) > 0
+        labels: { severity: critical }
+        annotations: { summary: "A workflow failed or vanished while its order was not terminal" }
+
+      - alert: ExecutionMismatch
+        expr: max(intervention_cases_active{kind=~"ExecutionMismatch|WorkflowMissing"}) > 0
+        labels: { severity: critical }
+        annotations: { summary: "A workflow's state contradicts its order's status" }
+
+      - alert: OrderProgressStalled
+        expr: >-
+          sum(increase(reconciler_actions_total{action="OrderProgressStalled"}[1m])) > 0
+          or sum(reconciler_actions_total{action="OrderProgressStalled"} unless reconciler_actions_total{action="OrderProgressStalled"} offset 1m) > 0
+        labels: { severity: warning }
+        annotations: { summary: "Orders have not changed status past the stage threshold" }
+
+      - alert: CarrierCallbackDeadLettered
+        expr: >-
+          sum(increase(carrier_callbacks_dead_lettered_total[1m])) > 0
+          or sum(carrier_callbacks_dead_lettered_total unless carrier_callbacks_dead_lettered_total offset 1m) > 0
+        labels: { severity: warning }
+        annotations: { summary: "The carrier gave up on callbacks; the delivery deadline poll is the remaining path" }
+
+      - alert: CarrierContractViolation
+        expr: >-
+          sum(increase(carrier_callbacks_total{result=~"invalid|unauthorized"}[1m])) > 0
+          or sum(carrier_callbacks_total{result=~"invalid|unauthorized"} unless carrier_callbacks_total{result=~"invalid|unauthorized"} offset 1m) > 0
+        labels: { severity: warning }
+        annotations: { summary: "Carrier callbacks were refused as invalid or unauthorized" }
+
+      - alert: ProjectionSequenceGap
+        expr: max(projection_gaps_aging) > 0
+        labels: { severity: warning }
+        annotations: { summary: "Timeline streams wait for a missing event longer than the gap age" }
+
+      - alert: ProjectionGapUnresolvable
+        expr: max(intervention_cases_active{kind="ProjectionGap"}) > 0
+        labels: { severity: critical }
+        annotations: { summary: "A projection gap cannot be repaired from its source" }
+
+      - alert: PaymentProviderUnavailable
+        expr: >-
+          sum(increase(provider_requests_total{result=~"refused|rejected503|timeout|error"}[1m])) > 0
+          or sum(provider_requests_total{result=~"refused|rejected503|timeout|error"} unless provider_requests_total{result=~"refused|rejected503|timeout|error"} offset 1m) > 0
+        labels: { severity: warning }
+        annotations: { summary: "Payment provider requests fail or go unanswered" }
+
+      - alert: ReservationHoldsLeaking
+        expr: max(holds_overdue) > 0
+        for: 10s
+        labels: { severity: critical }
+        annotations: { summary: "Holds stay Held past their expiry: the sweeper is not expiring them" }

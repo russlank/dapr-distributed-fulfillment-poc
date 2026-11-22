@@ -61,7 +61,7 @@ docker compose "${profiles[@]}" up -d --no-deps --force-recreate "$first"
 wait_until 120 "${first%-dapr} ready" ready "${first%-dapr}" || { docker compose logs --tail 30 "$first"; die "$first not ready"; }
 docker compose "${profiles[@]}" up -d --no-deps --force-recreate "${sidecars[@]:1}"
 
-services=($(printf '%s\n' "${others[@]}" | grep -vE '^(db-init|scheduler-volume-init|order-db-migrate|inventory-db-migrate|payment-db-migrate|shipping-db-migrate|sqlserver|rabbitmq|toxiproxy|placement|scheduler|otel-collector|jaeger|prometheus|grafana)$'))
+services=($(printf '%s\n' "${others[@]}" | grep -vE '^(db-init|scheduler-volume-init|order-db-migrate|inventory-db-migrate|payment-db-migrate|shipping-db-migrate|sqlserver|rabbitmq|toxiproxy|placement|scheduler|otel-collector|jaeger|prometheus|alertmanager|grafana)$'))
 for svc in "${services[@]}"; do
   wait_until 120 "$svc ready" ready "$svc" || { docker compose logs --tail 30 "$svc" "$svc-dapr" 2>/dev/null; die "$svc not ready"; }
   log "$svc ready: $(http_body "$svc" /system/component-identity)"

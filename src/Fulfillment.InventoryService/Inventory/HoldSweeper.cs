@@ -16,6 +16,16 @@ public sealed partial class HoldSweeper(InventoryOperations operations, IOptions
 {
     public const string LeaseName = "hold-expiry";
 
+    private static readonly System.Diagnostics.Metrics.Meter Meter = new("Fulfillment.Inventory.Sweeper");
+    private static volatile int overdue;
+
+    static HoldSweeper()
+    {
+        // Read by every replica on every pass, whether or not it holds the lease: a sweeper that stopped (or a lease
+        // that never expires) shows as holds past their expiry plus the grace.
+        Meter.CreateObservableGauge("holds_overdue", () => overdue, description: "holds still Held longer than the grace after their expiry");
+    }
+
     private readonly string owner = $"{identity.Replica}/{Guid.NewGuid():N}"[..Math.Min(identity.Replica.Length + 33, 64)];
 
     /// <summary>One pass: renew or take the lease; when held, expire up to the batch size. Returns the holds expired.</summary>
@@ -50,6 +60,7 @@ public sealed partial class HoldSweeper(InventoryOperations operations, IOptions
             try
             {
                 await SweepOnceAsync(stoppingToken);
+                overdue = await CountOverdueAsync(settings.HoldOverdueGrace, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -69,6 +80,16 @@ public sealed partial class HoldSweeper(InventoryOperations operations, IOptions
                 break;
             }
         }
+    }
+
+    private async Task<int> CountOverdueAsync(TimeSpan grace, CancellationToken ct)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(ct);
+        await using var command = new SqlCommand(
+            "SELECT COUNT(*) FROM inventory.Hold WHERE State = 'Held' AND ExpiresAt < DATEADD(millisecond, -@ms, SYSUTCDATETIME());", connection);
+        command.Parameters.AddWithValue("@ms", (int)grace.TotalMilliseconds);
+        return (int)(await command.ExecuteScalarAsync(ct))!;
     }
 
     /// <summary>Takes the lease when free or expired (by SQL time), or renews it when this sweeper holds it.</summary>

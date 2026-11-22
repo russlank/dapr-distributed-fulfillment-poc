@@ -96,6 +96,12 @@ builder.Services.Configure<StartDispatcherOptions>(builder.Configuration.GetSect
 builder.Services.AddSingleton(new WorkflowStartStore(orderDb));
 builder.Services.AddTransient<IWorkflowStarter, WorkflowHostStarter>();
 builder.Services.AddHostedService<WorkflowStartDispatcher>();
+builder.Services.AddOptions<Fulfillment.OrderApi.Operations.OperationalGaugeOptions>()
+    .Configure(o => Fulfillment.OrderApi.Operations.OperationalGaugeOptions.ForEnvironment(o, Environment.GetEnvironmentVariable("DAPR_POC_ENV")))
+    .Bind(builder.Configuration.GetSection(Fulfillment.OrderApi.Operations.OperationalGaugeOptions.Section));
+builder.Services.AddHostedService(sp => new Fulfillment.OrderApi.Operations.OperationalGauges(orderDb,
+    sp.GetRequiredService<IOptions<Fulfillment.OrderApi.Operations.OperationalGaugeOptions>>(),
+    sp.GetRequiredService<ILogger<Fulfillment.OrderApi.Operations.OperationalGauges>>()));
 builder.Services.AddSidecarInvoker();
 builder.Services.AddTransient<WorkflowHostClient>();
 

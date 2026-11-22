@@ -197,6 +197,33 @@ and replays an order's events when its projection lags; a `ProjectionGap` case
 means the source no longer has the missing event (the projection for that order
 and source stays at its last contiguous state).
 
+## Alerts
+
+Alertmanager (http://127.0.0.1:9093) groups the firing alerts; the rules are in
+`monitoring/prometheus/alerts.yml`, the dashboards in Grafana (folder
+"Fulfillment"). Thresholds per time profile are in the metric descriptions
+([monitoring.md](monitoring.md)).
+
+| Alert | Meaning | Check first | Act |
+|---|---|---|---|
+| `StartRequestBacklogAging` | accepted orders wait for their workflow start | workflow host replicas and sidecars; `orders.WorkflowStartRequest` (`LastErrorCode`, `Attempts`) | restore the workflow host; the dispatcher retries by itself |
+| `PendingSignalAging` | wake-up signals are not delivered | workflow hosts; `orders.SignalAttempt` results | restore the workflow host; facts are in SQL, signals only wake |
+| `ReviewSignalBacklog` | review decisions do not reach their workflows | as above, for review signals | as above; the reconciler nudges overdue review waits |
+| `CarrierForwardBacklogAging` | accepted carrier callbacks are not forwarded | Shipping replicas; `orders.CarrierStatusForward` (`LastError`) | restore Shipping; the forwarder retries |
+| `OutboxAging` | events wait for publication | RabbitMQ and the owner's sidecar; dashboard (d) | restore the broker; rows stay `Pending` and drain |
+| `OutboxStalled` | rows keep failing (still retried) | the row's `LastError` in the owner's outbox | fix the cause; nothing is lost, the relay keeps retrying |
+| `DeadLetterNotEmpty` | events were dead-lettered | `orders.EventDeadLetter` (reason) | a conflict or invalid event is a producer defect; `DeliveryFailed` means the consumer failed until the broker gave up: replay from the outbox after the fix |
+| `InterventionCaseOpen` | cases wait for an operator (`Escalated`: a business resolution) | [Intervention Cases](#intervention-cases) | resolve with evidence |
+| `WorkflowFaulted` | a workflow failed while its order was not terminal | the case's evidence; the workflow host's status | resolve the `WorkflowFaulted` case (repair) |
+| `ExecutionMismatch` | a workflow is missing or contradicts its order | the case; Shipping's record for a mismatch after delivery | resolve the case (repair or finalize) |
+| `OrderProgressStalled` | orders have not moved past the stage threshold | the reconciler's log; the order's workflow | usually a host or store outage: restore it; a case follows if the workflow is gone |
+| `CarrierCallbackDeadLettered` | the carrier gave up on callbacks | ingress reachability; the carrier's send log | none needed for the order: the delivery deadline poll completes it, or a `DeliveryOverdue` case follows |
+| `CarrierContractViolation` | callbacks refused as invalid or unauthorized | the shared secret and payloads at the carrier | fix the configuration; refused callbacks change nothing |
+| `ProjectionSequenceGap` | timeline streams wait for a missing event | `orders.OrderEventGaps` | the reconciler replays from the source after the gap threshold |
+| `ProjectionGapUnresolvable` | a gap the source cannot fill (a `ProjectionGap` case) | the case and the source's outbox | acknowledge after checking; the timeline is a read model |
+| `PaymentProviderUnavailable` | provider requests fail or go unanswered | provider reachability; `payment.PaymentAttempt` | restore the provider; orders compensate or open `AmbiguousPayment` cases |
+| `ReservationHoldsLeaking` | holds stay `Held` past their expiry | `inventory.SweeperLease` (owner, expiry); inventory replicas | restore the sweeper (a stuck lease expires by SQL time); holds are then expired and stock returned |
+
 ## Restarting a Replica
 
 A replica is an app container plus a sidecar that joins the app's network

@@ -3,8 +3,10 @@
 #   OBS-1 traces    Jaeger knows every Dapr role; at least one order-api trace of the last hour also
 #                   contains workflow-host spans (trace context crossed Dapr service invocation)
 #   OBS-2 metrics   Prometheus scrapes the Collector and every core sidecar successfully
+#   OBS-3 alerting  Prometheus has loaded every alert rule (17) and sends to Alertmanager, which is ready;
+#                   Grafana has provisioned the eight dashboards (a)-(h)
 # Jaeger 2.x serves its query API under /api/v3 (OTLP JSON); /api/services returns 404.
-# Prints PASS/FAIL per check; exit 0 only if both pass.
+# Prints PASS/FAIL per check; exit 0 only if all pass.
 . "$(dirname "$0")/../lib.sh"
 
 failures=0
@@ -60,6 +62,16 @@ if [[ "${total:-0}" -ge 7 && "$down" == 0 ]]; then
   check OBS-2 PASS "Prometheus scrapes the Collector and all core sidecars" "$total targets up (after ${waited}s)"
 else
   check OBS-2 FAIL "all targets up" "$total targets, $down down: $which"
+fi
+
+rules="$(curl -s http://127.0.0.1:9095/api/v1/rules?type=alert | python -c 'import json,sys; print(sum(len(g["rules"]) for g in json.load(sys.stdin)["data"]["groups"]))' 2>/dev/null)"
+am="$(curl -s http://127.0.0.1:9095/api/v1/alertmanagers | python -c 'import json,sys; print(len(json.load(sys.stdin)["data"]["activeAlertmanagers"]))' 2>/dev/null)"
+am_ready="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9093/-/ready)"
+dashboards="$(curl -s -u "admin:$GRAFANA_ADMIN_PASSWORD" 'http://127.0.0.1:3000/api/search?tag=fulfillment&type=dash-db' | python -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null)"
+if [[ "$rules" == 17 && "${am:-0}" -ge 1 && "$am_ready" == 200 && "$dashboards" == 8 ]]; then
+  check OBS-3 PASS "17 alert rules loaded; Alertmanager connected and ready; 8 dashboards provisioned" "rules $rules; alertmanagers $am, ready $am_ready; dashboards $dashboards"
+else
+  check OBS-3 FAIL "17 rules, Alertmanager connected and ready, 8 dashboards" "rules ${rules:-?}; alertmanagers ${am:-?}, ready $am_ready; dashboards ${dashboards:-?}"
 fi
 
 (( failures == 0 ))
