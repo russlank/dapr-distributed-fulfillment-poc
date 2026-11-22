@@ -10,6 +10,7 @@
 #                     resiliency's retries plus one), then stopped
 #   R16-others        ordinary orders submitted around the poison events Completed, their events applied
 #   R16-no-payload    neither the order API logs nor the dead-letter table contain the marker (ids and reasons only)
+#   R16-alert         DeadLetterNotEmpty fired for the dead letters and resolved once its window passed
 DRILL_ID=R16
 . "$(dirname "$0")/lib.sh"
 . "$REPO_ROOT/scripts/scenarios/m3-lib.sh"
@@ -24,6 +25,7 @@ fake="$(new_uuid)"; e_schema="$(new_uuid)"; e_poison="$(new_uuid)"; m_bad="$(new
 since="$(sql OrderDb "SELECT CONVERT(varchar(23), SYSUTCDATETIME(), 126)")"
 
 o1="$(submit "$ORDER_API" "$RUN-1" "$(order_body "$RUN-c1" "$SKU" 1)")"
+ALERT_SINCE="$(date +%s)"; ALERT_BEFORE="$(alert_firing DeadLetterNotEmpty)"
 INJECTED_AT="$(now_iso)"
 s1="$(drill_publish "$TOPIC" "not json $MARK" "$m_bad" text/plain)"
 s2="$(drill_publish "$TOPIC" "$(envelope "$e_schema" inventory "$fake" 1 HoldCreated 9 "{\"holdId\":\"$MARK\"}")")"
@@ -58,3 +60,5 @@ inlogs="$(docker compose --profile replicas logs --since 10m order-api order-api
 intable="$(sql OrderDb "SELECT COUNT(*) FROM orders.EventDeadLetter WHERE CONCAT(MessageId, Source, Type, Reason, Topic) LIKE '%$MARK%'")"
 aexpect R16-no-payload "marker absent from order API logs and the dead-letter table" "log lines $inlogs; table rows $intable" \
   "$([[ "$inlogs" == 0 && "$intable" == 0 ]]; echo $?)"
+read -r verdict detail <<< "$(alert_outcome DeadLetterNotEmpty '' "$ALERT_SINCE" "$ALERT_BEFORE" 180)"
+assert R16-alert "$verdict" "DeadLetterNotEmpty fires for the dead letters and resolves after its window" "$detail"

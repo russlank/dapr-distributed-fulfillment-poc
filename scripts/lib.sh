@@ -259,3 +259,34 @@ decide() {
     -d '{"decisionId":"'"$id"'","operatorId":"'"$op"'","outcome":"'"$3"'"}')"
   printf '%s %s\n' "${out##*$'\n'}" "$(printf '%s' "${out%$'\n'*}" | tr -d '\r\n')"
 }
+
+# Alerts (Prometheus on 127.0.0.1:9095). A label matcher narrows an alert with labels, e.g. 'source="inventory"'.
+PROMETHEUS_URL="${PROMETHEUS_URL:-http://127.0.0.1:9095}"
+_alert_selector() { printf 'alertname="%s",alertstate="firing"%s' "$1" "${2:+,$2}"; }
+# alert_firing <alert> [matcher] -> 1 when the alert fires now, else 0
+alert_firing() {
+  curl -s -G "$PROMETHEUS_URL/api/v1/query" --data-urlencode "query=count(ALERTS{$(_alert_selector "$1" "${2:-}")})" \
+    | python -c 'import json,sys; print(1 if json.load(sys.stdin)["data"]["result"] else 0)'
+}
+# alert_fired_since <alert> <matcher> <epoch seconds> -> 1 when the alert fired at any evaluation since then
+alert_fired_since() {
+  curl -s -G "$PROMETHEUS_URL/api/v1/query_range" --data-urlencode "query=count(ALERTS{$(_alert_selector "$1" "$2")})" \
+    --data-urlencode "start=$3" --data-urlencode "end=$(date +%s)" --data-urlencode "step=5" \
+    | python -c 'import json,sys; print(1 if json.load(sys.stdin)["data"]["result"] else 0)'
+}
+# alert_wait_firing <alert> <matcher> <timeout s>: before restoring a fault, so the alert has fired
+_alert_is_firing() { [[ "$(alert_firing "$1" "$2")" == 1 ]]; }
+alert_wait_firing() { wait_until "$3" "alert $1 firing" _alert_is_firing "$1" "$2"; }
+# alert_outcome <alert> <matcher> <since epoch> <firing before: 0|1> <resolve timeout s> -> "PASS|FAIL|UNVERIFIED <detail>"
+# PASS: fired since the fault and resolved afterwards; UNVERIFIED: it already fired before the fault (not attributable).
+alert_outcome() {
+  local fired resolved=0 waited=0
+  fired="$(alert_fired_since "$1" "$2" "$3")"
+  while (( waited <= $5 )); do
+    [[ "$(alert_firing "$1" "$2")" == 0 ]] && { resolved=1; break; }
+    sleep 5; waited=$((waited + 5))
+  done
+  if [[ "$4" == 1 ]]; then echo "UNVERIFIED $1 already firing before the fault; fired $fired, resolved $resolved"
+  elif [[ "$fired" == 1 && "$resolved" == 1 ]]; then echo "PASS $1 fired during the fault and resolved ${waited}s after recovery"
+  else echo "FAIL $1 fired $fired, resolved $resolved (waited ${waited}s)"; fi
+}

@@ -95,6 +95,9 @@ public sealed partial class OutboxRelay(OutboxStore store, DaprEventPublisher pu
 {
     public const string AfterBrokerAckBeforeOutboxMarkSent = "AfterBrokerAckBeforeOutboxMarkSent";
 
+    /// <summary>Drill hook before a row's publication: a failure injected here counts as a failed publication of that row.</summary>
+    public const string BeforeOutboxPublish = "BeforeOutboxPublish";
+
     private static readonly Meter Meter = new("Fulfillment.Outbox");
     private static readonly Counter<long> Published = Meter.CreateCounter<long>("outbox_published_total");
     private static readonly Counter<long> Failed = Meter.CreateCounter<long>("outbox_publish_failures_total");
@@ -175,7 +178,18 @@ public sealed partial class OutboxRelay(OutboxStore store, DaprEventPublisher pu
         {
             var envelope = new EventEnvelope(row.EventId, store.Table.Source, row.OrderId, row.Sequence, row.EventType, row.SchemaVersion, row.CreatedAtUtc,
                 JsonDocument.Parse(row.Payload).RootElement.Clone());
-            var outcome = await publisher.PublishAsync(store.Table.Topic, envelope, ct);
+            PublishOutcome outcome;
+            try
+            {
+                // A no-op in release builds; in drills a failure injected here is a row the broker keeps refusing.
+                await checkpoint(BeforeOutboxPublish, row.EventId.ToString(), ct);
+                outcome = await publisher.PublishAsync(store.Table.Topic, envelope, ct);
+            }
+            catch (InvalidOperationException e)
+            {
+                outcome = new PublishOutcome(false, "refused: " + e.GetType().Name);
+            }
+
             if (!outcome.Acknowledged)
             {
                 Failed.Add(1, new KeyValuePair<string, object?>("source", store.Table.Source));

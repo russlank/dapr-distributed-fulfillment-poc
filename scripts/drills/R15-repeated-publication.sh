@@ -12,6 +12,10 @@
 #   R15-unchanged   the order's current-state checksum is unchanged by the duplicates
 #   S18-replay      a replay of all four sources from sequence 1: history unchanged (same rows, all Applied),
 #                   checksum unchanged, duplicates counted for every event
+#   R15-stalled     a row the broker keeps refusing (BeforeOutboxPublish Throw, nine times, for inventory sequence 2):
+#                   flagged Stalled after five recorded failures, still retried (four more, long enough for the alert),
+#                   then Published; OutboxStalled
+#                   (source inventory) fired and resolved
 DRILL_ID=R15
 . "$(dirname "$0")/lib.sh"
 . "$REPO_ROOT/scripts/scenarios/m3-lib.sh"
@@ -68,3 +72,21 @@ hist_after="$(history_of_events "$o")"; dups_after="$(sql OrderDb "SELECT SUM(Du
 aexpect S18-replay "replay of all sources: history unchanged, checksum unchanged, +$events duplicates" \
   "history same: $([[ "$hist_before" == "$hist_after" ]] && echo yes || echo no) ($hist_after); duplicates $dups_before -> $dups_after; checksum $(checksum_of "$o")" \
   "$([[ "$hist_before" == "$hist_after" && "$dups_after" -ge $((dups_before + events)) && "$(checksum_of "$o")" == "$before" ]] && is_converged "$o"; echo $?)"
+
+# A row that keeps failing while others publish: nine injected refusals for one event, after a replay (stalled from
+# the fifth; the last four keep it stalled for about 40 s, longer than the alert pipeline and its 10 s hold).
+eid2="$(sql InventoryDb "SELECT LOWER(CONVERT(varchar(36), EventId)) FROM inventory.Outbox WHERE OrderId = '$o' AND Sequence = 2")"
+ALERT_SINCE="$(date +%s)"; STALLED_BEFORE="$(alert_firing OutboxStalled 'source="inventory"')"
+arm_failpoint_times InventoryDb BeforeOutboxPublish "$eid2" Throw 9
+replay_outbox inventory "$o" 2 > "$DRILL_DIR/replay-stall.json"
+stalled() { [[ "$(sql InventoryDb "SELECT CONCAT(State, '|', Stalled) FROM inventory.Outbox WHERE EventId = '$eid2'")" == "Pending|1" ]]; }
+wait_until 90 "row flagged Stalled" stalled || true
+seen="$(sql InventoryDb "SELECT CONCAT(State, '|', Stalled, '|', Attempts) FROM inventory.Outbox WHERE EventId = '$eid2'")"
+alert_wait_firing OutboxStalled 'source="inventory"' 60 || true
+published2() { [[ "$(sql InventoryDb "SELECT State FROM inventory.Outbox WHERE EventId = '$eid2'")" == Published ]]; }
+wait_until 150 "row Published after the refusals" published2 || true
+final="$(sql InventoryDb "SELECT CONCAT(State, '|', Stalled, '|', Attempts) FROM inventory.Outbox WHERE EventId = '$eid2'")"
+read -r verdict detail <<< "$(alert_outcome OutboxStalled 'source="inventory"' "$ALERT_SINCE" "$STALLED_BEFORE" 90)"
+assert R15-stalled "$([[ "$seen" == "Pending|1|"* && "$final" == Published\|0\|* ]] && echo "$verdict" || echo FAIL)" \
+  "Stalled after five failures and still retried, then Published (flag cleared); OutboxStalled fired and resolved" \
+  "while failing $seen (State|Stalled|Attempts); final $final; $verdict $detail"

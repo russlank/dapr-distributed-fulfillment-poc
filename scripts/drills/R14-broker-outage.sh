@@ -7,6 +7,8 @@
 #   R14-drained     after the restart every outbox row of the run is Published (no row lost, none deleted)
 #   R14-converged   per order and source the published event ids equal the history's (I20), all Applied, state at
 #                   the last sequence; a rebuild gives the live checksum
+#   R14-alert       OutboxAging (source orders) fired during the outage and resolved after the drain (OutboxStalled:
+#                   R15; during an outage each row gets an attempt only about every batch x publish timeout)
 DRILL_ID=R14
 . "$(dirname "$0")/lib.sh"
 . "$REPO_ROOT/scripts/scenarios/m3-lib.sh"
@@ -18,6 +20,7 @@ trap 'run_cleanup; drill_finish; exit $?' EXIT
 RUN="r14-$(date -u +%H%M%S)-$((RANDOM % 1000))"
 SKU="$(fresh_sku R14 20)"
 
+ALERT_SINCE="$(date +%s)"; AGING_BEFORE="$(alert_firing OutboxAging 'source="orders"')"
 docker compose stop -t 5 rabbitmq >/dev/null 2>&1
 INJECTED_AT="$(now_iso)"
 state="$(docker compose ps -a --format '{{.State}}' rabbitmq)"
@@ -42,6 +45,8 @@ FAULT_OBSERVED="backlog (pending/max attempts) $backlog"
 aexpect R14-backlog "outbox rows of the run Pending with failed attempts while the broker is down" "$backlog" \
   "$([[ $total -gt 0 && "$backlog" == *"/"[1-9]* ]]; echo $?)"
 
+# Keep the broker down until the rows have aged past the threshold and the alert fired.
+alert_wait_firing OutboxAging 'source="orders"' 90 || true
 docker compose start rabbitmq >/dev/null 2>&1
 broker_ready() { docker compose exec -T rabbitmq rabbitmq-diagnostics -q check_port_connectivity >/dev/null 2>&1; }
 wait_until 120 "RabbitMQ ready" broker_ready
@@ -59,3 +64,5 @@ conv=""; bad=0
 for o in "${orders[@]}"; do wait_until 120 "events of $o converged" is_converged "$o" || true; conv+="$(converged "$o"); "; is_converged "$o" || bad=1; done
 r="$(rebuild_timeline)"
 aexpect R14-converged "published = history (I20), all Applied; rebuild equal" "$conv rebuild $r" "$([[ $bad == 0 && "$r" == true\|* ]]; echo $?)"
+read -r verdict detail <<< "$(alert_outcome OutboxAging 'source="orders"' "$ALERT_SINCE" "$AGING_BEFORE" 120)"
+assert R14-alert "$verdict" "OutboxAging fires during the outage and resolves after the drain" "$detail"
