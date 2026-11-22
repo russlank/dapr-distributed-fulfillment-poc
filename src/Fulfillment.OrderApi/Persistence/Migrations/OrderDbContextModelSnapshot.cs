@@ -417,7 +417,7 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                     b.HasIndex("OrderId", "Kind")
                         .IsUnique()
                         .HasDatabaseName("UX_InterventionCase_OpenPerKind")
-                        .HasFilter("[State] IN ('Open', 'Reconciling')");
+                        .HasFilter("[State] IN ('Open', 'Reconciling', 'Escalated')");
 
                     b.ToTable("InterventionCase", "orders", t =>
                         {

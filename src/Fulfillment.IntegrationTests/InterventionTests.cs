@@ -187,6 +187,22 @@ public sealed class InterventionTests(SqlServerFixture sql) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task EscalatedCase_IsActive_ARepeatedOpeningReturnsIt_AndTheDatabaseRefusesASecondOne()
+    {
+        var (order, caseId) = await OpenDeliveryCaseAsync();
+        await Resolutions("Running").ResolveAsync(caseId, Resolve(CaseActions.ConfirmExternalFailure), Ct);
+
+        var reopened = await lifecycle.OpenCaseAsync(new OpenCaseRequest(order, InterventionKinds.DeliveryOverdue, "delivery-2", "overdue again"), Ct);
+        var duplicate = await Assert.ThrowsAsync<Microsoft.Data.SqlClient.SqlException>(() => Db.ExecuteAsync(db,
+            "INSERT orders.InterventionCase (OrderId, Kind, State, OperationKey, Evidence) VALUES (@o, 'DeliveryOverdue', 'Open', 'manual-second', 'x')",
+            ("@o", order)));
+
+        Assert.Equal((caseId, CaseStates.Escalated, false), (reopened.CaseId, reopened.State, reopened.Created));
+        Assert.Contains("UX_InterventionCase_OpenPerKind", duplicate.Message, StringComparison.Ordinal);
+        Assert.Equal(1, await Db.ScalarAsync<int>(db, "SELECT COUNT(*) FROM orders.InterventionCase WHERE OrderId = @o", ("@o", order)));
+    }
+
+    [Fact]
     public async Task Resolve_WorkflowHostUnreachable_LeavesTheCaseOpen()
     {
         var (_, caseId) = await OpenPaymentCaseAsync();

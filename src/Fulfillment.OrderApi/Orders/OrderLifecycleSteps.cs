@@ -109,8 +109,8 @@ public sealed class OrderLifecycleSteps(string connectionString, StepCheckpoint 
 
     /// <summary>
     /// Opens a case once per idempotency key. A non-terminal order moves to ManualInterventionRequired (its status is
-    /// kept to resume to); a terminal order only gets a history row. A second open case of the same kind for the order
-    /// is refused by the database; the existing one is returned.
+    /// kept to resume to); a terminal order only gets a history row. A second active case (Open, Reconciling, or
+    /// Escalated) of the same kind for the order is refused by the database; the existing one is returned.
     /// </summary>
     public async Task<CaseResult> OpenCaseAsync(OpenCaseRequest request, CancellationToken ct = default)
     {
@@ -120,7 +120,7 @@ public sealed class OrderLifecycleSteps(string connectionString, StepCheckpoint 
         await using var tx = (SqlTransaction)await connection.BeginTransactionAsync(ct);
         var (status, _) = await FulfillmentSteps.LockOrThrowAsync(connection, tx, request.OrderId, ct);
         var existing = await ReadCaseByAsync(connection, tx, "OperationKey = @v", key, ct)
-            ?? await ReadCaseByAsync(connection, tx, "OrderId = @o AND Kind = @k AND State IN ('Open', 'Reconciling')", null, ct, request.OrderId, request.Kind);
+            ?? await ReadCaseByAsync(connection, tx, "OrderId = @o AND Kind = @k AND State IN ('Open', 'Reconciling', 'Escalated')", null, ct, request.OrderId, request.Kind);
         if (existing is not null)
         {
             await tx.CommitAsync(ct);

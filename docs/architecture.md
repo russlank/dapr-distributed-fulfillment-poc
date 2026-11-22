@@ -343,7 +343,7 @@ cancellation during a review wakes the waiting workflow; the round becomes
 
 ## Intervention Cases
 
-A case (`InterventionCase`: one open case per order and kind) is opened by the
+A case (`InterventionCase`: one active case per order and kind: `Open`, `Reconciling`, or `Escalated`) is opened by the
 workflow when it cannot decide safely: `AmbiguousPayment`,
 `CompensationExhausted`, `AmbiguousDispatch`, `DeliveryException`,
 `DeliveryOverdue`, `CarrierTerminalConflict`. A non-terminal order waits in

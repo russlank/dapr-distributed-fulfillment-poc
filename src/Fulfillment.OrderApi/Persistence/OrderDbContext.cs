@@ -553,7 +553,7 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         c.HasOne<Order>().WithMany().HasForeignKey(x => x.OrderId);
         c.HasIndex(x => x.OperationKey).IsUnique().HasDatabaseName("UX_InterventionCase_OperationKey");
         // One open case per order and kind.
-        c.HasIndex(x => new { x.OrderId, x.Kind }).IsUnique().HasFilter("[State] IN ('Open', 'Reconciling')").HasDatabaseName("UX_InterventionCase_OpenPerKind");
+        c.HasIndex(x => new { x.OrderId, x.Kind }).IsUnique().HasFilter("[State] IN ('Open', 'Reconciling', 'Escalated')").HasDatabaseName("UX_InterventionCase_OpenPerKind");
     }
 
     private static void ConfigureReviewWake(EntityTypeBuilder<ReviewWake> wake)
