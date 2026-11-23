@@ -1,6 +1,7 @@
 # Secrets and local environment
 .env
 *.env.local
+deploy/kubernetes/**/*.env
 secrets/
 !secrets/README.md
 

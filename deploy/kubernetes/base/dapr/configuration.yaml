@@ -1,0 +1,18 @@
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: fulfillment
+spec:
+  tracing:
+    samplingRate: "1"
+    otel:
+      endpointAddress: otel-collector.observability:4317
+      isSecure: false
+      protocol: grpc
+  metric:
+    enabled: true
+  workflow:
+    maxConcurrentWorkflowInvocations: 100
+    maxConcurrentActivityInvocations: 100
+  # mTLS between sidecars is on by default in Kubernetes (Dapr Sentry). To restrict service
+  # invocation per caller, add accessControl here (defaultAction deny, one policy per app id).

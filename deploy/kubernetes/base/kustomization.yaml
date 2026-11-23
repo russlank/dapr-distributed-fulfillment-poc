@@ -1,0 +1,64 @@
+# Generic Kubernetes template for the fulfillment services (Kustomize base). Not verified on a cluster:
+# it is rendered with `kubectl kustomize` only. See ../README.md for prerequisites and the differences
+# from the Compose stack.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: fulfillment
+resources:
+  - namespace.yaml
+  - settings.yaml
+  - dapr/configuration.yaml
+  - dapr/statestore.yaml
+  - dapr/pubsub.yaml
+  - dapr/resiliency.yaml
+  - apps/order-api.yaml
+  - migrations/order-api-migrate.yaml
+  - apps/workflow-host.yaml
+  - apps/compute-worker.yaml
+  - apps/inventory-service.yaml
+  - migrations/inventory-service-migrate.yaml
+  - apps/payment-service.yaml
+  - migrations/payment-service-migrate.yaml
+  - apps/shipping-service.yaml
+  - migrations/shipping-service-migrate.yaml
+  - simulators/carrier-simulator.yaml
+  - simulators/payment-provider-simulator.yaml
+
+# Secrets: copy secrets.env.example to secrets.env (git-ignored) and fill it in, or remove this
+# generator and provide the three secrets from your own secret manager.
+secretGenerator:
+  - name: fulfillment-secrets
+    envs: [secrets.env]
+  - name: fulfillment-dapr-api-token
+    envs: [dapr-api-token.env]
+  - name: fulfillment-app-api-token
+    envs: [app-api-token.env]
+generatorOptions:
+  disableNameSuffixHash: true
+
+# Point every role at the images pushed to your registry (build them with BUILD_FLAVOR=release).
+images:
+  - name: fulfillment/order-api
+    newName: registry.example.com/fulfillment/order-api
+    newTag: "0.6.0"
+  - name: fulfillment/workflow-host
+    newName: registry.example.com/fulfillment/workflow-host
+    newTag: "0.6.0"
+  - name: fulfillment/compute-worker
+    newName: registry.example.com/fulfillment/compute-worker
+    newTag: "0.6.0"
+  - name: fulfillment/inventory-service
+    newName: registry.example.com/fulfillment/inventory-service
+    newTag: "0.6.0"
+  - name: fulfillment/payment-service
+    newName: registry.example.com/fulfillment/payment-service
+    newTag: "0.6.0"
+  - name: fulfillment/shipping-service
+    newName: registry.example.com/fulfillment/shipping-service
+    newTag: "0.6.0"
+  - name: fulfillment/carrier-simulator
+    newName: registry.example.com/fulfillment/carrier-simulator
+    newTag: "0.6.0"
+  - name: fulfillment/payment-provider-simulator
+    newName: registry.example.com/fulfillment/payment-provider-simulator
+    newTag: "0.6.0"

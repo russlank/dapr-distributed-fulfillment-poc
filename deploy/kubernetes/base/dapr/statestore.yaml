@@ -1,0 +1,17 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+spec:
+  type: state.sqlserver
+  version: v2
+  metadata:
+    - name: connectionString
+      secretKeyRef: { name: fulfillment-secrets, key: STATE_STORE_CONN }
+    - name: databaseName
+      value: DaprStateDb
+    - name: tableName
+      value: state
+    - name: actorStateStore
+      value: "true"
+scopes: [order-api, workflow-host, compute-worker, inventory-service, payment-service, shipping-service]

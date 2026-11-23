@@ -246,20 +246,49 @@ On Dapr 1.19.1, terminating or purging a patched instance never completes, and
 the instance stays `Stalled` for good, even after host and sidecar restarts
 (see the journal). Instances without a patch marker terminate normally.
 
-So never end a running order by terminating or purging its workflow. Use the
-paths the system provides:
+So never end a running order by terminating or purging its workflow.
 
-- cancel the order through the API (possible until dispatch starts): the
-  workflow finishes and compensates by itself;
-- let the reconciler detect an order that stopped moving;
-- resolve the order's case with the case commands (for example `Repair`).
+**The alternative: let the workflow end itself.** SQL Server owns the
+order's state; the workflow only carries it forward. At every step the
+workflow re-reads the order, and when the order is already final it records
+nothing more and completes as `Fenced` (runtime status `Completed`). So to
+stop an order, make its outcome final through the order's own paths, and the
+workflow finishes on its next step or wake-up:
+
+| Goal | Path | What the workflow does |
+|---|---|---|
+| stop an order before dispatch | cancel it through the API | releases the holds, voids the authorization by key, completes `Cancelled` |
+| end an order that waits for a decision | resolve its review or its case (`Signal`, `ConfirmExternalSuccess`, `ConfirmExternalFailure`) | continues or compensates along the resolved path |
+| replace a failed or missing workflow | resolve the reconciler's case with `Repair` | a repair workflow with its own instance id and keys finishes the order; an old instance that wakes later is fenced |
+| an order whose stored deadline passed without progress (a lost timer) | the reconciler sends a `Nudge` signal | re-evaluates SQL and continues or fences |
+
+This is the same mechanism that makes a stray or restarted instance harmless
+(the execution fence), so it needs no runtime operation that the defect
+affects.
 
 A workflow reported `Stalled` has one of two causes:
 
 | Cause | What to do |
 |---|---|
 | a host runs without a patch that the instance recorded | enable the patch on every replica (roll forward); the instance continues |
-| the instance was terminated or purged after it recorded a patch | it cannot be recovered; the reconciler still treats it as running (`OrderProgressStalled` fires, no case opens), so resolve the order by hand |
+| the instance was terminated or purged after it recorded a patch | the instance cannot be resumed. It cannot run, so it causes no effects, but the order is stuck: the reconciler treats `Stalled` as running (`OrderProgressStalled` fires, no case opens). See below. |
+
+**If a patched instance was terminated anyway.** There is no supported
+recovery path in this version. Two options exist, neither demonstrated here:
+
+- Dapr's force purge (`dapr workflow purge <instance id> --force`, Dapr CLI
+  1.19) deletes an instance's state whatever its status. If it works on such
+  an instance, the order becomes "workflow missing", which the reconciler
+  already detects and repairs through a `WorkflowMissing` case. Dapr warns
+  that a force purge runs outside the workflow state machine; use it only
+  when no worker processes the instance, and test it first.
+- A reconciler extension: classify an instance as faulted when it stays
+  `Stalled` while every workflow host has all patches enabled, and open a
+  repair case. Not implemented.
+
+Both are candidates for a future version, together with a Dapr upgrade that
+fixes the defect: the Dapr 1.19.2 release notes (19 November 2026) list no
+fix for it.
 
 ## Restarting a Replica
 

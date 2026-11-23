@@ -1,0 +1,15 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: pubsub
+spec:
+  type: pubsub.rabbitmq
+  version: v1
+  metadata:
+    - name: connectionString
+      secretKeyRef: { name: fulfillment-secrets, key: RABBIT_CONN }
+    - name: durable
+      value: "true"
+    - name: deletedWhenUnused
+      value: "false"
+scopes: [order-api, inventory-service, payment-service, shipping-service]

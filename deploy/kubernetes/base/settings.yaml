@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fulfillment-settings
+data:
+  # SQL Server reachable from the cluster (one server, one database per owner, as in Compose).
+  SQL_HOST: sqlserver.example.internal
+  # OTLP collector (traces, metrics, logs); bring your own, the Compose collector config can be reused.
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability:4317
+  # local = production timings; drill = short timings (drill images only).
+  DAPR_POC_ENV: local

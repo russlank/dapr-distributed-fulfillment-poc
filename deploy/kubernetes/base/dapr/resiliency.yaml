@@ -1,0 +1,16 @@
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: fulfillment-resiliency
+spec:
+  policies:
+    retries:
+      pubsubInbound:
+        policy: exponential
+        maxInterval: 10s
+        maxRetries: 5
+  targets:
+    components:
+      pubsub:
+        inbound:
+          retry: pubsubInbound

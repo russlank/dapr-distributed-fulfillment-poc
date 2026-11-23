@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: compute-worker
+  labels: { app.kubernetes.io/name: compute-worker, app.kubernetes.io/part-of: fulfillment }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app.kubernetes.io/name: compute-worker }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: compute-worker, app.kubernetes.io/part-of: fulfillment }
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: compute-worker
+        dapr.io/app-port: "8080"
+        dapr.io/config: fulfillment
+        dapr.io/api-token-secret: fulfillment-dapr-api-token
+        dapr.io/app-token-secret: fulfillment-app-api-token
+        dapr.io/enable-metrics: "true"
+        dapr.io/metrics-port: "9090"
+        dapr.io/log-level: info
+        dapr.io/sidecar-memory-limit: 192Mi
+        dapr.io/sidecar-memory-request: 128Mi
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: app
+          image: fulfillment/compute-worker
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - name: REPLICA_NAME
+              valueFrom:
+                fieldRef: { fieldPath: metadata.name }
+            - name: DAPR_POC_ENV
+              valueFrom:
+                configMapKeyRef: { name: fulfillment-settings, key: DAPR_POC_ENV }
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              valueFrom:
+                configMapKeyRef: { name: fulfillment-settings, key: OTEL_EXPORTER_OTLP_ENDPOINT }
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: grpc
+            - name: OTEL_METRIC_EXPORT_INTERVAL
+              value: "5000"
+            - name: DAPR_API_TOKEN
+              valueFrom:
+                secretKeyRef: { name: fulfillment-dapr-api-token, key: token }
+            - name: APP_API_TOKEN
+              valueFrom:
+                secretKeyRef: { name: fulfillment-app-api-token, key: token }
+          readinessProbe:
+            httpGet: { path: /health/ready, port: http }
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet: { path: /health/live, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }

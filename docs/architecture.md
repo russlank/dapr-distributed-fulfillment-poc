@@ -268,8 +268,13 @@ instances.
 
 Known limitation (Dapr 1.19.1): terminating or purging an instance that
 recorded a patch never completes, and the instance stays `Stalled` for good.
-Patched instances are therefore never terminated; running orders end through
-cancellation, the reconciler and repair cases (see Operations).
+Patched instances are therefore never terminated. The design does not need
+it: SQL Server owns the order's state, and the workflow re-reads it at every
+step and completes as fenced once the order is final. So an order is stopped
+by making its outcome final through its own paths (cancellation, a review or
+case resolution, a `Repair` that runs a separate repair workflow), and the
+workflow ends itself on its next step. Operations describes the paths and
+the open gap (an instance terminated anyway is not repaired automatically).
 
 ## Payment
 

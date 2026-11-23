@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: carrier-simulator
+  labels: { app.kubernetes.io/name: carrier-simulator, app.kubernetes.io/part-of: fulfillment }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: carrier-simulator }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: carrier-simulator, app.kubernetes.io/part-of: fulfillment }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: app
+          image: fulfillment/carrier-simulator
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - name: REPLICA_NAME
+              valueFrom:
+                fieldRef: { fieldPath: metadata.name }
+            - name: DAPR_POC_ENV
+              valueFrom:
+                configMapKeyRef: { name: fulfillment-settings, key: DAPR_POC_ENV }
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              valueFrom:
+                configMapKeyRef: { name: fulfillment-settings, key: OTEL_EXPORTER_OTLP_ENDPOINT }
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: grpc
+            - name: OTEL_METRIC_EXPORT_INTERVAL
+              value: "5000"
+            - name: CARRIER_SIM_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: fulfillment-secrets, key: CARRIER_SIM_DB_PASSWORD }
+            - name: SQL_HOST
+              valueFrom:
+                configMapKeyRef: { name: fulfillment-settings, key: SQL_HOST }
+            - name: ConnectionStrings__CarrierSimDb
+              value: "Server=$(SQL_HOST);Database=CarrierSimDb;User Id=carrier_simulator;Password=$(CARRIER_SIM_DB_PASSWORD);TrustServerCertificate=true"
+            - name: CARRIER_API_KEY
+              valueFrom:
+                secretKeyRef: { name: fulfillment-secrets, key: CARRIER_API_KEY }
+            - name: CARRIER_HMAC_KEY
+              valueFrom:
+                secretKeyRef: { name: fulfillment-secrets, key: CARRIER_HMAC_KEY }
+            - name: CarrierSim__CallbackUrls
+              value: "http://order-api:8080"
+          readinessProbe:
+            httpGet: { path: /health/ready, port: http }
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet: { path: /health/live, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: carrier-simulator
+  labels: { app.kubernetes.io/name: carrier-simulator, app.kubernetes.io/part-of: fulfillment }
+spec:
+  selector: { app.kubernetes.io/name: carrier-simulator }
+  ports:
+    - { name: http, port: 8080, targetPort: http }
