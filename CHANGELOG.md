@@ -8,6 +8,16 @@ Details of a release: `docs/releases/`. What broke on the way:
 
 - Development towards M6 (final report and the `v1.0.0` release). Entries are
   added as functionality is verified.
+- Final report (`docs/final-report.md`): answers to the evaluation questions,
+  lessons learned per phase, recommendations, further improvements, and
+  explorations.
+- The Kubernetes template passes a smoke test on a local kind cluster
+  (`scripts/kind-smoke.sh`): migrations, every role ready with its sidecar,
+  one order completed. Secrets moved from the base into overlays
+  (`overlays/example`, `overlays/kind-smoke`).
+- Documentation: a README with a summary, status, and a grouped map of the
+  documents; tables of contents in the longer documents; introductions and
+  corrected statements where they were missing or out of date.
 
 ## v0.6.0: Observability, scaling, workflow versioning, and comparison (M5)
 

@@ -4,6 +4,33 @@ Tests verify behavior, not that a call returned 200. Checks read the
 authoritative databases, prove that an injected failure actually happened,
 and end with an explicit `PASS`, `FAIL`, or `UNVERIFIED`.
 
+## Contents
+
+- [Identifiers](#identifiers)
+- [Verification Runs](#verification-runs)
+- [Unit Tests](#unit-tests)
+- [Integration Tests](#integration-tests)
+- [Scenarios](#scenarios)
+  - [S03 Contention](#s03-contention)
+  - [S20 Hot SKU Isolation](#s20-hot-sku-isolation)
+  - [S00 Runtime Smoke](#s00-runtime-smoke)
+  - [Order Acceptance Check](#order-acceptance-check)
+  - [S51 Concurrent Workflow Start](#s51-concurrent-workflow-start)
+  - [S09 Cross-Replica Approval](#s09-cross-replica-approval)
+  - [S52 Signaling Through the Management API](#s52-signaling-through-the-management-api)
+  - [S04, S24, S43 Replica Scenarios](#s04-s24-s43-replica-scenarios)
+  - [S23 Deterministic Client Replay](#s23-deterministic-client-replay)
+  - [S02 Parallel Independent Checks](#s02-parallel-independent-checks)
+  - [S49 Execution Fence on a Completed Order](#s49-execution-fence-on-a-completed-order)
+  - [Fulfillment Recovery Check](#fulfillment-recovery-check)
+  - [Payment, Shipment, Reviews, Cancellation (drill stack)](#payment-shipment-reviews-cancellation-drill-stack)
+  - [Events, Projection, Reconciler (drill stack)](#events-projection-reconciler-drill-stack)
+- [Drills](#drills)
+  - [S17 Activity Concurrency Cap](#s17-activity-concurrency-cap)
+  - [S22 Security Boundary](#s22-security-boundary)
+  - [Alerts Checked in Drills](#alerts-checked-in-drills)
+- [Build Gates](#build-gates)
+
 ## Identifiers
 
 | Prefix | Meaning | Where |
@@ -23,9 +50,15 @@ slower is flagged). It exits 1 if any step failed.
 
 | Command | What runs | Use |
 |---|---|---|
-| `scripts/verify.sh --suite full --keep-awake` | build gates, Compose check, integration tests; then from fresh volumes: release `--replicas` (S00, OBS, ACC, S02, S09, S23, S04, S24, S43, S03 with actors and SQL-only), drill `--replicas` with a 2 s start lease (every M1-M3 scenario and drill), core drill (R00, S49, R06 compute); a version and commit check of every service on each stack. Needs a clean tree | milestone and release verification |
+| `scripts/verify.sh --suite full --keep-awake` | build gates, Compose check, integration tests; then from fresh volumes: release `--replicas` (S00, OBS, ACC, S02, S09, S23, S04, S24, S43, S03 with actors and SQL-only), drill `--replicas` with a 2 s start lease (every M1-M5 scenario and drill), core drill (R00, S49, R06 compute); a version and commit check of every service on each stack. 80 steps, about 90 minutes. Needs a clean tree | milestone and release verification |
 | `scripts/verify.sh --suite dev` | the drill `--replicas` phase only, every scenario and drill once; volumes kept | regression after a larger change |
-| `scripts/verify.sh --only m3 --reuse` | a group (`smoke`, `m1`, `m2`, `m3`, `release`, `core`) or step ids (`R09,S39`; `A:S04` forces the release stack) | the area being changed |
+| `scripts/verify.sh --only m3 --reuse` | a group (`smoke`, `m1`-`m5`, `release`, `core`) or step ids (`R09,S39`; `A:S04` forces the release stack) | the area being changed |
+
+`scripts/kind-smoke.sh` deploys the Kubernetes template on a local kind
+cluster and checks K8S-1 (migrations), K8S-2 (every role ready with its
+sidecar), and K8S-3 (one order completes); see
+[deploy/kubernetes/README.md](../deploy/kubernetes/README.md#smoke-test-on-kind).
+It is not part of `verify.sh`.
 
 `--reuse` skips the stack start when the running stack was built from `HEAD`
 with the same tree state and flavor. With uncommitted changes it cannot tell

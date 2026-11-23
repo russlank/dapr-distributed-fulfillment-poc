@@ -15,7 +15,10 @@ boundaries explicit; they are not production hardening.
 | external simulators | no Dapr sidecar or SDK; ordinary HTTP only |
 
 Dapr mTLS and access-control policies need the Sentry service and are not
-used in Compose.
+used in Compose. In the Kubernetes template, Sentry and mTLS between
+sidecars are on by default, secrets come from Kubernetes secrets, and
+access-control policies are left as a commented example
+([deploy/kubernetes/README.md](../deploy/kubernetes/README.md)).
 
 Scenario S22 checks each boundary of this table, and that no secret value
 appears in any container's log ([testing.md](testing.md)).

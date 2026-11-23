@@ -6,8 +6,33 @@ per-SKU inventory work; Dapr Pub/Sub distributes business events. External
 parties (customers, the carrier, the payment provider) are simulated by
 separate processes without Dapr. Synthetic data only.
 
-This document describes the foundation that exists now and the boundaries
-the later functionality builds on.
+This document describes how the system is built and why: who owns which
+state, how a workflow starts and runs, how each boundary survives failures,
+how events reach the read side, and how the reconciler repairs what goes
+wrong. Operating it is described in [operations.md](operations.md), its
+settings in [configuration.md](configuration.md), and its verification in
+[testing.md](testing.md).
+
+## Contents
+
+- [Roles](#roles)
+- [Authority and Orchestration](#authority-and-orchestration)
+- [Order Acceptance](#order-acceptance)
+- [Starting Workflows](#starting-workflows)
+- [Fulfillment Workflow](#fulfillment-workflow)
+  - [Changing the Workflow While Instances Run](#changing-the-workflow-while-instances-run)
+- [Payment](#payment)
+- [Shipping and the Carrier](#shipping-and-the-carrier)
+- [Cancellation](#cancellation)
+- [Intervention Cases](#intervention-cases)
+- [Events: Outbox, Distribution, Projection](#events-outbox-distribution-projection)
+- [Reconciler](#reconciler)
+- [Inventory](#inventory)
+- [Reviews and Signals](#reviews-and-signals)
+- [Workflow Management Lives With the Workflow Host](#workflow-management-lives-with-the-workflow-host)
+- [Service Invocation](#service-invocation)
+- [Runtime Probe](#runtime-probe)
+- [Runtime Infrastructure](#runtime-infrastructure)
 
 ## Roles
 

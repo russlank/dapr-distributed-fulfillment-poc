@@ -1,5 +1,9 @@
 # Getting Started
 
+From a fresh clone to a running stack, a passing smoke check, and a first
+completed order, in about ten minutes. For what the system does and why, see
+the [README](../README.md) and [architecture.md](architecture.md).
+
 ## Prerequisites
 
 - Docker with Compose v2 (Docker Desktop on Windows or macOS, or Docker Engine
@@ -55,6 +59,8 @@ All bound to `127.0.0.1`.
 | 127.0.0.1:14330 | SQL Server (for inspection; `sa` password in `.env`) |
 
 Sidecar ports are not published.
+
+## Your First Order
 
 Submit an order (the customer key is in `.env`):
 

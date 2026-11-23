@@ -1,5 +1,10 @@
 # Monitoring
 
+How telemetry flows from the services and sidecars to Jaeger, Prometheus, and
+Grafana, which application and Dapr metrics exist, and the alert rules. What
+to do when an alert fires is in the runbooks of
+[operations.md](operations.md#alerts).
+
 ## Pipeline
 
 Every .NET service exports logs, traces, and metrics over OTLP (when

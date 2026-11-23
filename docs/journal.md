@@ -3,6 +3,45 @@
 What broke, what surprised us, and what we changed. Newest first. Each entry
 keeps the expectation that turned out wrong.
 
+## Contents
+
+- [2026-11-23: Kubernetes template on kind](#2026-11-23-kubernetes-template-on-kind)
+- [2026-11-23: M5 run of record](#2026-11-23-m5-run-of-record)
+- [2026-11-23: Workflow versioning](#2026-11-23-workflow-versioning)
+- [2026-11-23: Alerts](#2026-11-23-alerts)
+- [2026-11-21: Event distribution, projection, reconciler](#2026-11-21-event-distribution-projection-reconciler)
+- [2026-11-20: Payment provider, payment service, hold extension](#2026-11-20-payment-provider-payment-service-hold-extension)
+- [2026-11-19: Inventory (holds, stock actors, sweeper)](#2026-11-19-inventory-holds-stock-actors-sweeper)
+- [2026-11-19: M1 drills R01, R02 A-D, R03, R06](#2026-11-19-m1-drills-r01-r02-a-d-r03-r06)
+- [2026-11-19: Replica scenarios S04, S24, S43](#2026-11-19-replica-scenarios-s04-s24-s43)
+- [2026-11-19: Client simulator (seeded runs, replay, operator commands)](#2026-11-19-client-simulator-seeded-runs-replay-operator-commands)
+- [2026-11-19: Reviews, decisions, signals, and the review wait](#2026-11-19-reviews-decisions-signals-and-the-review-wait)
+- [2026-11-18: Fulfillment steps, terminal transaction, execution fence on completed orders](#2026-11-18-fulfillment-steps-terminal-transaction-execution-fence-on-completed-orders)
+- [2026-11-18: Workflow start dispatcher and execution claim](#2026-11-18-workflow-start-dispatcher-and-execution-claim)
+- [2026-11-18: Durable order acceptance](#2026-11-18-durable-order-acceptance)
+- [2026-11-18: Foundation (solution skeleton, Compose stack, runtime smoke)](#2026-11-18-foundation-solution-skeleton-compose-stack-runtime-smoke)
+- [2026-11-18: Dapr 1.19 compatibility spike](#2026-11-18-dapr-119-compatibility-spike)
+
+## 2026-11-23: Kubernetes template on kind
+
+### RabbitMQ could not read its own Erlang cookie
+
+- **Expected:** the first smoke deploy of the Kubernetes template on kind
+  brings every role up with its sidecar.
+- **Observed:** the database setup and migrations completed, but RabbitMQ
+  restarted in a loop ("Error when reading /var/lib/rabbitmq/.erlang.cookie:
+  eacces"). The sidecars of the four roles that use pub/sub could not load
+  the component, so those pods restarted too.
+- **Cause:** the smoke overlay's readiness probe ran `rabbitmq-diagnostics`
+  in the container before the broker had started. The probe runs as root
+  and created the cookie file owned by root; the broker, running as its own
+  user, then could not read it. The Compose stack's health check runs only
+  once the container is up, so it never hit this.
+- **Change:** a TCP readiness probe on the AMQP port. Each smoke run also
+  starts from a fresh namespace, so its throwaway secrets never meet a
+  database set up by an earlier run. The rerun passed: migrations, every
+  role ready with its sidecar, and one order completed through the cluster.
+
 ## 2026-11-23: M5 run of record
 
 ### R12 read the order's last history row, and a late forward added one

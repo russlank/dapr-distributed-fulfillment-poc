@@ -1,5 +1,29 @@
 # Operations
 
+How to run, inspect, and repair the stack: the scripts, health and startup,
+what to check for each part of the process, the alert runbooks, rolling out
+a workflow change, restarting replicas, and troubleshooting. The settings
+are in [configuration.md](configuration.md); the design behind them is in
+[architecture.md](architecture.md).
+
+## Contents
+
+- [Scripts](#scripts)
+- [Health](#health)
+- [Startup Order](#startup-order)
+- [Workflow Starts](#workflow-starts)
+- [Reviews](#reviews)
+- [Inventory](#inventory)
+- [Payment, Shipment, Cancellation](#payment-shipment-cancellation)
+- [Intervention Cases](#intervention-cases)
+- [Events and the Timeline](#events-and-the-timeline)
+- [Alerts](#alerts)
+- [Rolling Out a Workflow Change](#rolling-out-a-workflow-change)
+  - [Never Terminate a Patched Workflow](#never-terminate-a-patched-workflow)
+- [Restarting a Replica](#restarting-a-replica)
+- [Reset](#reset)
+- [Troubleshooting](#troubleshooting)
+
 ## Scripts
 
 | Script | Does |

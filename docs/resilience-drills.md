@@ -3,6 +3,15 @@
 A drill breaks one thing on purpose, proves that the failure happened at the
 intended moment, and checks the business state in the owning databases.
 
+## Contents
+
+- [Safety](#safety)
+- [Failpoints](#failpoints)
+- [Simulator Fault Modes](#simulator-fault-modes)
+- [Drill-Only Controls](#drill-only-controls)
+- [Lifecycle of a Drill Script](#lifecycle-of-a-drill-script)
+- [Run](#run)
+
 ## Safety
 
 - **Failure injection exists only in drill builds.** Failpoint code is

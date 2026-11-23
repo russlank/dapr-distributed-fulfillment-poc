@@ -1,5 +1,25 @@
 # Configuration
 
+Every setting the stack reads: secrets from `.env`, application settings per
+role, Dapr components, Compose profiles, and build flavors. Defaults are the
+release time profile; values in parentheses apply with `DAPR_POC_ENV=drill`,
+which shortens the time-related settings for drills.
+
+## Contents
+
+- [Secrets (.env)](#secrets-env)
+- [Application Settings](#application-settings)
+- [Start Dispatcher](#start-dispatcher)
+- [Database Schema](#database-schema)
+- [Compute Checks](#compute-checks)
+- [Inventory](#inventory)
+- [Reviews and Signals (order API)](#reviews-and-signals-order-api)
+- [Payment, Shipping, Carrier, Interventions](#payment-shipping-carrier-interventions)
+- [Events and the Reconciler](#events-and-the-reconciler)
+- [Dapr](#dapr)
+- [Compose Profiles](#compose-profiles)
+- [Build Flavors](#build-flavors)
+
 ## Secrets (`.env`)
 
 `.env` is git-ignored. `scripts/init-env.sh` writes it with random values

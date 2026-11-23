@@ -15,6 +15,15 @@ sim --help
 
 Scripts use the same build through `client_sim` in `scripts/lib.sh`.
 
+## Contents
+
+- [Commands](#commands)
+- [Runs, Seeds, and Replay](#runs-seeds-and-replay)
+- [Scripted Operators](#scripted-operators)
+- [Ambiguous Outcomes](#ambiguous-outcomes)
+- [Results and Exit Codes](#results-and-exit-codes)
+- [Credentials](#credentials)
+
 ## Commands
 
 | Command | Does | Expectation (exit 0 when it holds) |

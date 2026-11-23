@@ -6,6 +6,29 @@ to do. The compatibility checks are executable: see
 behavior that was run and observed is marked `PASS` or `FAIL`; documentation
 alone is never treated as evidence.
 
+## Contents
+
+- [Pinned Versions](#pinned-versions)
+- [Foundation Versus the Compatibility Spike](#foundation-versus-the-compatibility-spike)
+- [Compatibility Checks](#compatibility-checks)
+  - [Summary](#summary)
+  - [A1: SQL Server state store for workflows and actors](#a1-sql-server-state-store-for-workflows-and-actors)
+  - [A2: Cross-app activities and distribution](#a2-cross-app-activities-and-distribution)
+  - [A3: Scheduling an existing instance id](#a3-scheduling-an-existing-instance-id)
+  - [A4 and A6: Events, timers, and timeouts](#a4-and-a6-events-timers-and-timeouts)
+  - [A5: Raising events to missing or completed instances](#a5-raising-events-to-missing-or-completed-instances)
+  - [A7: Durable timers, Scheduler restart, Scheduler data loss](#a7-durable-timers-scheduler-restart-scheduler-data-loss)
+  - [A8: Concurrency limits](#a8-concurrency-limits)
+  - [A9: Purge and instance-id reuse](#a9-purge-and-instance-id-reuse)
+  - [A10: RabbitMQ pub/sub](#a10-rabbitmq-pubsub)
+  - [A11: Service invocation retries](#a11-service-invocation-retries)
+  - [A12: API and app tokens](#a12-api-and-app-tokens)
+  - [A14: Actors](#a14-actors)
+  - [A17: Workflow tests](#a17-workflow-tests)
+  - [A18: Memory](#a18-memory)
+  - [Workflow recovery versus activity re-execution](#workflow-recovery-versus-activity-re-execution)
+  - [Further observations](#further-observations)
+
 ## Pinned Versions
 
 Pinned 2026-11-18. Rule: a release must be at least two weeks old at pin
@@ -316,8 +339,10 @@ milestone that will run it is named).
   RabbitMQ about 175 MiB, Scheduler 42 MiB, Placement 14 MiB, each app
   container 31-60 MiB, each sidecar 32-34 MiB.
 - **Implications:** an app+sidecar pair costs about 65-95 MiB at rest; the
-  full fulfillment stack fits a laptop comfortably at rest. Load figures
-  will be measured later.
+  full fulfillment stack fits a laptop comfortably at rest. Under load,
+  SQL Server dominates: 1.1-1.4 GiB during the contention scenario
+  ([dapr-vs-alternatives.md](dapr-vs-alternatives.md)); the replicas stack
+  has 37 containers and about 2.4 GiB at rest.
 
 ### Workflow recovery versus activity re-execution
 
