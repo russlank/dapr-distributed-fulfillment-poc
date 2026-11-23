@@ -25,7 +25,27 @@ keeps the expectation that turned out wrong.
   gauge counts only gaps not yet known to be unresolvable. The orphan-hold
   script writes a valid payload.
 
-### A broker outage does not stall outbox rows quickly
+### SQL Server ran out of memory during a SQL-only contention run
+
+- **Expected:** the coordination comparison runs the contention scenario
+  (500 one-unit orders for 100 units, 32 in flight) with stock actors and
+  then with SQL-only coordination, both passing.
+- **Observed:** on a drill stack that had run drills for three hours, the
+  actor run passed; about a minute into the SQL-only run SQL Server logged
+  error 701 (insufficient memory in its resource pools), stopped accepting
+  logins, and exited (code 235). It had 1.6 GB of its 2 GiB container limit,
+  about 1.2 GB available at start. One inventory replica also exited.
+- **Rerun on fresh volumes:** both modes passed (100 completed, 400 rejected,
+  stock consistent). SQL Server peaked at 1,115 MiB with actors and 1,357 MiB
+  with SQL only, with 151 and 196 peak user sessions and 78 s and 96 s of
+  accumulated lock waits.
+- **Cause (likely, not proven):** SQL-only coordination puts all contention
+  for a hot SKU on SQL Server (more sessions and lock waits, about 240 MiB
+  more memory at peak); on a long-running instance close to its memory limit
+  that was enough to exhaust it. No product change; the comparison guide
+  reports the figures, and the SQL Server memory headroom is a limit of the
+  local stack.
+
 
 - **Expected:** during a broker outage, rows reach the stall threshold and
   `OutboxStalled` fires.
