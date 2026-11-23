@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sqlserver
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: sqlserver }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: sqlserver }
+    spec:
+      containers:
+        - name: sqlserver
+          image: mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04
+          env:
+            - { name: ACCEPT_EULA, value: "Y" }
+            - { name: TZ, value: Etc/UTC }
+            - name: MSSQL_SA_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: smoke-infra, key: SA_PASSWORD }
+          ports:
+            - { name: sql, containerPort: 1433 }
+          readinessProbe:
+            exec:
+              command: ["/bin/bash", "-c", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+          resources:
+            requests: { cpu: 500m, memory: 1536Mi }
+            limits: { memory: 2Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sqlserver
+spec:
+  selector: { app.kubernetes.io/name: sqlserver }
+  ports:
+    - { name: sql, port: 1433, targetPort: sql }

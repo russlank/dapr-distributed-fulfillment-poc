@@ -1,0 +1,53 @@
+# Smoke-test overlay for a local kind cluster (scripts/kind-smoke.sh): the base with the locally
+# built release images, SQL Server and RabbitMQ inside the cluster (infra/, applied first), and
+# generated secrets (*.env, git-ignored, written by the script). Not for real deployments.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+secretGenerator:
+  - name: fulfillment-secrets
+    namespace: fulfillment
+    envs: [secrets.env]
+  - name: fulfillment-dapr-api-token
+    namespace: fulfillment
+    envs: [dapr-api-token.env]
+  - name: fulfillment-app-api-token
+    namespace: fulfillment
+    envs: [app-api-token.env]
+generatorOptions:
+  disableNameSuffixHash: true
+patches:
+  - target: { kind: ConfigMap, name: fulfillment-settings }
+    patch: |-
+      - op: replace
+        path: /data/SQL_HOST
+        value: sqlserver
+      - op: replace
+        path: /data/OTEL_EXPORTER_OTLP_ENDPOINT
+        value: http://localhost:4317
+images:
+  - name: fulfillment/order-api
+    newName: fulfillment/order-api
+    newTag: "local-release"
+  - name: fulfillment/workflow-host
+    newName: fulfillment/workflow-host
+    newTag: "local-release"
+  - name: fulfillment/compute-worker
+    newName: fulfillment/compute-worker
+    newTag: "local-release"
+  - name: fulfillment/inventory-service
+    newName: fulfillment/inventory-service
+    newTag: "local-release"
+  - name: fulfillment/payment-service
+    newName: fulfillment/payment-service
+    newTag: "local-release"
+  - name: fulfillment/shipping-service
+    newName: fulfillment/shipping-service
+    newTag: "local-release"
+  - name: fulfillment/carrier-simulator
+    newName: fulfillment/carrier-simulator
+    newTag: "local-release"
+  - name: fulfillment/payment-provider-simulator
+    newName: fulfillment/payment-provider-simulator
+    newTag: "local-release"

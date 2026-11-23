@@ -1,0 +1,15 @@
+# In-cluster SQL Server and RabbitMQ for the kind smoke test, and the one-time database setup
+# (db/init/init.sql, loaded into the ConfigMap db-init-sql by scripts/kind-smoke.sh).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: fulfillment
+resources:
+  - namespace.yaml
+  - sqlserver.yaml
+  - rabbitmq.yaml
+  - db-init.yaml
+secretGenerator:
+  - name: smoke-infra
+    envs: [infra.env]
+generatorOptions:
+  disableNameSuffixHash: true
