@@ -376,7 +376,17 @@ see [resilience-drills.md](resilience-drills.md).
 | R09, R10, R11, R13, R19-R27, R31, R33 | payment, compensation, carrier, review, cancellation, and intervention failures | see [resilience-drills.md](resilience-drills.md#run) |
 | R07 state-store outage (S21) | does a workflow state-store outage lose history or produce false success? | the sidecars' path to `DaprStateDb` is cut (Toxiproxy); nothing completes meanwhile, SQL commits continue (acceptance, decisions), starts and signals wait; afterwards every order completes once, workflows `Completed` |
 | R17 workflow upgrade while waiting (S19) | do waiting instances survive a rolling upgrade of the workflow hosts with a patched change, and is a rollback safe? | instances waiting across the roll finish on their recorded path; runs after the roll take the patched path; no non-determinism; an instance with the patch stalls on rolled-back hosts and completes after rolling forward |
+| R18 scaling under load (S16) | does correctness hold while the compute pool scales 1, 3, 5 and a replica dies under load? | each run's orders complete with two checks each, spread over the running replicas; a killed replica loses nothing and repeats nothing; durations and checks per replica in `measurements.jsonl` |
 | R28 Scheduler and Placement outage, variant A (S46) | do reviews still expire by SQL time when timers are late, and do actor calls resume? | rounds expire at or after their deadlines after the Scheduler returns (late timer or the reconciler's nudge, whichever is first); orders held by a Placement outage complete once; `OrderProgressStalled` fires and resolves. Variant B (an emptied Scheduler volume) is deferred |
+
+### S17 Activity Concurrency Cap
+
+`scripts/scenarios/S17-activity-concurrency-cap.sh` (drill stack): one
+compute replica runs a burst with the default sidecar configuration and then
+with `dapr/config/fulfillment-capped.yaml` (`COMPUTE_DAPR_CONFIG`,
+`maxConcurrentActivityInvocations: 2`); the highest overlap of check activities
+(from their recorded start and end) is at most, and reaches, 2 when capped; the
+sidecar's `--config` is checked; durations go to `measurements.json`.
 
 ### Alerts Checked in Drills
 
