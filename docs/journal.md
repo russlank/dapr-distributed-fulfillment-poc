@@ -3,6 +3,39 @@
 What broke, what surprised us, and what we changed. Newest first. Each entry
 keeps the expectation that turned out wrong.
 
+## 2026-11-23: Alerts
+
+### A rejected event was replayed forever (found by the alerts)
+
+- **Expected:** a projection gap is repaired by a replay from its source, or
+  surfaced once as unresolvable when the source does not have the event.
+- **Observed:** after the drill that creates orphan holds, two timeline
+  streams kept a gap at sequence 1, `ProjectionSequenceGap` and
+  `DeadLetterNotEmpty` never stopped firing, and one stream had 38 dead
+  letters for the same event. The source had the event, so every reconciler
+  pass replayed it, and the consumer rejected it again (`InvalidPayload`).
+- **Cause:** the reconciler did not distinguish an event that never arrived
+  from one the consumer had refused for a reason a replay cannot change. The
+  drill script also wrote a `HoldCreated` payload without the fields a real
+  reservation writes.
+- **Change:** before replaying, the reconciler checks the dead letters of the
+  missing position; a deterministic rejection (invalid payload, unknown
+  schema, source mismatch, a conflict) is reported once as unresolvable, with
+  a `ProjectionGap` case when the order exists, and not replayed. The gap
+  gauge counts only gaps not yet known to be unresolvable. The orphan-hold
+  script writes a valid payload.
+
+### A broker outage does not stall outbox rows quickly
+
+- **Expected:** during a broker outage, rows reach the stall threshold and
+  `OutboxStalled` fires.
+- **Observed:** after three minutes of outage each row had one or two
+  attempts. Each publication waits for its timeout, and the relay works
+  through its claimed batch one row at a time.
+- **Change:** none to the relay. `OutboxAging` is the outage signal;
+  `OutboxStalled` is the signal for one row that keeps failing while others
+  publish, demonstrated by R15 with a drill hook before publication.
+
 ## 2026-11-21: Event distribution, projection, reconciler
 
 ### S52 failed on a log read that came back incomplete (release candidate of v0.5.0)
