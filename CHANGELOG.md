@@ -4,6 +4,11 @@ Releases of the PoC; each tag `v<version>` marks a verified milestone.
 Details of a release: `docs/releases/`. What broke on the way:
 [docs/journal.md](docs/journal.md).
 
+## Unreleased (0.7.0-dev)
+
+- Development towards M6 (final report and the `v1.0.0` release). Entries are
+  added as functionality is verified.
+
 ## v0.6.0: Observability, scaling, workflow versioning, and comparison (M5)
 
 - Alerts and dashboards: operational gauges in every service (start
