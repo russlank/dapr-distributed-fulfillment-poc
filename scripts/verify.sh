@@ -10,7 +10,7 @@
 #                  2 s), core drill; a version/commit check on every stack; clean tree required.
 #   --suite dev    development regression: the drill --replicas stack only, every scenario once
 #                  (no release or core phase, no gates, no integration tests); volumes are kept.
-#   --only LIST    comma-separated step ids and/or groups (smoke, m1, m2, m3, release, core); a step
+#   --only LIST    comma-separated step ids and/or groups (smoke, m1-m5, release, core); a step
 #                  id runs in the drill phase if it has one, else where it is defined (A:S04 forces
 #                  the release phase). Implies the dev behavior for stacks unless --suite full.
 #   --reuse        skip stack start-up when the running stack was built from HEAD with the same
@@ -104,6 +104,8 @@ CATALOG=(
   "B|R12|bash scripts/drills/R12-callback-receiver-down.sh"
   "B|R29|bash scripts/drills/R29-lost-callbacks.sh"
   "B|R30|bash scripts/drills/R30-faulted-missing-mismatch.sh"
+  "B|R07|bash scripts/drills/R07-state-store-outage.sh"
+  "B|R28|bash scripts/drills/R28-scheduler-placement-outage.sh"
   "C|R00|bash scripts/drills/R00-failpoint-selftest.sh"
   "C|S49|bash scripts/scenarios/S49-execution-fence.sh"
   "C|R06c|bash scripts/drills/R06-compute-pool-outage.sh"
@@ -114,6 +116,7 @@ declare -A STEP_GROUPS=(
   [m2]="S03,R04,R05,R06i,R08,S20"
   [m3]="S13,S29,S30,S39,S40,R09,R10,R11,R13,R19,R20,R22,R24,R26,R27,R31,R33"
   [m4]="S01,S48,R14,R15,R16,R32,R23S,R12,R29,R30"
+  [m5]="R07,R28"
   [release]="A:S00,A:OBS,A:ACC,A:S02,A:S09,A:S23,A:S04,A:S24,A:S43,A:S03,A:S03-sqlonly"
   [core]="C:R00,C:S49,C:R06c"
 )

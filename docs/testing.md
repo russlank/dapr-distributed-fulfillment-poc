@@ -374,6 +374,8 @@ see [resilience-drills.md](resilience-drills.md).
 | R06 inventory outage (S08) | do holds expire correctly while the whole inventory is down? | nothing changes during the outage; expired holds compensate their orders, later orders complete |
 | R08 partial reservation (S45, S15) | are partial reservations compensated, and do holds expire without the Scheduler? | released once, `Rejected` or `Compensated`; the sweeper expires an orphan hold with Placement and Scheduler stopped |
 | R09, R10, R11, R13, R19-R27, R31, R33 | payment, compensation, carrier, review, cancellation, and intervention failures | see [resilience-drills.md](resilience-drills.md#run) |
+| R07 state-store outage (S21) | does a workflow state-store outage lose history or produce false success? | the sidecars' path to `DaprStateDb` is cut (Toxiproxy); nothing completes meanwhile, SQL commits continue (acceptance, decisions), starts and signals wait; afterwards every order completes once, workflows `Completed` |
+| R28 Scheduler and Placement outage, variant A (S46) | do reviews still expire by SQL time when timers are late, and do actor calls resume? | rounds expire at or after their deadlines after the Scheduler returns (late timer or the reconciler's nudge, whichever is first); orders held by a Placement outage complete once; `OrderProgressStalled` fires and resolves. Variant B (an emptied Scheduler volume) is deferred |
 
 ### Alerts Checked in Drills
 

@@ -25,6 +25,12 @@ public sealed class ReconcilerOptions
     /// <summary>A review wait this long past its deadline (plus the timer grace) gets a nudge.</summary>
     public TimeSpan ReviewNudgeAfter { get; set; } = TimeSpan.FromMinutes(2);
 
+    /// <summary>
+    /// A review counts as stalled (OrderProgressStalled) only once its deadline is this far past: before that its
+    /// workflow is waiting as designed, for the operator or for its timer.
+    /// </summary>
+    public TimeSpan ReviewOverdueAfter { get; set; } = TimeSpan.FromSeconds(30);
+
     /// <summary>A projection gap or lag older than this is repaired by an outbox replay.</summary>
     public TimeSpan GapThreshold { get; set; } = TimeSpan.FromMinutes(1);
 
@@ -42,6 +48,7 @@ public sealed class ReconcilerOptions
             options.Lease = TimeSpan.FromSeconds(15);
             options.StageThreshold = TimeSpan.FromSeconds(20);
             options.ReviewNudgeAfter = TimeSpan.FromSeconds(60);
+            options.ReviewOverdueAfter = TimeSpan.FromSeconds(5);
             options.GapThreshold = TimeSpan.FromSeconds(10);
             options.HeadsWindow = TimeSpan.FromMinutes(30);
         }
@@ -196,6 +203,12 @@ public sealed partial class Reconciler(string connectionString, WorkflowHostClie
                 Actions.Add(1, new KeyValuePair<string, object?>("action", "Nudge"));
                 LogNudged(logger, orderId);
             }
+            else if (status == nameof(OrderStatus.AwaitingDelivery)
+                     || (status == nameof(OrderStatus.AwaitingApproval) && !await ReviewOverdueAsync(orderId, ct)))
+            {
+                // Waiting as designed: a delivery has its own deadline (poll, then a DeliveryOverdue case), and a review
+                // within its deadline waits for the operator or its timer. Not stalled.
+            }
             else
             {
                 Actions.Add(1, new KeyValuePair<string, object?>("action", "OrderProgressStalled"));
@@ -232,6 +245,21 @@ public sealed partial class Reconciler(string connectionString, WorkflowHostClie
     /// A review round still Pending well past its deadline while the workflow runs: its timer was lost. The nudge is
     /// the review's own signal (pending signal, delivered by the dispatcher), at most one pending at a time.
     /// </summary>
+    /// <summary>True when the order's open review round is past its deadline by more than the overdue margin (its timer did not act).</summary>
+    private async Task<bool> ReviewOverdueAsync(Guid orderId, CancellationToken ct)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(ct);
+        await using var command = new SqlCommand(
+            """
+            SELECT COUNT(*) FROM orders.ReviewTask
+            WHERE OrderId = @o AND Status = 'Pending' AND DeadlineAt < DATEADD(millisecond, -@after, SYSUTCDATETIME());
+            """, connection);
+        command.Parameters.AddWithValue("@o", orderId);
+        command.Parameters.AddWithValue("@after", (int)options.Value.ReviewOverdueAfter.TotalMilliseconds);
+        return (int)(await command.ExecuteScalarAsync(ct))! > 0;
+    }
+
     private async Task<bool> NudgeReviewAsync(Guid orderId, CancellationToken ct)
     {
         await using var connection = new SqlConnection(connectionString);

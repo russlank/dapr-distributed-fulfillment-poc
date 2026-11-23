@@ -442,9 +442,10 @@ pending signals, and outbox replay.
 | ... workflow instance not found although started | `WorkflowMissing` case |
 | ... workflow `Completed` | `ExecutionMismatch` case (not for an order left awaiting delivery by a delivery case resolved before escalation existed: that case already surfaced it) |
 | ... workflow running and waiting for a review well past its deadline | a nudge: the review's own signal (a lost timer); the workflow re-reads SQL |
+| ... workflow running otherwise (not waiting for delivery, nor for a review within its deadline) | `OrderProgressStalled` (metric and alert; for example a store or worker outage) |
 | projection gap older than the gap threshold | outbox replay from the last applied sequence plus one |
 | a source has published (and settled) more of an order's events than current state shows | the same replay (a lost last event leaves no pending row) |
-| the source does not have the missing event | `ProjectionGapUnresolvable` (log, metric) and a `ProjectionGap` case; the gap is never skipped |
+| the source does not have the missing event, or the consumer dead-lettered it for a reason a replay cannot change | `ProjectionGapUnresolvable` (log, metric) and a `ProjectionGap` case, reported once and not replayed again; the gap is never skipped |
 
 Each order gets at most one case per kind. A resolution of a reconciler case
 takes the repair path (no workflow waits): `ConfirmExternalFailure` before the
