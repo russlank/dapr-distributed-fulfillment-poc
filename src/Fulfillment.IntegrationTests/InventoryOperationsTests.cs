@@ -213,11 +213,12 @@ public sealed class InventoryOperationsTests(SqlServerFixture sql) : IAsyncLifet
             await ops.ReserveAsync(Reserve(Guid.NewGuid(), 1, "SKU-T12", 1, "W1", TimeSpan.FromMilliseconds(100)), TestContext.Current.CancellationToken);
         }
 
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        await WaitUntilAllDueAsync("SKU-T12");
         var byA = await a.SweepOnceAsync(TestContext.Current.CancellationToken);
         var byB = await b.SweepOnceAsync(TestContext.Current.CancellationToken);
         await ops.ReserveAsync(Reserve(Guid.NewGuid(), 1, "SKU-T12", 1, "W1", TimeSpan.FromMilliseconds(100)), TestContext.Current.CancellationToken);
         await WaitForLeaseExpiryAsync();
+        await WaitUntilAllDueAsync("SKU-T12");
         var byBLater = await b.SweepOnceAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal((4, 0, 1), (byA, byB, byBLater));
@@ -292,6 +293,17 @@ public sealed class InventoryOperationsTests(SqlServerFixture sql) : IAsyncLifet
         while (await Db.ScalarAsync<int>(db, "SELECT CASE WHEN ExpiresAt <= SYSUTCDATETIME() THEN 1 ELSE 0 END FROM inventory.Hold WHERE HoldId = @h", ("@h", holdId)) == 0)
         {
             Assert.True(DateTime.UtcNow < deadline, "the hold did not become due by SQL time");
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
+    }
+
+    /// <summary>Waits until SQL time passed the expiry of every Held hold of the SKU (a fixed delay is not enough: the server clock can step).</summary>
+    private async Task WaitUntilAllDueAsync(string sku)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (await Db.ScalarAsync<int>(db, "SELECT COUNT(*) FROM inventory.Hold WHERE Sku = @s AND State = 'Held' AND ExpiresAt > SYSUTCDATETIME()", ("@s", sku)) > 0)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the holds did not become due by SQL time");
             await Task.Delay(50, TestContext.Current.CancellationToken);
         }
     }

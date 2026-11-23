@@ -266,6 +266,11 @@ patches at `/system/workflow-patches`. Current patch: `execution-version-2`
 rewrite would get a new workflow name, with the old one kept for its running
 instances.
 
+Known limitation (Dapr 1.19.1): terminating or purging an instance that
+recorded a patch never completes, and the instance stays `Stalled` for good.
+Patched instances are therefore never terminated; running orders end through
+cancellation, the reconciler and repair cases (see Operations).
+
 ## Payment
 
 The payment provider is an external system (simulated, no sidecar, its own

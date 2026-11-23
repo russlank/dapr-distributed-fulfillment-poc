@@ -236,6 +236,20 @@ To roll back, hold the patch back again: runs that already recorded it are
 reported `Stalled` and wait until it is enabled again (they are never replayed
 on the old path).
 
+**Do not terminate or purge a workflow instance that recorded a patch.** On
+Dapr 1.19.1 the call never answers and the instance stays `Stalled` for good,
+across host and sidecar restarts (see the journal). End a running order
+through its own paths instead: cancellation, the reconciler, and repair
+cases.
+
+A workflow reported `Stalled` therefore means one of two things:
+
+- a host runs without a patch that the instance recorded: enable the patch on
+  every replica (roll forward);
+- the instance was terminated or purged after recording a patch: it cannot be
+  recovered. The reconciler still treats it as running (`OrderProgressStalled`
+  fires, no repair case opens); resolve the order by hand.
+
 ## Restarting a Replica
 
 A replica is an app container plus a sidecar that joins the app's network

@@ -38,6 +38,15 @@ drill_preflight() {
 
 # on_cleanup "<command>": registered steps run in reverse order on exit, also after a failure.
 on_cleanup() { CLEANUP_STEPS+=("$1"); }
+# hold_workflow_patches_back: both workflow hosts run with every workflow patch held back until cleanup. For drills that
+# terminate or purge a fulfillment instance: on Dapr 1.19.1 an instance that recorded a patch never terminates or purges
+# (it stays Stalled for good), so such drills use unpatched instances (journal, "Terminating a patched workflow").
+hold_workflow_patches_back() {
+  local h
+  for h in workflow-host workflow-host-2; do WORKFLOW_PATCHES_DISABLED=execution-version-2 restart_pair "$h" >/dev/null || return 1; done
+  on_cleanup "for h in workflow-host workflow-host-2; do WORKFLOW_PATCHES_DISABLED= restart_pair \"\$h\" >/dev/null 2>&1; done"
+  log "workflow patches held back on both workflow hosts for this drill"
+}
 run_cleanup() {
   local i
   for (( i=${#CLEANUP_STEPS[@]}-1; i>=0; i-- )); do

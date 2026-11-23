@@ -61,13 +61,12 @@ public static partial class DrillControls
         {
             if (before is { Exists: true, IsWorkflowCompleted: false })
             {
-                await client.TerminateWorkflowAsync(instanceId, "drill: purged", ct);
-                using var wait = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                wait.CancelAfter(TimeSpan.FromSeconds(30));
-                await client.WaitForWorkflowCompletionAsync(instanceId, getInputsAndOutputs: false, wait.Token);
+                await TerminateBoundedAsync(client, instanceId, "drill: purged", ct);
             }
 
-            var purged = await client.PurgeInstanceAsync(instanceId, ct);
+            using var bound = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            bound.CancelAfter(TimeSpan.FromSeconds(15));
+            var purged = await client.PurgeInstanceAsync(instanceId, bound.Token);
             var after = await client.GetWorkflowStateAsync(instanceId, getInputsAndOutputs: false, ct);
             return Results.Ok(new { instanceId, purged, previousStatus = previous, exists = after is { Exists: true }, error = (string?)null });
         }
@@ -89,15 +88,39 @@ public static partial class DrillControls
         LogTerminate(loggers.CreateLogger(typeof(DrillControls)), instanceId, previous);
         try
         {
-            await client.TerminateWorkflowAsync(instanceId, "drill: terminated", ct);
-            using var wait = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            wait.CancelAfter(TimeSpan.FromSeconds(30));
-            var after = await client.WaitForWorkflowCompletionAsync(instanceId, getInputsAndOutputs: false, wait.Token);
-            return Results.Ok(new { instanceId, terminated = true, previousStatus = previous, status = after.RuntimeStatus.ToString(), error = (string?)null });
+            var answered = await TerminateBoundedAsync(client, instanceId, "drill: terminated", ct);
+            var after = await client.GetWorkflowStateAsync(instanceId, getInputsAndOutputs: false, ct);
+            return Results.Ok(new
+            {
+                instanceId, terminated = after is { RuntimeStatus: WorkflowRuntimeStatus.Terminated }, previousStatus = previous,
+                status = after?.RuntimeStatus.ToString(), terminateAnswered = answered, error = (string?)null,
+            });
         }
         catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             return Results.Ok(new { instanceId, terminated = false, previousStatus = previous, status = (string?)null, error = $"{e.GetType().Name}: {e.Message}" });
+        }
+    }
+
+    /// <summary>
+    /// Terminates and waits for the terminated state, at most 15 s. On Dapr 1.19.1 terminating (or purging) an instance
+    /// that recorded a workflow patch never answers, and the instance stays Stalled for good (also across restarts), so
+    /// the wait is bounded and the caller reads the recorded state. Returns whether the runtime answered in time.
+    /// </summary>
+    private static async Task<bool> TerminateBoundedAsync(DaprWorkflowClient client, string instanceId, string reason, CancellationToken ct)
+    {
+        using var bound = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        bound.CancelAfter(TimeSpan.FromSeconds(15));
+        try
+        {
+            await client.TerminateWorkflowAsync(instanceId, reason, bound.Token);
+            await client.WaitForWorkflowCompletionAsync(instanceId, getInputsAndOutputs: false, bound.Token);
+            return true;
+        }
+        catch (Exception e) when (!ct.IsCancellationRequested && (e is OperationCanceledException || e is Grpc.Core.RpcException { StatusCode: Grpc.Core.StatusCode.Cancelled or Grpc.Core.StatusCode.DeadlineExceeded }))
+        {
+            // The bound passed: the instance's state is read by the caller (Stalled for a patched instance).
+            return false;
         }
     }
 

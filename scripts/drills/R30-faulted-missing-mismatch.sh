@@ -20,7 +20,8 @@ DRILL_ID=R30
 . "$REPO_ROOT/scripts/scenarios/m3-lib.sh"
 . "$REPO_ROOT/scripts/scenarios/m4-lib.sh"
 drill_preflight
-trap 'drill_finish; exit $?' EXIT
+trap 'run_cleanup; drill_finish; exit $?' EXIT
+hold_workflow_patches_back || exit 2
 RUN="r30-$(date -u +%H%M%S)-$((RANDOM % 1000))"
 SKU="$(fresh_sku R30 20)"
 REVIEW_SKU="$(review_sku)"

@@ -3,6 +3,34 @@
 What broke, what surprised us, and what we changed. Newest first. Each entry
 keeps the expectation that turned out wrong.
 
+## 2026-11-23: Workflow versioning
+
+### Terminating a patched workflow stalls it for good
+
+- **Expected:** a drill terminates a waiting fulfillment instance, the
+  runtime records it `Terminated`, and the reconciler then finds the order
+  without a running workflow (R26 and R30 rely on this).
+- **Observed:** in the second M5 run of record R26 hung in its terminate
+  call and the run was stopped. A focused experiment on the drill stack:
+  an instance started with the `execution-version-2` patch held back
+  terminated in about 1 s; the same terminate on an instance that recorded
+  the patch never answered (stopped after 60 s). After that, the instance
+  reports `Stalled`, its sidecar logs "actor is stalled" for its timers in
+  a loop, a purge fails too, and restarting both workflow hosts and their
+  sidecars does not clear it.
+- **Cause:** Dapr 1.19.1 behavior when terminating or purging an instance
+  whose history contains a patch marker. We found no setting that avoids it.
+- **Decision:** keep patch-based versioning. Patched instances are not
+  terminated: a running order is ended through its own paths (cancellation,
+  the reconciler, repair cases). The drill terminate and purge controls are
+  bounded to 15 s and report the recorded state instead of hanging. R26 and
+  R30 hold the patch back on both workflow hosts for their duration, so they
+  still test the repair path and missing-workflow detection with instances
+  the runtime can terminate.
+- **Remaining gap:** an instance terminated by hand in spite of this stays
+  `Stalled`; the reconciler treats `Stalled` as running, so
+  `OrderProgressStalled` fires, but no repair case opens.
+
 ## 2026-11-23: Alerts
 
 ### A rejected event was replayed forever (found by the alerts)

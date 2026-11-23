@@ -20,7 +20,8 @@ DRILL_ID=R26
 . "$(dirname "$0")/lib.sh"
 . "$REPO_ROOT/scripts/scenarios/m3-lib.sh"
 drill_preflight
-trap 'provider_clear "$DRILL_RUN_ID"; drill_finish; exit $?' EXIT
+trap 'provider_clear "$DRILL_RUN_ID"; run_cleanup; drill_finish; exit $?' EXIT
+hold_workflow_patches_back || exit 2
 RUN="r26-$(date -u +%H%M%S)-$((RANDOM % 1000))"
 SKU="$(fresh_sku R26 20)"
 
