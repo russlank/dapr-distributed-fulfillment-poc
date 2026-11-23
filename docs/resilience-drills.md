@@ -144,6 +144,7 @@ bash scripts/drills/R29-lost-callbacks.sh
 bash scripts/drills/R30-faulted-missing-mismatch.sh
 bash scripts/drills/R07-state-store-outage.sh
 bash scripts/drills/R28-scheduler-placement-outage.sh
+bash scripts/drills/R17-workflow-upgrade-while-waiting.sh
 bash scripts/drills/R09-lost-provider-response.sh
 bash scripts/drills/R10-interrupted-compensation.sh
 bash scripts/drills/R11-carrier-crash-after-accept.sh

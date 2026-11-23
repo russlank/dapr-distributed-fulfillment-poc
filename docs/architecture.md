@@ -249,6 +249,23 @@ exception, or an overdue delivery opens a case.
 | `Cancelled` | a customer cancellation recorded before the point of no return (`CancellationRequested`) |
 | `Escalated` | an operator confirmed that a delivery failed (`DeliveryFailed`): the automated lifecycle ends, payment and stock stay as they are, and the escalated case stays open until a person records the business resolution |
 
+### Changing the Workflow While Instances Run
+
+A change to `FulfillOrderWorkflow`'s path is guarded by a named patch
+(`WorkflowPatches.Applies(context, name)`, Dapr's `IsPatched`). A run that
+starts with the patch takes the new path and records the patch in its
+history; an instance started before it replays its recorded path. A host can
+hold a patch back (`WORKFLOW_PATCHES_DISABLED`, comma-separated): its new
+runs keep the old path until the patch is enabled, so a change can be rolled
+out replica by replica, and each run's choice stays as recorded across retries
+and replays. An instance whose history has a patch that its host holds back is
+reported `Stalled` by Dapr (it is neither failed nor replayed differently) and
+continues once a host with the patch runs it. The workflow host reports its
+patches at `/system/workflow-patches`. Current patch: `execution-version-2`
+(the run records `WorkflowStartRequest.ExecutionVersion = 2`). An incompatible
+rewrite would get a new workflow name, with the old one kept for its running
+instances.
+
 ## Payment
 
 The payment provider is an external system (simulated, no sidecar, its own

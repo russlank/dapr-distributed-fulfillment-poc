@@ -65,6 +65,28 @@ public sealed class ExecutionFence(string connectionString)
 
         return new ExecutionClaimResult(terminal ? ExecutionClaimOutcomes.AlreadyTerminal : ExecutionClaimOutcomes.Proceed, status, reader.GetInt32(2));
     }
+
+    /// <summary>Records the workflow version executing the order; idempotent, never lowers a recorded version. Returns the stored version.</summary>
+    public async Task<int> RecordVersionAsync(ExecutionVersionRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            """
+            UPDATE orders.WorkflowStartRequest SET ExecutionVersion = @v WHERE OrderId = @o AND (ExecutionVersion IS NULL OR ExecutionVersion < @v);
+            SELECT ISNULL(ExecutionVersion, 0) FROM orders.WorkflowStartRequest WHERE OrderId = @o;
+            """, connection);
+        command.Parameters.AddWithValue("@o", request.OrderId);
+        command.Parameters.AddWithValue("@v", request.Version);
+        return (int)(await command.ExecuteScalarAsync() ?? 0);
+    }
+}
+
+/// <summary>Records the workflow version executing an order (patch execution-version-2).</summary>
+public sealed class RecordFulfillmentExecutionVersionActivity(ExecutionFence fence) : WorkflowActivity<ExecutionVersionRequest, int>
+{
+    public override Task<int> RunAsync(WorkflowActivityContext context, ExecutionVersionRequest input) => fence.RecordVersionAsync(input);
 }
 
 /// <summary>First activity of every fulfillment run (hosted here because it writes OrderDb).</summary>

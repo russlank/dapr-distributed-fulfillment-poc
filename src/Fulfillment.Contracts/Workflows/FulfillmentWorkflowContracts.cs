@@ -13,6 +13,9 @@ public static class FulfillmentWorkflow
     /// <summary>First activity of every run (on order-api): the SQL execution fence.</summary>
     public const string ClaimExecutionActivity = "ClaimFulfillmentExecution";
 
+    /// <summary>On order-api: records which workflow version executes the order (patch execution-version-2).</summary>
+    public const string RecordExecutionVersionActivity = "RecordFulfillmentExecutionVersion";
+
     /// <summary>On order-api: Submitted → Validating, business rules, rejection of an invalid order.</summary>
     public const string ValidateOrderActivity = "ValidateFulfillmentOrder";
 
@@ -61,6 +64,9 @@ public static class ExecutionClaimOutcomes
 
 /// <summary>Claim input: the order and the instance claiming it (for the audit row).</summary>
 public sealed record ExecutionClaimRequest(Guid OrderId, string InstanceId);
+
+/// <summary>The workflow version a run executes (recorded once; a lower version never overwrites a higher one).</summary>
+public sealed record ExecutionVersionRequest(Guid OrderId, int Version);
 
 /// <summary>Claim result: whether the run may continue, and the claim count after this claim.</summary>
 public sealed record ExecutionClaimResult(string Outcome, string OrderStatus, int ExecutionClaims)

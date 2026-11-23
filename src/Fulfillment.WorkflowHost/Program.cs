@@ -13,6 +13,7 @@ builder.AddServiceDefaults(new ServiceDefaultsOptions(AppIds.WorkflowHost, UsesD
 // Workflow concurrency limits are sidecar settings (dapr/config), not SDK options: the SDK's
 // MaxConcurrentWorkflows/MaxConcurrentActivities are obsolete and inert in 1.19.
 FulfillmentTimings.Current = FulfillmentTimings.ForEnvironment(Environment.GetEnvironmentVariable("DAPR_POC_ENV"));
+WorkflowPatches.Current = WorkflowPatches.FromEnvironment(Environment.GetEnvironmentVariable(WorkflowPatches.DisabledVariable));
 builder.Services.AddDaprWorkflow(options =>
 {
     options.RegisterWorkflow<RuntimeProbeWorkflow>(RuntimeProbe.WorkflowName);
@@ -23,6 +24,8 @@ builder.Services.AddDaprWorkflow(options =>
 var app = builder.Build();
 app.MapServiceDefaults();
 app.MapWorkflowManagement(WorkflowManagementPolicy.Default);
+// Which workflow patches this host runs with (versioning; checked per replica during an upgrade).
+app.MapGet("/system/workflow-patches", () => Results.Ok(new { enabled = WorkflowPatches.Current.Enabled, disabled = WorkflowPatches.Current.Disabled }));
 #if FULFILLMENT_FAILPOINTS
 Fulfillment.WorkflowHost.Drill.DrillControls.MapDrillControls(app);
 #endif

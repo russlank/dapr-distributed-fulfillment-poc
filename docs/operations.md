@@ -224,6 +224,18 @@ Alertmanager (http://127.0.0.1:9093) groups the firing alerts; the rules are in
 | `PaymentProviderUnavailable` | provider requests fail or go unanswered | provider reachability; `payment.PaymentAttempt` | restore the provider; orders compensate or open `AmbiguousPayment` cases |
 | `ReservationHoldsLeaking` | holds stay `Held` past their expiry | `inventory.SweeperLease` (owner, expiry); inventory replicas | restore the sweeper (a stuck lease expires by SQL time); holds are then expired and stock returned |
 
+## Rolling Out a Workflow Change
+
+1. Deploy the new workflow host build with the change behind a new patch, held
+   back on every replica: `WORKFLOW_PATCHES_DISABLED=<patch>`.
+2. Enable it replica by replica (restart each workflow host and its sidecar
+   without the variable); check `/system/workflow-patches` on each.
+3. New runs take the new path; instances that started before keep theirs.
+
+To roll back, hold the patch back again: runs that already recorded it are
+reported `Stalled` and wait until it is enabled again (they are never replayed
+on the old path).
+
 ## Restarting a Replica
 
 A replica is an app container plus a sidecar that joins the app's network

@@ -111,6 +111,7 @@ builder.Services.AddDaprWorkflow(options =>
     options.RegisterActivity<ClaimProbeExecutionActivity>(ActivityNames.Claim);
     options.RegisterActivity<CompleteProbeExecutionActivity>(ActivityNames.Complete);
     options.RegisterActivity<ClaimFulfillmentExecutionActivity>(FulfillmentWorkflow.ClaimExecutionActivity);
+    options.RegisterActivity<RecordFulfillmentExecutionVersionActivity>(FulfillmentWorkflow.RecordExecutionVersionActivity);
     options.RegisterActivity<ValidateFulfillmentOrderActivity>(FulfillmentWorkflow.ValidateOrderActivity);
     options.RegisterActivity<RecordFulfillmentChecksActivity>(FulfillmentWorkflow.RecordChecksActivity);
     options.RegisterActivity<ApplyStubFulfillmentStepActivity>(FulfillmentWorkflow.ApplyStubStepActivity);

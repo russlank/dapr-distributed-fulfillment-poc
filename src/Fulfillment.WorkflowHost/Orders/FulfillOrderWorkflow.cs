@@ -57,6 +57,13 @@ public sealed partial class FulfillOrderWorkflow : Workflow<FulfillmentInput, Fu
             return new FulfillmentResult(FulfillmentOutcomes.Fenced, claim.OrderStatus, claim.ExecutionClaims);
         }
 
+        // Patch execution-version-2: the run records the workflow version executing the order. Instances started
+        // before the patch replay their recorded path without this step (see WorkflowPatches).
+        if (WorkflowPatches.Applies(context, WorkflowPatches.ExecutionVersion2))
+        {
+            await context.CallActivityAsync<int>(FulfillmentWorkflow.RecordExecutionVersionActivity, new ExecutionVersionRequest(orderId, 2), OnOrderApi);
+        }
+
         context.SetCustomStatus("validating");
         var validation = await context.CallActivityAsync<OrderValidationResult>(
             FulfillmentWorkflow.ValidateOrderActivity, new ValidateOrderRequest(orderId, context.InstanceId), OnOrderApi);

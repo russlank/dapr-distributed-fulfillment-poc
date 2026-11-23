@@ -62,6 +62,9 @@ public sealed class WorkflowStartRequest
     /// <summary>Claims rejected because the order was already terminal.</summary>
     public int FenceRejections { get; private set; }
 
+    /// <summary>Workflow version executing the order, recorded by runs with patch execution-version-2; null for earlier runs.</summary>
+    public int? ExecutionVersion { get; private set; }
+
     public static WorkflowStartRequest ForNewOrder(Guid orderId) => new()
     {
         OrderId = orderId,

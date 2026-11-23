@@ -92,10 +92,10 @@ milestone that will run it is named).
 | A10 | RabbitMQ delivery, retries, dead letter | `PASS` |
 | A11 | Service invocation retries from a resiliency policy | `FAIL` for application 5xx responses; transport failures `UNVERIFIED` |
 | A12 | Dapr API token and app API token | `PASS` |
-| A13 | Workflow versioning API | `UNVERIFIED` (patch API `IsPatched` present in SDK 1.19; exercised with the upgrade experiment, extended evaluation) |
+| A13 | Workflow versioning API | `PASS` (drill R17, 2026-11-23): `IsPatched` records a patch in a new run's history and answers false when an instance started before the patch replays; an instance whose history has a patch that the running code does not request is reported `Stalled` (not failed, not replayed differently) and resumes once a host with the patch runs it |
 | A14 | Actor placement, host visibility, recovery after killing the host | `PASS` |
-| A15 | Dapr workflow metric names | `UNVERIFIED` (observability milestone) |
-| A16 | Behavior during a state-store outage | `UNVERIFIED` (state-store outage experiment, extended evaluation) |
+| A15 | Dapr workflow metric names | `PASS` (2026-11-22): `dapr_runtime_workflow_*` execution, operation, activity counts and latencies, scheduling latency, lock wait ([monitoring.md](monitoring.md#dapr-metrics)) |
+| A16 | Behavior during a state-store outage | `OBSERVED` (drill R07, 2026-11-23): with only the sidecars' path to the state store cut, workflow starts and raised events fail and are retried by their callers, running instances hold, nothing completes; SQL commits continue; about 15 s after the restore everything resumes, no history lost, no effect repeated |
 | A17 | .NET workflow test mechanism | `PASS`: no in-memory harness in the SDK; `WorkflowContext` is abstract and a hand-written fake runs workflows deterministically |
 | A18 | Memory footprint | `OBSERVED`: 1.2 GiB for 13 containers on a fresh stack, about 2.0 GiB after 20 minutes of experiments |
 | - | Workflow recovery versus activity re-execution after `SIGKILL` | `PASS` (three variants) |

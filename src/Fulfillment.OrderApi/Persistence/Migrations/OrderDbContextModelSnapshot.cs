@@ -1323,6 +1323,9 @@ namespace Fulfillment.OrderApi.Persistence.Migrations
                     b.Property<int>("ExecutionClaims")
                         .HasColumnType("int");
 
+                    b.Property<int?>("ExecutionVersion")
+                        .HasColumnType("int");
+
                     b.Property<int>("FenceRejections")
                         .HasColumnType("int");
 

@@ -285,6 +285,8 @@ services:
     environment:
       <<: *app-env
       REPLICA_NAME: workflow-host
+      # Held-back workflow patches (versioning; comma-separated names, none by default).
+      WORKFLOW_PATCHES_DISABLED: ${WORKFLOW_PATCHES_DISABLED:-}
   workflow-host-dapr:
     <<: *daprd
     network_mode: "service:workflow-host"
@@ -310,6 +312,8 @@ services:
     environment:
       <<: *app-env
       REPLICA_NAME: workflow-host-2
+      # Held-back workflow patches (versioning; comma-separated names, none by default).
+      WORKFLOW_PATCHES_DISABLED: ${WORKFLOW_PATCHES_DISABLED:-}
   workflow-host-2-dapr:
     <<: *daprd
     profiles: [replicas]
@@ -336,6 +340,8 @@ services:
     environment:
       <<: *app-env
       REPLICA_NAME: workflow-host-3
+      # Held-back workflow patches (versioning; comma-separated names, none by default).
+      WORKFLOW_PATCHES_DISABLED: ${WORKFLOW_PATCHES_DISABLED:-}
   workflow-host-3-dapr:
     <<: *daprd
     profiles: [scale]

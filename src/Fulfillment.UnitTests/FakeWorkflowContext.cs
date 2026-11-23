@@ -44,7 +44,10 @@ public sealed class FakeWorkflowContext(string instanceId = "test-1") : Workflow
 
     public override bool IsReplaying => false;
 
-    public override bool IsPatched(string patchName) => true;
+    /// <summary>Patches this run has (a new run with the patch, or one recorded in its history); none by default: an instance started before any patch.</summary>
+    public HashSet<string> Patches { get; } = new(StringComparer.Ordinal);
+
+    public override bool IsPatched(string patchName) => Patches.Contains(patchName);
 
     public override Task<T> CallActivityAsync<T>(string name, object? input = null, WorkflowTaskOptions? options = null)
     {

@@ -27,6 +27,7 @@ public class FulfillOrderWorkflowTests
         overrides?.Invoke(name, input) ?? name switch
         {
             FulfillmentWorkflow.ClaimExecutionActivity => new ExecutionClaimResult(ExecutionClaimOutcomes.Proceed, "Submitted", 1),
+            FulfillmentWorkflow.RecordExecutionVersionActivity => ((ExecutionVersionRequest)input!).Version,
             FulfillmentWorkflow.ValidateOrderActivity => new OrderValidationResult(StepOutcomes.Valid, "Validating", null, "c-1", TwoLines),
             FulfillmentWorkflow.PriceOrderActivity => new PriceQuote(1234, "EUR", "stub-v1", Ran),
             FulfillmentWorkflow.AssessOrderRiskActivity => new RiskAssessment(10, false, "stub-v2", Ran),
@@ -90,6 +91,41 @@ public class FulfillOrderWorkflowTests
     private static string[] Names(FakeWorkflowContext c) => [.. c.ActivityCalls.Select(a => a.Name)];
 
     private static string[] Wakes(FakeWorkflowContext c) => [.. c.ActivityCalls.Select(a => a.Input).OfType<ResolveReviewRequest>().Select(r => r.Wake)];
+
+    [Fact]
+    public async Task Run_WithPatchExecutionVersion2_RecordsVersion2RightAfterTheClaim_ThenRunsTheSameSteps()
+    {
+        var unpatched = new FakeWorkflowContext(Instance) { ActivityResult = Results() };
+        var patched = new FakeWorkflowContext(Instance) { ActivityResult = Results() };
+        patched.Patches.Add(WorkflowPatches.ExecutionVersion2);
+
+        await new FulfillOrderWorkflow().RunAsync(unpatched, new FulfillmentInput(OrderId));
+        await new FulfillOrderWorkflow().RunAsync(patched, new FulfillmentInput(OrderId));
+
+        Assert.Equal((FulfillmentWorkflow.RecordExecutionVersionActivity, AppIds.OrderApi), (patched.ActivityCalls[1].Name, patched.ActivityCalls[1].TargetAppId!));
+        Assert.Equal(new ExecutionVersionRequest(OrderId, 2), patched.ActivityCalls[1].Input);
+        Assert.DoesNotContain(FulfillmentWorkflow.RecordExecutionVersionActivity, Names(unpatched));
+        Assert.Equal(Names(unpatched), Names(patched).Where(n => n != FulfillmentWorkflow.RecordExecutionVersionActivity));
+    }
+
+    [Fact]
+    public async Task Run_PatchHeldBackOnThisHost_KeepsTheOldPathEvenForANewRun()
+    {
+        var context = new FakeWorkflowContext(Instance) { ActivityResult = Results() };
+        context.Patches.Add(WorkflowPatches.ExecutionVersion2);
+        var previous = WorkflowPatches.Current;
+        WorkflowPatches.Current = WorkflowPatches.FromEnvironment(WorkflowPatches.ExecutionVersion2);
+        try
+        {
+            await new FulfillOrderWorkflow().RunAsync(context, new FulfillmentInput(OrderId));
+        }
+        finally
+        {
+            WorkflowPatches.Current = previous;
+        }
+
+        Assert.DoesNotContain(FulfillmentWorkflow.RecordExecutionVersionActivity, Names(context));
+    }
 
     [Fact]
     public async Task Run_NoReviewRequired_RunsEveryStepOnItsOwningAppAndCompletes()
