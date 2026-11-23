@@ -25,6 +25,22 @@ keeps the expectation that turned out wrong.
   gauge counts only gaps not yet known to be unresolvable. The orphan-hold
   script writes a valid payload.
 
+### Two replicas raced to create the failpoint table
+
+- **Expected:** a drill stack starts from fresh volumes.
+- **Observed:** in the M5 run of record the drill stack did not start: one of
+  the two payment-service replicas exited with "There is already an object
+  named 'Failpoint' in the database", and every drill-phase step after it
+  failed or refused. The run was stopped.
+- **Cause:** each replica of a drill build creates `drill.Failpoint` in its
+  service's database at startup with a check-then-create that was not
+  serialized; replicas starting together on a fresh database could both pass
+  the check. Earlier runs started without the collision by chance.
+- **Change:** the check and the creation run in one transaction under an
+  application lock. Six parallel sessions per fresh database, five times: the
+  old statement failed once in 30 sessions with the same error, the new one
+  never.
+
 ### SQL Server ran out of memory during a SQL-only contention run
 
 - **Expected:** the coordination comparison runs the contention scenario

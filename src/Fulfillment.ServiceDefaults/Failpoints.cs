@@ -34,7 +34,11 @@ public sealed partial class Failpoints
         Compiled && string.Equals(Environment.GetEnvironmentVariable("DAPR_POC_ENV"), "drill", StringComparison.Ordinal);
 
 #if FULFILLMENT_FAILPOINTS
-    /// <summary>Creates drill.Failpoint in the owning database (drill builds only).</summary>
+    /// <summary>
+    /// Creates drill.Failpoint in the owning database (drill builds only). Replicas of one service start together on
+    /// a fresh database, so the check and the creation run under one application lock: the second replica finds the
+    /// table instead of failing to create it again.
+    /// </summary>
     public async Task EnsureStoreAsync(CancellationToken ct = default)
     {
         if (!Active || connectionString is null)
@@ -46,12 +50,16 @@ public sealed partial class Failpoints
         await connection.OpenAsync(ct);
         await using var command = new SqlCommand(
             """
+            SET XACT_ABORT ON;
+            BEGIN TRANSACTION;
+            EXEC sp_getapplock @Resource = 'drill.Failpoint', @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 30000;
             IF SCHEMA_ID('drill') IS NULL EXEC('CREATE SCHEMA drill');
             IF OBJECT_ID('drill.Failpoint') IS NULL
                 CREATE TABLE drill.Failpoint (
                     Name nvarchar(120) NOT NULL, DrillRunId nvarchar(80) NOT NULL, OperationKey nvarchar(200) NOT NULL,
                     Action nvarchar(20) NOT NULL, ArmedAt datetime2(3) NOT NULL DEFAULT SYSUTCDATETIME(), FiredAt datetime2(3) NULL,
                     CONSTRAINT PK_drill_Failpoint PRIMARY KEY (Name, OperationKey, DrillRunId));
+            COMMIT;
             """, connection);
         await command.ExecuteNonQueryAsync(ct);
     }
