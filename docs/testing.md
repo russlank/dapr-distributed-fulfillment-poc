@@ -388,6 +388,15 @@ with `dapr/config/fulfillment-capped.yaml` (`COMPUTE_DAPR_CONFIG`,
 (from their recorded start and end) is at most, and reaches, 2 when capped; the
 sidecar's `--config` is checked; durations go to `measurements.json`.
 
+### S22 Security Boundary
+
+`scripts/scenarios/S22-security-boundary.sh` (drill stack): every trust
+boundary of [security.md](security.md) refuses a caller without its credential
+(role keys on public endpoints, the app token on sidecar-only routes, the Dapr
+API token on a sidecar, workflow management from a service that may not start
+workflows, an unsigned carrier callback, a service login on another service's
+database), and no value from `.env` appears in any container's log.
+
 ### Alerts Checked in Drills
 
 Each alert rule fires in the drill that causes it and resolves after the

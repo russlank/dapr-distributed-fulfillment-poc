@@ -22,8 +22,11 @@ raw() {
   local req="$method $path HTTP/1.0\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: ${#body}\r\n"
   local h; for h in "$@"; do req+="$h\r\n"; done
   req+="\r\n$body"
-  docker compose exec -T -e REQ="$req" "$svc" bash -c "exec 3<>/dev/tcp/127.0.0.1/$port && printf '%b' \"\$REQ\" >&3 && head -1 <&3" 2>/dev/null | awk '{print $2}'
+  docker compose exec -T -e REQ="$req" "$svc" bash -c "exec 3<>/dev/tcp/127.0.0.1/$port && printf '%b' \"\$REQ\" >&3 && cat <&3" 2>/dev/null > "$OUT_DIR/.raw"
+  head -1 "$OUT_DIR/.raw" | awk '{print $2}'
 }
+# raw_body: the body of the last raw answer
+raw_body() { tr -d '\r' < "$OUT_DIR/.raw" | sed '1,/^$/d'; }
 body='{"customerId":"s22-c1","lines":[{"sku":"SKU-1","quantity":1}]}'
 
 # role keys --------------------------------------------------------------------------------------------------------
@@ -51,9 +54,9 @@ expect S22-sidecar-api "sidecar API without the Dapr API token 401, with it 200"
 fake="s22-$(date -u +%H%M%S)$RANDOM"
 w1="$(raw payment-service 3500 POST "/v1.0/invoke/workflow-host/method/internal/workflows/FulfillOrderWorkflow/fulfill-$fake/start" '{}' "dapr-api-token: $DAPR_API_TOKEN")"
 w2="$(raw order-api 3500 GET "/v1.0/invoke/workflow-host/method/internal/workflows/fulfill-$fake" '' "dapr-api-token: $DAPR_API_TOKEN")"
-expect S22-workflow-api "payment-service may not start a fulfillment workflow (403); the instance does not exist afterwards (read by the order API)" \
-  "start from payment-service $w1; instance read from order-api $w2" "$([[ "$w1" == 403 && "$w2" =~ ^(200|404)$ ]]; echo $?)"
-[[ "$w2" == 200 ]] && log "note: the workflow host answers 200 with exists=false for an unknown instance"
+exists="$(json_get "$(raw_body)" exists | tr 'A-Z' 'a-z')"
+expect S22-workflow-api "payment-service may not start a fulfillment workflow (403); the instance does not exist afterwards (order API read: exists false)" \
+  "start from payment-service $w1; instance read from order-api $w2, exists $exists" "$([[ "$w1" == 403 && "$w2" == 200 && "$exists" == false ]]; echo $?)"
 
 # carrier callback without a valid signature ----------------------------------------------------------------------
 eid="$(new_uuid)"
@@ -74,6 +77,6 @@ expect S22-database "payment_service is refused on OrderDb, accepted on PaymentD
 grep -E '^[A-Z_]+=' "$REPO_ROOT/.env" | cut -d= -f2- | grep -E '.{8,}' > "$OUT_DIR/.secret-values" || true
 n_secrets="$(wc -l < "$OUT_DIR/.secret-values")"
 hits="$(docker compose --profile replicas --profile scale logs --no-color 2>/dev/null | grep -c -F -f "$OUT_DIR/.secret-values")"
-rm -f "$OUT_DIR/.secret-values"
+rm -f "$OUT_DIR/.secret-values" "$OUT_DIR/.raw"
 expect S22-secrets "no .env value in any container log" "$n_secrets secret values checked; log lines containing one: $hits" "$([[ "$n_secrets" -ge 10 && "$hits" == 0 ]]; echo $?)"
 scenario_finish

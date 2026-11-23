@@ -17,6 +17,9 @@ boundaries explicit; they are not production hardening.
 Dapr mTLS and access-control policies need the Sentry service and are not
 used in Compose.
 
+Scenario S22 checks each boundary of this table, and that no secret value
+appears in any container's log ([testing.md](testing.md)).
+
 Every order API answer carries `X-Served-By` with the replica name (for
 scenarios that prove which replica answered). The name is not a secret: it is
 already public at `/system/component-identity`.

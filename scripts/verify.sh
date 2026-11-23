@@ -109,6 +109,7 @@ CATALOG=(
   "B|R17|bash scripts/drills/R17-workflow-upgrade-while-waiting.sh"
   "B|S17|bash scripts/scenarios/S17-activity-concurrency-cap.sh"
   "B|R18|bash scripts/drills/R18-scaling-under-load.sh"
+  "B|S22|bash scripts/scenarios/S22-security-boundary.sh"
   "C|R00|bash scripts/drills/R00-failpoint-selftest.sh"
   "C|S49|bash scripts/scenarios/S49-execution-fence.sh"
   "C|R06c|bash scripts/drills/R06-compute-pool-outage.sh"
@@ -119,7 +120,7 @@ declare -A STEP_GROUPS=(
   [m2]="S03,R04,R05,R06i,R08,S20"
   [m3]="S13,S29,S30,S39,S40,R09,R10,R11,R13,R19,R20,R22,R24,R26,R27,R31,R33"
   [m4]="S01,S48,R14,R15,R16,R32,R23S,R12,R29,R30"
-  [m5]="R07,R28,R17,S17,R18"
+  [m5]="R07,R28,R17,S17,R18,S22"
   [release]="A:S00,A:OBS,A:ACC,A:S02,A:S09,A:S23,A:S04,A:S24,A:S43,A:S03,A:S03-sqlonly"
   [core]="C:R00,C:S49,C:R06c"
 )
