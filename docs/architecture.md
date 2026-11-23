@@ -487,7 +487,7 @@ workflows coordinate, SQL decides.
 | `StockItem` | per warehouse and SKU: `OnHand`, `Reserved`; check constraints `OnHand >= 0` and `0 <= Reserved <= OnHand`; `rowversion` |
 | `Hold` | one per order line: `Held` → `Released`, `Expired`, or `Consumed`, once (a check constraint ties the state to its closing columns); unique `(OrderId, LineNumber)`; `ExpiresAt` by SQL time |
 | `ProcessedOperation` | the stored result of every operation key (reserve per line and warehouse, release per hold, consume per order) and how often it was replayed |
-| `Outbox` | one event per hold transition (`HoldCreated`, `HoldReleased`, `HoldExpired`, `HoldConsumed`), sequence gapless per order; written in the same transaction, not yet published |
+| `Outbox` | one event per hold transition (`HoldCreated`, `HoldReleased`, `HoldExpired`, `HoldConsumed`), sequence gapless per order; written in the same transaction, published by the relay |
 | `OrderClosure` | an order closed for reservations (released or consumed); a late reservation for it returns `OrderClosed` |
 | `SweeperLease` | the single lease of the hold sweeper |
 

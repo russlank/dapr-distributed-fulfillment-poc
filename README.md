@@ -53,6 +53,7 @@ Details: [docs/getting-started.md](docs/getting-started.md).
 | [docs/monitoring.md](docs/monitoring.md) | traces, metrics, dashboards |
 | [docs/security.md](docs/security.md) | trust boundaries and secrets |
 | [docs/versions.md](docs/versions.md) | pinned versions and observed Dapr runtime behavior |
+| [docs/dapr-vs-alternatives.md](docs/dapr-vs-alternatives.md) | stock actors versus SQL-only coordination, measured; the hold lifetime |
 | [docs/journal.md](docs/journal.md) | what broke and what changed because of it |
 | [CHANGELOG.md](CHANGELOG.md) | releases |
 | [docs/releases/v0.5.0.md](docs/releases/v0.5.0.md) | M4 release: event distribution, history, reconciler, verified guarantees, limitations |
