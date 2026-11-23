@@ -57,8 +57,8 @@ public class ComponentIdentityTests
         var identity = ServiceDefaultsExtensions.CreateIdentity("test", typeof(ServiceDefaultsExtensions).Assembly, "Development");
 
         Assert.Equal("test", identity.Component);
-        // Development towards 0.6.0 (prerelease suffix dev; build metadata after '+' is allowed).
-        Assert.Matches(@"^0\.6\.0-dev(\+.*)?$", identity.Version);
+        // The release version, without a prerelease suffix (build metadata after '+' is allowed).
+        Assert.Matches(@"^0\.6\.0(\+.*)?$", identity.Version);
         Assert.Equal(BuildMetadata.BuildFlavor, identity.BuildFlavor);
     }
 }

@@ -4,11 +4,35 @@ Releases of the PoC; each tag `v<version>` marks a verified milestone.
 Details of a release: `docs/releases/`. What broke on the way:
 [docs/journal.md](docs/journal.md).
 
-## Unreleased (0.6.0-dev)
+## v0.6.0: Observability, scaling, workflow versioning, and comparison (M5)
 
-- Development towards M5 (alerts and dashboards, scaling experiments,
-  workflow versioning and upgrades). Entries are added as functionality is
-  verified.
+- Alerts and dashboards: operational gauges in every service (start
+  requests, signals, carrier forwards, outbox rows, projection gaps, dead
+  letters, active cases, overdue holds, dead-lettered callbacks); seventeen
+  Prometheus rules evaluated every 5 s, Alertmanager as a local sink, eight
+  Grafana dashboards, runbooks in the operations guide; a unit test refuses
+  log placeholders that could carry payloads or secrets. Every rule is
+  checked in the drill that causes it (fired during the fault, resolved
+  after recovery).
+- Workflow versioning with named patches (`IsPatched`), per-host hold-back
+  (`WORKFLOW_PATCHES_DISABLED`), `/system/workflow-patches`; the first patch
+  records the executing version (`WorkflowStartRequest.ExecutionVersion`).
+  R17 rolls the hosts while orders wait. Known limitation: on Dapr 1.19.1 a
+  patched instance must not be terminated or purged (it stays `Stalled`);
+  orders end through their own paths and the workflow fences itself.
+- Drills for a workflow state-store outage (R07) and a Scheduler and
+  Placement outage (R28 variant A); scaling under load with 1, 3, and 5
+  compute replicas (R18); an activity concurrency cap (S17); the security
+  boundary scenario (S22).
+- The reconciler no longer reports designed waits as stalled, and reports a
+  deterministically rejected gap event once as unresolvable instead of
+  replaying it.
+- Stock actors compared with SQL-only coordination, measured
+  (`docs/dapr-vs-alternatives.md`, `scripts/experiments/coordination-comparison.sh`).
+- A generic Kubernetes template (`deploy/kubernetes/`, Kustomize; not
+  verified on a cluster).
+- Fixes: the failpoint table creation is serialized across replicas; drill
+  terminate and purge controls are bounded to 15 s.
 - A confirmed delivery failure ends the order in the new terminal status
   `Escalated` (reason `DeliveryFailed`) instead of leaving it awaiting
   delivery: `ConfirmExternalFailure` on a `DeliveryException` or
@@ -17,6 +41,7 @@ Details of a release: `docs/releases/`. What broke on the way:
   later records the business resolution. Nothing is refunded, reshipped, or
   restocked automatically; an open delivery case can no longer be
   acknowledged. Drill R29 covers it.
+- Limitations and deferred work: [docs/releases/v0.6.0.md](docs/releases/v0.6.0.md).
 
 ## v0.5.0: Reliable event distribution, history, and recovery (M4)
 

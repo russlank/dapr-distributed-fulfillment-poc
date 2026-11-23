@@ -47,6 +47,7 @@ Details: [docs/getting-started.md](docs/getting-started.md).
 | [docs/getting-started.md](docs/getting-started.md) | prerequisites, startup, endpoints |
 | [docs/configuration.md](docs/configuration.md) | secrets, settings, Dapr components, profiles, build flavors |
 | [docs/operations.md](docs/operations.md) | scripts, health, restarts, reset, troubleshooting |
+| [deploy/kubernetes/README.md](deploy/kubernetes/README.md) | generic Kubernetes template (Kustomize; not verified on a cluster) |
 | [docs/client-simulator.md](docs/client-simulator.md) | the external client: commands, seeded runs and replay, retries, results |
 | [docs/testing.md](docs/testing.md) | unit tests, scenarios, drills, what each check proves |
 | [docs/resilience-drills.md](docs/resilience-drills.md) | failure injection and its safety |
@@ -56,6 +57,7 @@ Details: [docs/getting-started.md](docs/getting-started.md).
 | [docs/dapr-vs-alternatives.md](docs/dapr-vs-alternatives.md) | stock actors versus SQL-only coordination, measured; the hold lifetime |
 | [docs/journal.md](docs/journal.md) | what broke and what changed because of it |
 | [CHANGELOG.md](CHANGELOG.md) | releases |
+| [docs/releases/v0.6.0.md](docs/releases/v0.6.0.md) | M5 release: alerts, workflow versioning, outage and scaling drills, actor comparison, limitations |
 | [docs/releases/v0.5.0.md](docs/releases/v0.5.0.md) | M4 release: event distribution, history, reconciler, verified guarantees, limitations |
 | [docs/releases/v0.4.0.md](docs/releases/v0.4.0.md) | M3 release: payment, shipping, interventions, verified guarantees, limitations |
 | [docs/releases/v0.3.0.md](docs/releases/v0.3.0.md) | M2 release: inventory, verified guarantees, limitations |
