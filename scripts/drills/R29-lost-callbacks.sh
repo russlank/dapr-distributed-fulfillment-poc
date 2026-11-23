@@ -15,6 +15,8 @@
 #   R29-3-escalated  resolution 200 Escalate; the order Escalated/DeliveryFailed, its workflow completed at the fence,
 #                    start request Closed, the case Escalated; payment and stock untouched (one authorization, one
 #                    capture, no void or refund; holds Consumed); no OrderCompleted event
+#   R29-alerts       CarrierCallbackDeadLettered (order 1) and InterventionCaseOpen (DeliveryOverdue, Open) fired and
+#                    resolved
 #   R29-3-settled    Acknowledge with the business resolution: 200 RecordOnly; the case Resolved; the order stays
 #                    Escalated; payment and stock still untouched
 DRILL_ID=R29
@@ -30,6 +32,7 @@ o2="$(submit "$ORDER_API" "$RUN-2" "$(order_body "$RUN-c2" "$SKU" 1)")"; carrier
 o3="$(submit "$ORDER_API" "$RUN-3" "$(order_body "$RUN-c3" "$SKU" 1)")"; carrier_mode "$o3" LostNoPoll > /dev/null
 printf '1 %s\n2 %s\n3 %s\n' "$o1" "$o2" "$o3" > "$DRILL_DIR/orders.txt"
 INJECTED_AT="$(now_iso)"
+ALERT_SINCE="$(date +%s)"; DL_BEFORE="$(alert_firing CarrierCallbackDeadLettered)"; CO_BEFORE="$(alert_firing InterventionCaseOpen 'kind="DeliveryOverdue",state="Open"')"
 callbacks() { sqln CarrierSimDb "SELECT STRING_AGG(CONCAT(Status, ':', State), ',') WITHIN GROUP (ORDER BY Version) FROM carrier.Callback WHERE ShipmentId = '$1'"; }
 answered() { sql CarrierSimDb "SELECT COUNT(*) FROM carrier.Send s JOIN carrier.Callback c ON c.Id = s.CallbackId WHERE c.ShipmentId = '$1' AND s.ResponseCode IS NOT NULL"; }
 
@@ -48,6 +51,8 @@ wait_until 120 "order 2 DeliveryOverdue case" overdue || true
 aexpect R29-2-overdue "order 2 ManualInterventionRequired with an open DeliveryOverdue case; Shipping has no terminal status" \
   "status $(order_status "$o2"); cases $(cases_of "$o2"); shipment $(shipment_of "$o2")" \
   "$(overdue && [[ "$(order_status "$o2")" == ManualInterventionRequired && "$(shipment_of "$o2")" == *"|-" ]]; echo $?)"
+# The case stays open until its alert fired (held 10 s, then the alert pipeline).
+alert_wait_firing InterventionCaseOpen 'kind="DeliveryOverdue",state="Open"' 60 || true
 res="$(resolve_case "$ORDER_API" "$(open_case_of "$o2" DeliveryOverdue)" ConfirmExternalSuccess "$(new_uuid)")"
 wait_status 120 "$o2" 'Completed|Compensated|Rejected' || true
 RECOVERED_AT="$(now_iso)"
@@ -73,3 +78,7 @@ RECOVERED_AT="$(now_iso)"
 aexpect R29-3-settled "200 RecordOnly; case Resolved; order stays Escalated; money and stock untouched" \
   "resolution $settle3; end $(end_of "$o3"); cases $(cases_of "$o3"); money $(provider_money "$o3"); holds $(holds_of "$o3")" \
   "$([[ "$settle3" == "200 RecordOnly" && "$(order_status "$o3")" == Escalated && "$(cases_of "$o3")" == DeliveryOverdue:Resolved:RecordOnly ]] && untouched; echo $?)"
+read -r v1 d1 <<< "$(alert_outcome CarrierCallbackDeadLettered '' "$ALERT_SINCE" "$DL_BEFORE" 150)"
+read -r v2 d2 <<< "$(alert_outcome InterventionCaseOpen 'kind="DeliveryOverdue",state="Open"' "$ALERT_SINCE" "$CO_BEFORE" 60)"
+assert R29-alerts "$([[ "$v1" == PASS && "$v2" == PASS ]] && echo PASS || { [[ "$v1" == UNVERIFIED || "$v2" == UNVERIFIED ]] && echo UNVERIFIED || echo FAIL; })" \
+  "CarrierCallbackDeadLettered and InterventionCaseOpen (DeliveryOverdue, Open) fire and resolve" "$v1 $d1; $v2 $d2"

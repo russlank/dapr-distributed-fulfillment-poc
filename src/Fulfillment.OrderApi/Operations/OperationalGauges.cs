@@ -53,7 +53,8 @@ public sealed partial class OperationalGauges(string connectionString, IOptions<
             description: "pending workflow signals older than the backlog age, by kind");
         Meter.CreateObservableGauge("carrier_forwards_aging", () => current.Forwards, description: "pending carrier forwards older than the backlog age");
         Meter.CreateObservableGauge("event_dead_letters_recent", () => current.DeadLetters, description: "event dead letters recorded within the window");
-        Meter.CreateObservableGauge("projection_gaps_aging", () => current.Gaps, description: "projection gaps whose oldest pending event is older than the gap age");
+        Meter.CreateObservableGauge("projection_gaps_aging", () => current.Gaps,
+            description: "projection gaps older than the gap age that are not known to be unresolvable (no ProjectionGap case)");
         Meter.CreateObservableGauge("intervention_cases_active", () => current.Cases.Select(c => new Measurement<int>(c.Count,
             new KeyValuePair<string, object?>("kind", c.Kind), new KeyValuePair<string, object?>("state", c.State))),
             description: "active intervention cases (Open, Reconciling, Escalated) by kind and state");
@@ -101,7 +102,8 @@ public sealed partial class OperationalGauges(string connectionString, IOptions<
               (SELECT COUNT(*) FROM orders.WorkflowStartRequest WHERE State = 'Pending' AND CreatedAt < DATEADD(millisecond, -@backlog, @now)),
               (SELECT COUNT(*) FROM orders.CarrierStatusForward WHERE State = 'Pending' AND CreatedAt < DATEADD(millisecond, -@backlog, @now)),
               (SELECT COUNT(*) FROM orders.EventDeadLetter WHERE RecordedAt > DATEADD(millisecond, -@dead, @now)),
-              (SELECT COUNT(*) FROM orders.OrderEventGaps WHERE OldestPendingAt < DATEADD(millisecond, -@gap, @now));
+              (SELECT COUNT(*) FROM orders.OrderEventGaps g WHERE g.OldestPendingAt < DATEADD(millisecond, -@gap, @now)
+                 AND NOT EXISTS (SELECT 1 FROM orders.InterventionCase c WHERE c.OrderId = g.OrderId AND c.Kind = 'ProjectionGap'));
             SELECT CASE WHEN EventName LIKE 'ReviewSignal[_]%' THEN 'review' WHEN EventName LIKE 'InterventionResolved[_]%' THEN 'intervention'
                         WHEN EventName LIKE 'CarrierStatus[_]%' THEN 'carrier' ELSE 'other' END, COUNT(*)
             FROM orders.PendingSignal WHERE State = 'Pending' AND CreatedAt < DATEADD(millisecond, -@backlog, @now)

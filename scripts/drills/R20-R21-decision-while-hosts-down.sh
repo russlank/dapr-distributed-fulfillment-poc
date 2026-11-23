@@ -5,6 +5,9 @@
 #   R20-down        order 1 waits for review; both workflow hosts are stopped (graceful); the approval
 #                   through the order API answers 200 and commits the decision and its pending signal
 #                   while no host runs (the signal cannot be forwarded yet)
+#   R20-alerts      while the hosts are down: ReviewSignalBacklog and PendingSignalAging (review) for the decision's
+#                   signal, StartRequestBacklogAging for an order accepted meanwhile; all resolved after the restart,
+#                   and that order completes
 #   R20-resumed     after the hosts start again the signal is Forwarded, the workflow reads the decision
 #                   from SQL, and the order completes; one decision, one signal
 #   R21-crashed     order 2: the failpoint AfterReviewDecisionCommitBeforeSignalDispatch (FailFast) ends the
@@ -31,6 +34,7 @@ signal_of() { sqln OrderDb "SELECT CONCAT(s.State, '|', s.Attempts) FROM orders.
 # --- R20 -----------------------------------------------------------------------------------------------
 O1="$(submit "$ORDER_API" "$RUN-1" "$(review_order_body "$RUN-c1")")"
 wait_until 60 "order 1 review" has_review "$O1"
+ALERT_SINCE="$(date +%s)"; RS_BEFORE="$(alert_firing ReviewSignalBacklog)"; PSA_BEFORE="$(alert_firing PendingSignalAging 'kind="review"')"; SR_BEFORE="$(alert_firing StartRequestBacklogAging)"
 docker compose --profile replicas stop -t 10 "${HOSTS[@]}" >/dev/null 2>&1
 INJECTED_AT="$(now_iso)"
 hosts="$(for s in "${HOSTS[@]}"; do printf '%s=%s ' "$s" "$(state_of "$s")"; done)"
@@ -41,6 +45,10 @@ sig_down="$(signal_of "$O1")"
 aexpect R20-down "hosts exited; approval 200; decision committed (1|Approved|AwaitingApproval); signal not Forwarded while no host runs" \
   "hosts $hosts; approval $s1; decision|round|order $committed; signal $sig_down" \
   "$([[ "$hosts" == *workflow-host=exited*workflow-host-2=exited* && "$s1" == 200 && "$committed" == 1\|Approved\|AwaitingApproval && "$sig_down" != Forwarded* ]]; echo $?)"
+# An order accepted while no host runs: its start request waits. The hosts stay down until the alerts fired.
+O0="$(submit "$ORDER_API" "$RUN-0" "$(order_body "$RUN-c0" "$(fresh_sku R20 5)" 1)")"
+alert_wait_firing ReviewSignalBacklog '' 90 || true
+alert_wait_firing StartRequestBacklogAging '' 60 || true
 restart_down "${HOSTS[@]}"
 wait_status 240 "$O1" 'Completed|Rejected|Compensated'
 aexpect R20-resumed "signal Forwarded; Completed/Delivered; one decision" \
@@ -67,3 +75,11 @@ transitions="$(sql OrderDb "SELECT COUNT(*) FROM orders.OrderStatusHistory WHERE
 aexpect R21-delivered "signal Forwarded once; Completed/Delivered; one decision; one transition to Reserving" \
   "signal $(signal_of "$O2"); end $(end_of "$O2"); decisions $(sql OrderDb "SELECT COUNT(*) FROM orders.ReviewDecision WHERE OrderId = '$O2'"); to Reserving $transitions" \
   "$([[ "$(signal_of "$O2")" == Forwarded* && "$(end_of "$O2")" == Completed/Delivered && "$(sql OrderDb "SELECT COUNT(*) FROM orders.ReviewDecision WHERE OrderId = '$O2'")" == 1 && "$transitions" == 1 ]]; echo $?)"
+wait_status 240 "$O0" 'Completed|Rejected|Compensated' || true
+read -r v1 d1 <<< "$(alert_outcome ReviewSignalBacklog '' "$ALERT_SINCE" "$RS_BEFORE" 120)"
+read -r v2 d2 <<< "$(alert_outcome PendingSignalAging 'kind="review"' "$ALERT_SINCE" "$PSA_BEFORE" 60)"
+read -r v3 d3 <<< "$(alert_outcome StartRequestBacklogAging '' "$ALERT_SINCE" "$SR_BEFORE" 60)"
+all="$v1 $v2 $v3"
+assert R20-alerts "$([[ "$all" == "PASS PASS PASS" && "$(end_of "$O0")" == Completed/Delivered ]] && echo PASS || { [[ "$all" == *UNVERIFIED* ]] && echo UNVERIFIED || echo FAIL; })" \
+  "ReviewSignalBacklog, PendingSignalAging (review), StartRequestBacklogAging fire while the hosts are down and resolve; the order accepted meanwhile completes" \
+  "$v1 $d1; $v2 $d2; $v3 $d3; order accepted during the outage $(end_of "$O0")"

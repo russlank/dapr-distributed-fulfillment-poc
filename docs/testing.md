@@ -375,6 +375,28 @@ see [resilience-drills.md](resilience-drills.md).
 | R08 partial reservation (S45, S15) | are partial reservations compensated, and do holds expire without the Scheduler? | released once, `Rejected` or `Compensated`; the sweeper expires an orphan hold with Placement and Scheduler stopped |
 | R09, R10, R11, R13, R19-R27, R31, R33 | payment, compensation, carrier, review, cancellation, and intervention failures | see [resilience-drills.md](resilience-drills.md#run) |
 
+### Alerts Checked in Drills
+
+Each alert rule fires in the drill that causes it and resolves after the
+recovery (`alert_outcome` in `scripts/lib.sh` reads Prometheus: the alert
+fired since the fault and stopped firing afterwards; an alert already firing
+before the fault is not attributable and counts as not passed).
+
+| Alert | Drill | Cause |
+|---|---|---|
+| `StartRequestBacklogAging`, `ReviewSignalBacklog`, `PendingSignalAging` | R20 | every workflow host down: an accepted order's start and a decision's signal wait |
+| `CarrierForwardBacklogAging` | R12 B | every Shipping replica down |
+| `CarrierContractViolation` | R13 | a badly signed callback |
+| `CarrierCallbackDeadLettered`, `InterventionCaseOpen` | R29 | lost callbacks; a `DeliveryOverdue` case |
+| `OutboxAging` | R14 | broker outage |
+| `OutboxStalled` | R15 | one row the broker keeps refusing (`BeforeOutboxPublish`) |
+| `DeadLetterNotEmpty` | R16 | poison events |
+| `WorkflowFaulted`, `ExecutionMismatch` | R30 | faulted, missing, and mismatched workflows |
+| `OrderProgressStalled` | R06 compute | orders cannot progress without compute workers |
+| `ProjectionSequenceGap`, `ProjectionGapUnresolvable` | R32 | an event beyond the source's last sequence |
+| `PaymentProviderUnavailable` | R33 A | provider stopped |
+| `ReservationHoldsLeaking` | R08 D | the sweeper's lease held by a stuck owner |
+
 ## Build Gates
 
 `bash ci/dotnet-gates.sh` (restore, build with warnings as errors, unit

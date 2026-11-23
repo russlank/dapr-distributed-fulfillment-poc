@@ -18,6 +18,7 @@
 #                  CorrelationMismatch; TerminalStatus stays Delivered
 #   R13-once       the order Completed once on Delivered (one OrderCompleted event); one
 #                  CarrierTerminalConflict case, acknowledged record-only; no workflow started for it
+#   R13-alert      CarrierContractViolation fired for the badly signed callback and resolved afterwards
 DRILL_ID=R13
 . "$(dirname "$0")/lib.sh"
 . "$REPO_ROOT/scripts/scenarios/m3-lib.sh"
@@ -32,6 +33,7 @@ echo "$O" > "$DRILL_DIR/order.txt"
 wait_status 120 "$O" AwaitingDelivery
 OTHER="$(new_uuid)"
 INJECTED_AT="$(now_iso)"
+ALERT_SINCE="$(date +%s)"; CV_BEFORE="$(alert_firing CarrierContractViolation)"
 script='[
  {"status":"PickedUp","version":1,"delayMs":0},
  {"status":"PickedUp","version":1,"delayMs":400,"sameEventIdAs":0},
@@ -77,3 +79,7 @@ starts="$(sql OrderDb "SELECT CONCAT((SELECT COUNT(*) FROM orders.WorkflowStartR
 aexpect R13-once "Completed/... once with one OrderCompleted event; one case, Acknowledge -> RecordOnly; start requests|repairs|case signals 1|0|0" \
   "end $(end_of "$O"); completion $(completed_events "$O"); history $(history_of "$O"); cases $(cases_of "$O"); resolution $rs $rp; starts $starts" \
   "$([[ "$(order_status "$O")" == Completed && "$(completed_events "$O")" == 1 && "$(grep -o Completed <<< "$(history_of "$O")" | wc -l)" -ge 1 && "$(cases_of "$O")" == CarrierTerminalConflict:Resolved:RecordOnly && "$rs $rp" == "200 RecordOnly" && "$starts" == 1\|0\|0 ]]; echo $?)"
+# The refused callback reaches Prometheus only after the next export and scrape.
+alert_wait_firing CarrierContractViolation '' 60 || true
+read -r verdict detail <<< "$(alert_outcome CarrierContractViolation '' "$ALERT_SINCE" "$CV_BEFORE" 150)"
+assert R13-alert "$verdict" "CarrierContractViolation fires for the refused callback and resolves afterwards" "$detail"

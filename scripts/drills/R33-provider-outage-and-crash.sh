@@ -14,7 +14,8 @@
 #      restarted; the committed capture is adopted (directly, or through a case resolved with the provider's
 #      record if the restart outlasts the status query budget); never a second capture.
 #   R33-A-refused / R33-A-compensated / R33-A-prohibited, R33-B-ambiguous / R33-B-reconciled,
-#   R33-C-crashed / R33-C-adopted (see the expected text of each assertion)
+#   R33-C-crashed / R33-C-adopted (see the expected text of each assertion); R33-alert: PaymentProviderUnavailable fired
+#   during the outage and resolved after the restore
 DRILL_ID=R33
 . "$(dirname "$0")/lib.sh"
 . "$REPO_ROOT/scripts/scenarios/m3-lib.sh"
@@ -30,6 +31,7 @@ RUN="r33-$(date -u +%H%M%S)-$((RANDOM % 1000))"
 SKU="$(fresh_sku R33 30)"
 
 # --- A: outage before the authorization -------------------------------------------------------------
+ALERT_SINCE="$(date +%s)"; PU_BEFORE="$(alert_firing PaymentProviderUnavailable)"
 docker compose stop -t 5 "$PROV" >/dev/null 2>&1
 INJECTED_AT="$(now_iso)"
 stopped="$(docker compose ps -a --format '{{.State}}' "$PROV")"
@@ -99,3 +101,5 @@ RECOVERED_AT="$(now_iso)"
 aexpect R33-C-adopted "the committed capture adopted (directly or via a resolved case); Completed; exactly one capture, no refund" \
   "case resolution $resolved_c; capture attempts $(payment_attempts "$C" Capture); end $(end_of "$C"); provider $(provider_ops "$C")" \
   "$([[ "$(end_of "$C")" == Completed/Delivered && "$(provider_money "$C")" == 1\|1\|0\|0 && $(payment_attempts "$C" Capture | grep -o 'Send:' | wc -l) == 1 ]]; echo $?)"
+read -r verdict detail <<< "$(alert_outcome PaymentProviderUnavailable '' "$ALERT_SINCE" "$PU_BEFORE" 150)"
+assert R33-alert "$verdict" "PaymentProviderUnavailable fires for the failing provider requests and resolves afterwards" "$detail"

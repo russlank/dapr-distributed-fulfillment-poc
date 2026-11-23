@@ -71,6 +71,7 @@ public sealed partial class Reconciler(string connectionString, WorkflowHostClie
 
     private readonly string owner = $"{identity.Replica}/{Guid.NewGuid():N}";
     private readonly Dictionary<(Guid OrderId, string Source), DateTime> replayRequested = [];
+    private readonly HashSet<(Guid OrderId, string Source, int Sequence)> rejectedGaps = [];
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -298,6 +299,21 @@ public sealed partial class Reconciler(string connectionString, WorkflowHostClie
             }
 
             replayRequested[(orderId, source)] = DateTime.UtcNow;
+
+            // A missing event the consumer already rejected for a reason a replay cannot change (invalid payload,
+            // unknown schema, a conflict) would only be rejected again on every pass: surfaced once instead.
+            if (await RejectedAsync(orderId, source, lastApplied + 1, ct) is { } reason)
+            {
+                if (rejectedGaps.Add((orderId, source, lastApplied + 1)))
+                {
+                    LogGapRejected(logger, orderId, source, lastApplied + 1, reason);
+                    Actions.Add(1, new KeyValuePair<string, object?>("action", "ProjectionGapUnresolvable"));
+                    await OpenGapCaseAsync(orderId, source, lastApplied + 1, ct);
+                }
+
+                continue;
+            }
+
             var result = await outbox.ReplayAsync(source, new OutboxReplayRequest(orderId, lastApplied + 1), ct);
             Actions.Add(1, new KeyValuePair<string, object?>("action", "OutboxReplay"));
             LogReplay(logger, orderId, source, lastApplied + 1, result?.Replayed ?? -1, result?.MaxSequence ?? -1);
@@ -309,6 +325,24 @@ public sealed partial class Reconciler(string connectionString, WorkflowHostClie
                 await OpenGapCaseAsync(orderId, source, lastApplied + 1, ct);
             }
         }
+    }
+
+    /// <summary>The reason the consumer dead-lettered the event at this position, when a replay cannot change it.</summary>
+    private async Task<string?> RejectedAsync(Guid orderId, string source, int sequence, CancellationToken ct)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(ct);
+        await using var command = new SqlCommand(
+            """
+            SELECT TOP (1) Reason FROM orders.EventDeadLetter
+            WHERE OrderId = @o AND Source = @s AND Sequence = @q
+              AND Reason IN ('InvalidPayload', 'UnknownSchemaVersion', 'SourceMismatch', 'SequenceConflict', 'EventIdPayloadConflict')
+            ORDER BY Id DESC;
+            """, connection);
+        command.Parameters.AddWithValue("@o", orderId);
+        command.Parameters.AddWithValue("@s", source);
+        command.Parameters.AddWithValue("@q", sequence);
+        return await command.ExecuteScalarAsync(ct) as string;
     }
 
     private async Task OpenGapCaseAsync(Guid orderId, string source, int missing, CancellationToken ct) =>
@@ -362,6 +396,9 @@ public sealed partial class Reconciler(string connectionString, WorkflowHostClie
 
     [LoggerMessage(Level = LogLevel.Information, Message = "reconciler: replay of {Source} for order {OrderId} from {From}: replayed {Replayed}, source max {Max}")]
     private static partial void LogReplay(ILogger logger, Guid orderId, string source, int from, int replayed, int max);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "reconciler: ProjectionGapUnresolvable order {OrderId} source {Source}: event {Missing} was dead-lettered ({Reason}), not replayed")]
+    private static partial void LogGapRejected(ILogger logger, Guid orderId, string source, int missing, string reason);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "reconciler: ProjectionGapUnresolvable order {OrderId} source {Source}: the source has no event {Missing}")]
     private static partial void LogGapUnresolvable(ILogger logger, Guid orderId, string source, int missing);

@@ -11,6 +11,9 @@
 #   Placement stopped: the inventory's own sweeper expires it from SQL (ClosedBy sweeper:<replica>),
 #   Reserved returns to 0, one HoldExpired event.
 #   R08-A, R08-B, R08-C   per variant; each also checks the invariants of its SKUs
+#   R08-D   a sweeper lease held by a stuck owner (set far into the future): an orphan hold stays Held past its
+#           expiry, ReservationHoldsLeaking fires; after the lease is released a sweeper expires the hold, the units
+#           are free, and the alert resolves
 DRILL_ID=R08
 . "$(dirname "$0")/lib.sh"
 OUT_DIR="$DRILL_DIR"
@@ -85,4 +88,28 @@ else
   assert R08-C FAIL "Expired by sweeper:*, HoldCreated,HoldExpired, 5/0, control plane stopped" "$observed"
 fi
 restore_control
+RECOVERED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+
+# Variant D: the sweeper cannot run (its lease is held by a stuck owner far into the future) -------------
+D_SKU="SKU-R08F-$TAG"
+set_stock W1 "$D_SKU" 5
+release_lease() { sql InventoryDb "UPDATE inventory.SweeperLease SET ExpiresAt = DATEADD(second, -1, SYSUTCDATETIME()) WHERE Name = 'hold-expiry' AND Owner = 'drill-stuck-$TAG'" >/dev/null; }
+on_cleanup "release_lease"
+ALERT_SINCE="$(date +%s)"; HL_BEFORE="$(alert_firing ReservationHoldsLeaking)"
+sql InventoryDb "UPDATE inventory.SweeperLease SET Owner = 'drill-stuck-$TAG', Token = NEWID(), ExpiresAt = DATEADD(hour, 1, SYSUTCDATETIME()) WHERE Name = 'hold-expiry'" >/dev/null
+D="$(python -c 'import uuid; print(uuid.uuid4())')"
+dhold="$(drill_sql_script InventoryDb "$REPO_ROOT/scripts/drills/sql/insert-orphan-hold.sql" "OrderId=$D" "WarehouseId=W1" "Sku=$D_SKU" "Quantity=2" "ExpiresInSeconds=1" | tail -1)"
+alert_wait_firing ReservationHoldsLeaking '' 90 || true
+stuck="$(sql InventoryDb "SELECT CONCAT(State, '|', CASE WHEN ExpiresAt < SYSUTCDATETIME() THEN 'past' ELSE 'future' END) FROM inventory.Hold WHERE HoldId = '$dhold'")"
+release_lease
+dexpired() { [[ "$(sql InventoryDb "SELECT State FROM inventory.Hold WHERE HoldId = '$dhold'")" == Expired ]]; }
+wait_until 60 "the leaked hold expired after the release" dexpired || true
+read -r verdict detail <<< "$(alert_outcome ReservationHoldsLeaking '' "$ALERT_SINCE" "$HL_BEFORE" 90)"
+dby="$(sql InventoryDb "SELECT ClosedBy FROM inventory.Hold WHERE HoldId = '$dhold'")"
+observed="while the lease was stuck: hold $stuck; after the release: $(sql InventoryDb "SELECT State FROM inventory.Hold WHERE HoldId = '$dhold'") by $dby; stock $(stock_of "$D_SKU"); invariants $(inventory_invariants "$D_SKU"); $verdict $detail"
+if [[ "$stuck" == "Held|past" && "$dby" == sweeper:* && "$(stock_of "$D_SKU")" == 5/0 && "$(inventory_invariants "$D_SKU")" == "0|0|0|1|1" && "$verdict" == PASS ]]; then
+  assert R08-D PASS "hold leaked while the lease was stuck; ReservationHoldsLeaking fired and resolved after the sweeper expired it" "$observed"
+else
+  assert R08-D "$([[ "$verdict" == UNVERIFIED ]] && echo UNVERIFIED || echo FAIL)" "Held|past while stuck, Expired by sweeper:*, 5/0, alert fired and resolved" "$observed"
+fi
 RECOVERED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"

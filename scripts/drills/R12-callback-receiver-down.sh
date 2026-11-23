@@ -9,6 +9,7 @@
 #   R12-A-drained    after the restart every callback was Sent, none dead-lettered; the inbox holds each carrier event
 #                    once; Shipping recorded the same events; the order Completed/Delivered with one OrderCompleted
 #   R12-B-pending    while Shipping is down the ingress answered 202 and forward rows stay Pending with attempts > 0
+#   R12-alert        CarrierForwardBacklogAging fired while Shipping was down and resolved after the restore
 #   R12-B-drained    after the restore the forward rows were Processed once each; Shipping recorded the events; the
 #                    order Completed/Delivered with one OrderCompleted
 DRILL_ID=R12
@@ -56,6 +57,7 @@ aexpect R12-A-drained "3 callbacks Sent, none dead-lettered; inbox 3 events; Shi
 
 # --- B: Shipping down ----------------------------------------------------------------------------
 B="$(prepare B)"
+ALERT_SINCE="$(date +%s)"; FWD_BEFORE="$(alert_firing CarrierForwardBacklogAging)"
 docker compose --profile replicas stop -t 5 "${SHIPS[@]}" >/dev/null 2>&1
 carrier_script "$B" "$DRILL_RUN_ID-B" "$SCRIPT" > "$DRILL_DIR/script-B.json"
 answered() { [[ "$(callbacks "$B" B)" =~ ^Sent:[0-9]+,Sent:[0-9]+,Sent:[0-9]+$ ]]; }
@@ -65,6 +67,8 @@ fwd="$(sqln OrderDb "SELECT STRING_AGG(CONCAT(f.State, ':', f.Attempts), ',') FR
 FAULT_OBSERVED+="; B: callbacks $(callbacks "$B" B), forward $fwd"
 aexpect R12-B-pending "ingress answered (callbacks Sent); forward rows Pending with attempts > 0" "callbacks $(callbacks "$B" B); forward $fwd" \
   "$(answered && [[ "$fwd" == *Pending:[1-9]* && "$fwd" != *Processed* ]]; echo $?)"
+# Shipping stays down until the forward rows have aged past the backlog threshold and the alert fired.
+alert_wait_firing CarrierForwardBacklogAging '' 90 || true
 bring_back "${SHIPS[@]}"
 processed() { [[ "$(sql OrderDb "SELECT COUNT(*) FROM orders.CarrierStatusForward f JOIN orders.CarrierCallbackInbox i ON i.EventId = f.EventId WHERE i.ShipmentId = '$B' AND f.State = 'Processed'")" == 3 ]]; }
 wait_until 120 "B forward rows processed" processed || true
@@ -73,3 +77,5 @@ RECOVERED_AT="$(now_iso)"
 aexpect R12-B-drained "3 forward rows Processed once; Shipping 3 events; Completed/Delivered; 1 OrderCompleted" \
   "forward $(sqln OrderDb "SELECT STRING_AGG(CONCAT(f.State, ':', f.Outcome), ',') FROM orders.CarrierStatusForward f JOIN orders.CarrierCallbackInbox i ON i.EventId = f.EventId WHERE i.ShipmentId = '$B'"); shipping $(shipping_rows "$B"); end $(end_of "$B"); OrderCompleted $(completed_events "$B")" \
   "$(processed && [[ "$(shipping_rows "$B")" == 3 && "$(end_of "$B")" == Completed/Delivered && "$(completed_events "$B")" == 1 ]]; echo $?)"
+read -r verdict detail <<< "$(alert_outcome CarrierForwardBacklogAging '' "$ALERT_SINCE" "$FWD_BEFORE" 120)"
+assert R12-alert "$verdict" "CarrierForwardBacklogAging fires while Shipping is down and resolves after the restore" "$detail"

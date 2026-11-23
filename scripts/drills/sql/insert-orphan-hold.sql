@@ -18,7 +18,11 @@ DECLARE @hold TABLE (HoldId uniqueidentifier);
 INSERT inventory.Hold (OrderId, LineNumber, WarehouseId, Sku, Quantity, State, ExpiresAt, CreatedBy)
 OUTPUT inserted.HoldId INTO @hold
 VALUES (@o, 1, @w, @s, @q, 'Held', DATEADD(second, $(ExpiresInSeconds), SYSUTCDATETIME()), 'drill-orphan');
+-- The payload has the fields the guarded reservation writes, so the event is valid for its consumer.
 INSERT inventory.Outbox (OrderId, Sequence, EventType, HoldId, Payload)
-SELECT @o, 1, 'HoldCreated', HoldId, '{"orphan":true}' FROM @hold;
+SELECT @o, 1, 'HoldCreated', h.HoldId,
+       CONCAT('{"holdId":"', LOWER(CONVERT(varchar(36), h.HoldId)), '","orderId":"', LOWER(CONVERT(varchar(36), @o)), '","lineNumber":1,"warehouseId":"', @w,
+              '","sku":"', @s, '","quantity":', @q, ',"expiresAt":"', CONVERT(varchar(23), x.ExpiresAt, 126), 'Z"}')
+FROM @hold h JOIN inventory.Hold x ON x.HoldId = h.HoldId;
 COMMIT;
 SELECT LOWER(CONVERT(varchar(36), HoldId)) FROM @hold;

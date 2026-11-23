@@ -8,6 +8,7 @@
 #   R06-outage     no compute-worker replica runs; orders accepted during the outage stay without
 #                  check results and without completion for the whole outage; workflows Running
 #   R06-recovered  after the pool is restored every order completes, with two check results each
+#   R06-alert      OrderProgressStalled fired while the orders could not progress and resolved after the restore
 #   R06-once       OrderDb: one key, one start request (Closed), one execution claim, history
 #                  history through AwaitingDelivery to Completed, one effect per line, one completion event;
 #                  re-executed check activities, if any, counted as replays of one result
@@ -32,6 +33,7 @@ URLS=(--url "$ORDER_API")
 
 # Outage -----------------------------------------------------------------------------------------
 INJECTED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+ALERT_SINCE="$(date +%s)"; PS_BEFORE="$(alert_firing OrderProgressStalled)"
 for w in "${WORKERS[@]}"; do docker compose --profile replicas --profile scale stop -t 5 "$w" "$w-dapr" >/dev/null 2>&1; done
 running="$(docker compose --profile replicas --profile scale ps --format '{{.Service}} {{.State}}' 2>/dev/null | awk '$1 ~ /^compute-worker/ && $2 == "running"' | wc -l | tr -d ' ')"
 log "stopped ${WORKERS[*]} (and sidecars); compute containers running: $running"
@@ -51,6 +53,8 @@ while (( SECONDS - start < OUTAGE )); do
   (( ch > worst_checks )) && worst_checks=$ch; (( co > worst_completed )) && worst_completed=$co; (( be > worst_beyond )) && worst_beyond=$be
   sleep 5
 done
+# The pool stays down until the reconciler has reported the stalled orders (stage threshold plus a pass).
+alert_wait_firing OrderProgressStalled '' 60 || true
 # tr: Windows Python ends lines with CRLF, and mapfile would keep the CR in every id.
 mapfile -t IDS < <(jq_py submit "[i['orderId'] for i in r['items'] if i.get('orderId')]" | python -c "import json,sys; print('\n'.join(json.load(sys.stdin)))" | tr -d '\r')
 statuses=""
@@ -93,3 +97,5 @@ if [[ "$consistent" == ok && "$claims" == "[$(printf '1, %.0s' $(seq 1 "$N") | s
 else
   assert R06-once FAIL "consistent orders, one claim each" "$observed"
 fi
+read -r verdict detail <<< "$(alert_outcome OrderProgressStalled '' "$ALERT_SINCE" "$PS_BEFORE" 150)"
+assert R06-alert "$verdict" "OrderProgressStalled fires while the orders cannot progress and resolves after the restore" "$detail"

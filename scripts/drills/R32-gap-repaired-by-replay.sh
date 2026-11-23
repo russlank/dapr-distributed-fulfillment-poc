@@ -13,6 +13,9 @@
 #                  duplicates
 #   R32-converged  published = history for every source of the order; a rebuild gives the live checksum;
 #                  no ProjectionGap case (the source had the event)
+#   R32-unresolvable  a published event the source never had (inventory sequence 6 while the source ends at 4): the
+#                  reconciler's replay finds no event 5 and opens one ProjectionGap case; ProjectionSequenceGap fires while
+#                  the gap waits (until the case classifies it), then ProjectionGapUnresolvable; after the case is acknowledged and the injected row removed, both resolve
 DRILL_ID=R32
 . "$(dirname "$0")/lib.sh"
 . "$REPO_ROOT/scripts/scenarios/m3-lib.sh"
@@ -63,3 +66,23 @@ wait_until 60 "order events converged" is_converged "$o" || true
 conv="$(converged "$o")"; r="$(rebuild_timeline)"; cases="$(cases_of "$o")"
 aexpect R32-converged "published = history for every source; rebuild equal; no ProjectionGap case" "converged $conv; rebuild $r; cases '$cases'; end $(end_of "$o")" \
   "$(is_converged "$o" && [[ "$r" == true\|* && "$cases" != *ProjectionGap* ]]; echo $?)"
+
+# A gap the source cannot fill: an event beyond the source's last sequence (published with the drill publisher).
+ALERT_SINCE="$(date +%s)"; GAP_BEFORE="$(alert_firing ProjectionSequenceGap)"; UN_BEFORE="$(alert_firing ProjectionGapUnresolvable)"
+src_max="$(sql InventoryDb "SELECT MAX(Sequence) FROM inventory.Outbox WHERE OrderId = '$o'")"
+xid="$(new_uuid)"; xseq=$((src_max + 2))
+xs="$(drill_publish fulfillment.inventory.v1 "$(envelope "$xid" inventory "$o" "$xseq" HoldCreated 1 '{"holdId":"r32-beyond-source"}')")"
+# The gap alert fires while the stream waits, until the reconciler classifies the gap as unresolvable (its case).
+alert_wait_firing ProjectionSequenceGap '' 45 || true
+gap_case() { case_open "$o" ProjectionGap; }
+wait_until 90 "ProjectionGap case opened" gap_case || true
+alert_wait_firing ProjectionGapUnresolvable '' 60 || true
+gap_seen="$(sqln OrderDb "SELECT CONCAT(Source, ':', MissingSequence) FROM orders.OrderEventGaps WHERE OrderId = '$o'")"
+cases_seen="$(cases_of "$o")"
+res_x="$(resolve_case "$ORDER_API" "$(open_case_of "$o" ProjectionGap)" Acknowledge "$(new_uuid)")"
+sql OrderDb "DELETE orders.OrderEventHistory WHERE EventId = '$xid' AND Disposition = 'Pending'" >/dev/null
+read -r v1 d1 <<< "$(alert_outcome ProjectionSequenceGap '' "$ALERT_SINCE" "$GAP_BEFORE" 60)"
+read -r v2 d2 <<< "$(alert_outcome ProjectionGapUnresolvable '' "$ALERT_SINCE" "$UN_BEFORE" 60)"
+ok=FAIL; [[ "$xs" == 204 && "$gap_seen" == inventory:$((src_max + 1)) && "$cases_seen" == *ProjectionGap:Open:-* && "$res_x" == "200 RecordOnly" && "$v1 $v2" == "PASS PASS" ]] && ok=PASS
+[[ "$ok" == FAIL && "$v1 $v2" == *UNVERIFIED* ]] && ok=UNVERIFIED
+assert R32-unresolvable "$ok" "publish 204; gap inventory:$((src_max + 1)); one ProjectionGap case, acknowledged (RecordOnly); both alerts fired and resolved"   "publish $xs; gap $gap_seen; cases $cases_seen; resolution $res_x; $v1 $d1; $v2 $d2"

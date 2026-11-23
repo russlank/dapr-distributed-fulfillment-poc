@@ -46,7 +46,7 @@ name. Health endpoints are excluded from tracing.
 | `pending_signals_aging{kind}` | pending signals older than the backlog age, by kind: `review`, `intervention`, `carrier`, `other` |
 | `carrier_forwards_aging` | pending carrier forwards older than the backlog age |
 | `event_dead_letters_recent` | event dead letters recorded within the window (30 min; drill 90 s) |
-| `projection_gaps_aging` | timeline streams waiting for a missing event longer than the gap age (5 min; drill 5 s) |
+| `projection_gaps_aging` | timeline streams waiting for a missing event longer than the gap age (5 min; drill 5 s), except gaps known to be unresolvable (a `ProjectionGap` case, alert `ProjectionGapUnresolvable`) |
 | `intervention_cases_active{kind,state}` | active cases (`Open`, `Reconciling`, `Escalated`) |
 | `outbox_pending{source}`, `outbox_aging{source}`, `outbox_stalled{source}` | outbox depth per source; rows older than the aging threshold (5 min; drill 15 s); stalled rows |
 | `outbox_published_total{source}`, `outbox_publish_failures_total{source}` | relay publications |

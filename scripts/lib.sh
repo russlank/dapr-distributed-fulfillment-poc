@@ -280,12 +280,14 @@ alert_wait_firing() { wait_until "$3" "alert $1 firing" _alert_is_firing "$1" "$
 # alert_outcome <alert> <matcher> <since epoch> <firing before: 0|1> <resolve timeout s> -> "PASS|FAIL|UNVERIFIED <detail>"
 # PASS: fired since the fault and resolved afterwards; UNVERIFIED: it already fired before the fault (not attributable).
 alert_outcome() {
-  local fired resolved=0 waited=0
-  fired="$(alert_fired_since "$1" "$2" "$3")"
+  local fired=0 resolved=0 waited=0
+  # Firing now counts as fired; the range query runs after the wait, so it covers the latest evaluations too.
+  [[ "$(alert_firing "$1" "$2")" == 1 ]] && fired=1
   while (( waited <= $5 )); do
     [[ "$(alert_firing "$1" "$2")" == 0 ]] && { resolved=1; break; }
     sleep 5; waited=$((waited + 5))
   done
+  [[ "$fired" == 1 ]] || fired="$(alert_fired_since "$1" "$2" "$3")"
   if [[ "$4" == 1 ]]; then echo "UNVERIFIED $1 already firing before the fault; fired $fired, resolved $resolved"
   elif [[ "$fired" == 1 && "$resolved" == 1 ]]; then echo "PASS $1 fired during the fault and resolved ${waited}s after recovery"
   else echo "FAIL $1 fired $fired, resolved $resolved (waited ${waited}s)"; fi
