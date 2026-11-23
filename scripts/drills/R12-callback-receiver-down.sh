@@ -11,7 +11,8 @@
 #   R12-B-pending    while Shipping is down the ingress answered 202 and forward rows stay Pending with attempts > 0
 #   R12-alert        CarrierForwardBacklogAging fired while Shipping was down and resolved after the restore
 #   R12-B-drained    after the restore the forward rows were Processed once each; Shipping recorded the events; the
-#                    order Completed/Delivered with one OrderCompleted
+#                    order Completed/Delivered with one OrderCompleted (by the forwarded signal or, when the outage
+#                    outlasts the delivery deadline, by the deadline poll; a late forward then only adds an audit row)
 DRILL_ID=R12
 . "$(dirname "$0")/lib.sh"
 . "$REPO_ROOT/scripts/scenarios/m3-lib.sh"
@@ -27,6 +28,11 @@ SCRIPT='[{"status":"PickedUp","version":1,"delayMs":2000},{"status":"InTransit",
 inbox_of() { sql OrderDb "SELECT COUNT(DISTINCT EventId) FROM orders.CarrierCallbackInbox WHERE ShipmentId = '$1'"; }
 shipping_rows() { sql ShippingDb "SELECT COUNT(*) FROM shipping.CarrierStatusEvent WHERE ShipmentId = '$1'"; }
 callbacks() { sqln CarrierSimDb "SELECT STRING_AGG(CONCAT(State, ':', Attempts), ',') WITHIN GROUP (ORDER BY Version) FROM carrier.Callback WHERE ShipmentId = '$1' AND Label = '$DRILL_RUN_ID-$2'"; }
+# ended_by <order id> -> the last real transition (status/reason). A terminal callback forwarded after the order already
+# completed (the delivery deadline poll can win the race while Shipping is down) adds an audit row with the same from
+# and to status (CarrierStatusAfterTerminal); that row records the late forward, not how the order ended.
+ended_by() { sql OrderDb "SELECT TOP (1) CONCAT(ToStatus, '/', ReasonCode) FROM orders.OrderStatusHistory WHERE OrderId = '$1' AND FromStatus <> ToStatus ORDER BY Sequence DESC"; }
+late_rows() { sql OrderDb "SELECT COUNT(*) FROM orders.OrderStatusHistory WHERE OrderId = '$1' AND ReasonCode = 'CarrierStatusAfterTerminal'"; }
 failed_sends() { sql CarrierSimDb "SELECT COUNT(*) FROM carrier.Send s JOIN carrier.Callback c ON c.Id = s.CallbackId WHERE c.ShipmentId = '$1' AND c.Label = '$DRILL_RUN_ID-$2' AND s.ResponseCode IS NULL"; }
 
 prepare() { # prepare <variant> -> order id waiting in AwaitingDelivery, carrier in Manual mode
@@ -75,7 +81,7 @@ wait_until 120 "B forward rows processed" processed || true
 wait_status 120 "$B" 'Completed|Compensated|ManualInterventionRequired' || true
 RECOVERED_AT="$(now_iso)"
 aexpect R12-B-drained "3 forward rows Processed once; Shipping 3 events; Completed/Delivered; 1 OrderCompleted" \
-  "forward $(sqln OrderDb "SELECT STRING_AGG(CONCAT(f.State, ':', f.Outcome), ',') FROM orders.CarrierStatusForward f JOIN orders.CarrierCallbackInbox i ON i.EventId = f.EventId WHERE i.ShipmentId = '$B'"); shipping $(shipping_rows "$B"); end $(end_of "$B"); OrderCompleted $(completed_events "$B")" \
-  "$(processed && [[ "$(shipping_rows "$B")" == 3 && "$(end_of "$B")" == Completed/Delivered && "$(completed_events "$B")" == 1 ]]; echo $?)"
+  "forward $(sqln OrderDb "SELECT STRING_AGG(CONCAT(f.State, ':', f.Outcome), ',') FROM orders.CarrierStatusForward f JOIN orders.CarrierCallbackInbox i ON i.EventId = f.EventId WHERE i.ShipmentId = '$B'"); shipping $(shipping_rows "$B"); ended by $(ended_by "$B"); late terminal forwards $(late_rows "$B"); OrderCompleted $(completed_events "$B")" \
+  "$(processed && [[ "$(shipping_rows "$B")" == 3 && "$(ended_by "$B")" == Completed/Delivered && "$(completed_events "$B")" == 1 ]]; echo $?)"
 read -r verdict detail <<< "$(alert_outcome CarrierForwardBacklogAging '' "$ALERT_SINCE" "$FWD_BEFORE" 120)"
 assert R12-alert "$verdict" "CarrierForwardBacklogAging fires while Shipping is down and resolves after the restore" "$detail"

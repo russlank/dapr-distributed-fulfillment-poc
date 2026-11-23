@@ -236,19 +236,30 @@ To roll back, hold the patch back again: runs that already recorded it are
 reported `Stalled` and wait until it is enabled again (they are never replayed
 on the old path).
 
-**Do not terminate or purge a workflow instance that recorded a patch.** On
-Dapr 1.19.1 the call never answers and the instance stays `Stalled` for good,
-across host and sidecar restarts (see the journal). End a running order
-through its own paths instead: cancellation, the reconciler, and repair
-cases.
+### Never Terminate a Patched Workflow
 
-A workflow reported `Stalled` therefore means one of two things:
+A patched instance is a workflow instance whose history recorded a patch
+marker. With `execution-version-2` enabled, that is every order started on
+the current build (its start request shows `ExecutionVersion` 2).
 
-- a host runs without a patch that the instance recorded: enable the patch on
-  every replica (roll forward);
-- the instance was terminated or purged after recording a patch: it cannot be
-  recovered. The reconciler still treats it as running (`OrderProgressStalled`
-  fires, no repair case opens); resolve the order by hand.
+On Dapr 1.19.1, terminating or purging a patched instance never completes, and
+the instance stays `Stalled` for good, even after host and sidecar restarts
+(see the journal). Instances without a patch marker terminate normally.
+
+So never end a running order by terminating or purging its workflow. Use the
+paths the system provides:
+
+- cancel the order through the API (possible until dispatch starts): the
+  workflow finishes and compensates by itself;
+- let the reconciler detect an order that stopped moving;
+- resolve the order's case with the case commands (for example `Repair`).
+
+A workflow reported `Stalled` has one of two causes:
+
+| Cause | What to do |
+|---|---|
+| a host runs without a patch that the instance recorded | enable the patch on every replica (roll forward); the instance continues |
+| the instance was terminated or purged after it recorded a patch | it cannot be recovered; the reconciler still treats it as running (`OrderProgressStalled` fires, no case opens), so resolve the order by hand |
 
 ## Restarting a Replica
 

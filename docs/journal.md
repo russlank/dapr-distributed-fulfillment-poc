@@ -3,6 +3,29 @@
 What broke, what surprised us, and what we changed. Newest first. Each entry
 keeps the expectation that turned out wrong.
 
+## 2026-11-23: M5 run of record
+
+### R12 read the order's last history row, and a late forward added one
+
+- **Expected:** in R12 variant B (Shipping down) the forwarded `Delivered`
+  status completes the order after the restore, and the order's last history
+  row reads `Completed/Delivered`.
+- **Observed:** in the M5 run of record `R12-B-drained` failed with the order
+  ending `Completed/CarrierStatusAfterTerminal`. Everything else held: three
+  forward rows processed once, Shipping three events, one `OrderCompleted`.
+- **Cause:** since the alert checks were added, the drill keeps Shipping down
+  until `CarrierForwardBacklogAging` fires, which can outlast the drill
+  delivery deadline (45 s). The workflow then polled the carrier once, as
+  designed, and completed the order (`Delivered`) 3 s before the forwarder
+  delivered the queued `Delivered` status. A terminal status applied after
+  completion adds an audit row with the same from and to status
+  (`CarrierStatusAfterTerminal`), and the drill read that row instead of the
+  completion.
+- **Change:** R12 checks the order's last real transition (from status differs
+  from to status) and reports the late-forward audit rows separately. No
+  product change: both completion paths are designed, and the order completed
+  once.
+
 ## 2026-11-23: Workflow versioning
 
 ### Terminating a patched workflow stalls it for good
