@@ -224,7 +224,8 @@ as the operator's view.
 - Static API keys; no mTLS between sidecars on Compose.
 - The local SQL Server (2 GiB) has little headroom for long SQL-only runs.
 
-**Partially demonstrated or not demonstrated:**
+**Partially demonstrated or not demonstrated** (the full list, with the
+check behind every demonstrated guarantee, is in [guarantees.md](guarantees.md)):
 
 | Guarantee or property | Status |
 |---|---|

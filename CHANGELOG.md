@@ -15,6 +15,14 @@ Details of a release: `docs/releases/`. What broke on the way:
   (`scripts/kind-smoke.sh`): migrations, every role ready with its sidecar,
   one order completed. Secrets moved from the base into overlays
   (`overlays/example`, `overlays/kind-smoke`).
+- `docs/guarantees.md`: every guarantee, who provides it (Dapr or the
+  application with SQL Server), and the scenario or drill that demonstrates
+  it; what is only partly demonstrated.
+- `scripts/walkthrough.sh [--fresh]` and `docs/walkthrough.md`: a guided tour
+  on the release stack with six checked steps.
+- Fix: the runtime probe's diagnostics tables are created under an
+  application lock, so replicas starting together on a fresh database no
+  longer race (found by the walkthrough).
 - Documentation: a README with a summary, status, and a grouped map of the
   documents; tables of contents in the longer documents; introductions and
   corrected statements where they were missing or out of date.

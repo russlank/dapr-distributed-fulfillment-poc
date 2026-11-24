@@ -125,6 +125,8 @@ bash scripts/scenarios/S00-runtime-smoke.sh   # PASS/FAIL runtime checks
 bash scripts/reset.sh --yes                   # remove everything, including data
 ```
 
+Or take the guided tour, which explains and checks each step:
+`bash scripts/walkthrough.sh --fresh` ([walkthrough.md](docs/walkthrough.md)).
 Then submit orders with the client simulator
 ([client-simulator.md](docs/client-simulator.md)) and watch them in Grafana
 and Jaeger ([getting-started.md](docs/getting-started.md#local-endpoints)).
@@ -132,6 +134,7 @@ and Jaeger ([getting-started.md](docs/getting-started.md#local-endpoints)).
 ## Verify It Yourself
 
 ```bash
+bash scripts/walkthrough.sh --fresh                # a guided tour with checks, about 10 min
 bash scripts/verify.sh --suite full --keep-awake   # every check on fresh stacks, about 90 min
 bash scripts/verify.sh --suite dev                 # development regression on one drill stack
 bash scripts/verify.sh --only R17 --reuse          # one drill on a running drill stack
@@ -145,7 +148,9 @@ assertion's expected and observed values.
 
 | Start here | |
 |---|---|
+| [walkthrough.md](docs/walkthrough.md) | a guided six-step tour with checks: `bash scripts/walkthrough.sh --fresh` |
 | [final-report.md](docs/final-report.md) | what was learned: answers, lessons, recommendations, further work |
+| [guarantees.md](docs/guarantees.md) | every guarantee, who provides it, and the check that demonstrates it |
 | [getting-started.md](docs/getting-started.md) | prerequisites, startup, endpoints, your first order, stop and reset |
 | [architecture.md](docs/architecture.md) | roles, state authority, workflow, boundaries, events, reconciler |
 

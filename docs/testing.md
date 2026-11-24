@@ -54,6 +54,11 @@ slower is flagged). It exits 1 if any step failed.
 | `scripts/verify.sh --suite dev` | the drill `--replicas` phase only, every scenario and drill once; volumes kept | regression after a larger change |
 | `scripts/verify.sh --only m3 --reuse` | a group (`smoke`, `m1`-`m5`, `release`, `core`) or step ids (`R09,S39`; `A:S04` forces the release stack) | the area being changed |
 
+`scripts/walkthrough.sh [--fresh]` is a guided tour on the release stack with
+six checked steps (W1-W6: identity, an order, idempotency, a review through
+the other replica, durability with every workflow host killed, cancellation);
+see [walkthrough.md](walkthrough.md). It is not part of `verify.sh`.
+
 `scripts/kind-smoke.sh` deploys the Kubernetes template on a local kind
 cluster and checks K8S-1 (migrations), K8S-2 (every role ready with its
 sidecar), and K8S-3 (one order completes); see
