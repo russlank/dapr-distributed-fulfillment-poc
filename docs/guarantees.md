@@ -4,7 +4,8 @@ What the system guarantees, who provides each guarantee (Dapr or the
 application with SQL Server), and which scenario or drill demonstrates it.
 Only behavior that was run and observed counts as demonstrated; where a
 guarantee rests on design alone, or was only partly exercised, this page
-says so. Status as of `v0.6.0` and later.
+says so. The [v1.0.0 release notes](releases/v1.0.0.md) report the
+acceptance run and focused reruns.
 
 ## Contents
 
@@ -19,7 +20,7 @@ says so. Status as of `v0.6.0` and later.
 
 - **Demonstrated:** a scenario (`Sxx`) or drill (`Rxx`) violates the
   precondition on purpose (a crash, an outage, a race, a duplicate) and the
-  check passed on a full run from fresh volumes. What each check does:
+  check passed during release verification on fresh volumes. What each check does:
   [testing.md](testing.md), [resilience-drills.md](resilience-drills.md).
 - **Observed:** runtime behavior seen in the compatibility checks or a
   drill, recorded in [versions.md](versions.md).
@@ -89,7 +90,7 @@ and each demonstration breaks the precondition on purpose.
 | A sidecar setting caps concurrent activities per replica | S17 |
 | Orders waiting across a rolling workflow upgrade keep their recorded path; a rollback stalls a patched instance safely until rolled forward | R17 |
 | A faulted, missing, or mismatched workflow becomes one case and is repaired | R30 |
-| Every alert rule fires during the fault that causes it and resolves after recovery | R06, R07, R08, R12-R16, R20, R28, R29, R30, R32, R33 |
+| Each alert rule was observed firing during its designated drill and clearing after recovery | R06, R07, R08, R12-R16, R20, R28, R29, R30, R32, R33 |
 | Every trust boundary refuses an unauthorized caller; no secret reaches the logs | S22 |
 | The Kubernetes template deploys and completes an order | the kind smoke test (`scripts/kind-smoke.sh`) |
 
@@ -106,6 +107,7 @@ and each demonstration breaks the precondition on purpose.
 | Workflow history growth with large fan-out | not tested |
 | Growth of event history and outboxes over long runs | not tested; rows are never deleted |
 | Recovery of a patched workflow instance that was terminated anyway | none: it stays `Stalled` and no case opens ([operations.md](operations.md#never-terminate-a-patched-workflow)) |
+| Clearing a workflow-fault alert after another case repairs the same order | R26 left a `WorkflowFaulted` case open on a compensated order. R30 demonstrated alert recovery on a fresh stack. [Journal](journal.md#a-repaired-r26-order-kept-the-workflow-fault-alert-firing-in-r30) |
 | Throughput at volume | samples only ([final-report.md](final-report.md#34-how-much-work-was-distributed-across-replicas-with-what-throughput-and-latency)) |
 
 ## Re-running the Evidence

@@ -4,10 +4,8 @@ Releases of the PoC; each tag `v<version>` marks a verified milestone.
 Details of a release: `docs/releases/`. What broke on the way:
 [docs/journal.md](docs/journal.md).
 
-## Unreleased (0.7.0-dev)
+## v1.0.0: Final report, guarantees, and reproducible walkthrough (M6)
 
-- Development towards M6 (final report and the `v1.0.0` release). Entries are
-  added as functionality is verified.
 - Final report (`docs/final-report.md`): answers to the evaluation questions,
   lessons learned per phase, recommendations, further improvements, and
   explorations.
@@ -26,6 +24,11 @@ Details of a release: `docs/releases/`. What broke on the way:
 - Documentation: a README with a summary, status, and a grouped map of the
   documents; tables of contents in the longer documents; introductions and
   corrected statements where they were missing or out of date.
+- Verification: W1–W6 passed from a fresh release stack. The 80-step
+  acceptance run passed 78 steps, with R20 and R30 passing on a subsequent
+  fresh drill stack at the same commit. The repair-case alert limitation is
+  documented in the release notes.
+- Evidence and limitations. [v1.0.0 release notes](docs/releases/v1.0.0.md)
 
 ## v0.6.0: Observability, scaling, workflow versioning, and comparison (M5)
 

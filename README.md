@@ -5,7 +5,7 @@ A proof of concept for distributed order fulfillment with Dapr 1.19 on
 scripted failure drills prove what survives crashes, outages, duplicates,
 and races. Synthetic data only; not production software.
 
-**Current release: [v0.6.0](docs/releases/v0.6.0.md)** (milestone M5).
+**Version [v1.0.0](docs/releases/v1.0.0.md)** (milestone M6).
 **Results and recommendations: [docs/final-report.md](docs/final-report.md).**
 
 ## Contents
@@ -101,17 +101,18 @@ Details: [architecture.md](docs/architecture.md).
 | v0.3.0 | M2 | inventory under contention |
 | v0.4.0 | M3 | payment, shipping, cancellation, interventions |
 | v0.5.0 | M4 | event distribution, history, reconciler |
-| **v0.6.0** | **M5** | alerts and dashboards, workflow versioning, outage and scaling drills, actor versus SQL-only comparison |
+| v0.6.0 | M5 | alerts and dashboards, workflow versioning, outage and scaling drills, actor versus SQL-only comparison |
+| **v1.0.0** | **M6** | final report, guarantee-by-guarantee evidence, guided walkthrough, Kubernetes smoke test |
 
-- Every guarantee was demonstrated on Docker Compose with two or three
-  replicas per role.
-- A generic [Kubernetes template](deploy/kubernetes/README.md) exists and has
-  a smoke test on a local kind cluster; the drills have not been run on
-  Kubernetes.
-- Known limitations of the current release: [v0.6.0.md](docs/releases/v0.6.0.md#known-limitations).
-  The most important: on Dapr 1.19.1 a workflow instance that recorded a
-  versioning patch must not be terminated
-  ([operations.md](docs/operations.md#never-terminate-a-patched-workflow)).
+- The resilience suite ran on Docker Compose with two or three replicas
+  per role and up to five compute replicas.
+- The [Kubernetes template](deploy/kubernetes/README.md) passed a one-order
+  smoke test on kind. Kubernetes resilience drills are deferred.
+- On Dapr 1.19.1, terminating a workflow that has recorded a versioning
+  patch can leave it stalled. Use the order's cancellation and intervention
+  paths. [Operations guide](docs/operations.md#never-terminate-a-patched-workflow)
+- A workflow-fault alert can stay active after another repair compensates
+  the order. [Known limitations](docs/releases/v1.0.0.md#known-limitations)
 
 ## Quick Start
 
@@ -174,6 +175,7 @@ assertion's expected and observed values.
 | Releases | |
 |---|---|
 | [CHANGELOG.md](CHANGELOG.md) | all releases |
+| [v1.0.0](docs/releases/v1.0.0.md) | M6: final report, guarantees, walkthrough, kind smoke test, and release evidence |
 | [v0.6.0](docs/releases/v0.6.0.md) | M5: alerts, versioning, outage and scaling drills, comparison |
 | [v0.5.0](docs/releases/v0.5.0.md) | M4: event distribution, history, reconciler |
 | [v0.4.0](docs/releases/v0.4.0.md) | M3: payment, shipping, interventions |
