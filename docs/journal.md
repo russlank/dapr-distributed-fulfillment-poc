@@ -5,6 +5,8 @@ keeps the expectation that turned out wrong.
 
 ## Contents
 
+- [2026-11-24: Release-candidate verification](#2026-11-24-release-candidate-verification)
+- [2026-11-24: Walkthrough](#2026-11-24-walkthrough)
 - [2026-11-23: Kubernetes template on kind](#2026-11-23-kubernetes-template-on-kind)
 - [2026-11-23: M5 run of record](#2026-11-23-m5-run-of-record)
 - [2026-11-23: Workflow versioning](#2026-11-23-workflow-versioning)
@@ -21,6 +23,48 @@ keeps the expectation that turned out wrong.
 - [2026-11-18: Durable order acceptance](#2026-11-18-durable-order-acceptance)
 - [2026-11-18: Foundation (solution skeleton, Compose stack, runtime smoke)](#2026-11-18-foundation-solution-skeleton-compose-stack-runtime-smoke)
 - [2026-11-18: Dapr 1.19 compatibility spike](#2026-11-18-dapr-119-compatibility-spike)
+
+## 2026-11-24: Release-candidate verification
+
+The fresh walkthrough passed all six checks on clean `cc02fe9`. The full
+suite on the same commit passed 78 of 80 steps in 95.2 minutes. The focused
+rerun on fresh drill replicas passed R20 and R30 with the original checks.
+
+### R20 checked the signal before its next retry
+
+- **Expected.** The order completes after both workflow hosts return, and
+  the signal has been forwarded when the drill reads the order.
+- **Observed.** The order was `Completed/Delivered` with one decision
+  and one transition each to `Reserving` and `Completed`. The workflow
+  logged `Timer:Approved`. The drill read `Pending` at attempt five.
+- **Cause.** Retry backoff let the timer read the stored approval and
+  finish the order before the signal's next attempt became due. SQL
+  showed that attempt six closed the signal `Discarded/WorkflowTerminal`
+  just after the check. The signal is a wake-up hint and the decision
+  stays in SQL.
+- **Verification.** The same candidate passed all five R20 checks on fresh
+  drill replicas. The timer saw the approval again, and the dispatcher
+  had marked the signal `Forwarded` by the time the drill read it. The
+  full-run failure stays in the record.
+
+### A repaired R26 order kept the workflow-fault alert firing in R30
+
+- **Expected.** R30 starts with `WorkflowFaulted` clear, then attributes
+  that alert to its own failed workflow and verifies it clears after
+  repair.
+- **Observed.** All nine R30 workflow, case, and repair checks passed.
+  The alert check was `UNVERIFIED` because `WorkflowFaulted` was already
+  firing. SQL showed an open fault case from R26 on a compensated order.
+- **Cause.** The R26 resolution marked the `AmbiguousPayment` case
+  resolved and queued a repair. The reconciler saw the original workflow
+  terminated while the order was still `ManualInterventionRequired` and
+  opened a `WorkflowFaulted` case. The repair voided the authorization,
+  released the holds, and compensated the order. The added case stayed
+  open and kept the alert active.
+- **Verification.** R30 passed all ten checks on fresh replicas. Both
+  alerts fired during the drill and cleared after the repairs. This
+  established alert attribution for R30. A fault case left open after
+  another repair succeeds remains an operational issue.
 
 ## 2026-11-24: Walkthrough
 
