@@ -17,6 +17,10 @@ public sealed class ProbeStore(string connectionString)
     {
         await ExecuteAsync(
             """
+            SET XACT_ABORT ON;
+            BEGIN TRANSACTION;
+            -- Replicas starting together on a fresh database must not race between the check and the creation.
+            EXEC sp_getapplock @Resource = 'diagnostics.schema', @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 30000;
             IF SCHEMA_ID('diagnostics') IS NULL EXEC('CREATE SCHEMA diagnostics');
             IF OBJECT_ID('diagnostics.RuntimeProbe') IS NULL
                 CREATE TABLE diagnostics.RuntimeProbe (
@@ -27,6 +31,7 @@ public sealed class ProbeStore(string connectionString)
                     CreatedAt       datetime2(3)  NOT NULL CONSTRAINT DF_RuntimeProbe_Created DEFAULT SYSUTCDATETIME(),
                     CompletedAt     datetime2(3)  NULL,
                     CONSTRAINT CK_RuntimeProbe_Status CHECK (Status IN ('Accepted', 'Running', 'Completed')));
+            COMMIT;
             """, _ => { }, null, ct);
     }
 

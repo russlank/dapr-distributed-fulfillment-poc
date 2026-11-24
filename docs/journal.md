@@ -22,6 +22,27 @@ keeps the expectation that turned out wrong.
 - [2026-11-18: Foundation (solution skeleton, Compose stack, runtime smoke)](#2026-11-18-foundation-solution-skeleton-compose-stack-runtime-smoke)
 - [2026-11-18: Dapr 1.19 compatibility spike](#2026-11-18-dapr-119-compatibility-spike)
 
+## 2026-11-24: Walkthrough
+
+### Two replicas raced to create the diagnostics tables
+
+- **Expected:** `scripts/walkthrough.sh --fresh` starts the release stack
+  with replicas from fresh volumes.
+- **Observed:** the stack did not start: one order API replica exited with
+  "There is already an object named 'RuntimeProbe' in the database", and
+  two inventory replicas with the same error for `ProbeEffect`.
+- **Cause:** the same race as the failpoint table in M5, in two more places.
+  The runtime probe's tables in the `diagnostics` schema are created at
+  startup with a check-then-create that was not serialized, so replicas
+  starting together on a fresh database could both pass the check. Full
+  runs had started without the collision by chance; the failpoint fix
+  covered only the drill table.
+- **Change:** both stores create their tables in one transaction under an
+  application lock. Six parallel sessions per fresh database, five times:
+  the old statement failed in 2 of 30 sessions with the same error, the new
+  one never. No other startup code creates tables this way (business tables
+  come from one-shot migration jobs).
+
 ## 2026-11-23: Kubernetes template on kind
 
 ### RabbitMQ could not read its own Erlang cookie

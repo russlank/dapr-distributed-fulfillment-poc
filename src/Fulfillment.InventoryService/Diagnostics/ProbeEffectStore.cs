@@ -16,6 +16,10 @@ public sealed class ProbeEffectStore(string connectionString)
         await connection.OpenAsync(ct);
         await using var command = new SqlCommand(
             """
+            SET XACT_ABORT ON;
+            BEGIN TRANSACTION;
+            -- Replicas starting together on a fresh database must not race between the check and the creation.
+            EXEC sp_getapplock @Resource = 'diagnostics.schema', @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 30000;
             IF SCHEMA_ID('diagnostics') IS NULL EXEC('CREATE SCHEMA diagnostics');
             IF OBJECT_ID('diagnostics.ProbeEffect') IS NULL
                 CREATE TABLE diagnostics.ProbeEffect (
@@ -29,6 +33,7 @@ public sealed class ProbeEffectStore(string connectionString)
                     Replica      nvarchar(64)  NOT NULL,
                     Applied      bit           NOT NULL,
                     At           datetime2(3)  NOT NULL CONSTRAINT DF_ProbeEffectAttempt_At DEFAULT SYSUTCDATETIME());
+            COMMIT;
             """, connection);
         await command.ExecuteNonQueryAsync(ct);
     }
